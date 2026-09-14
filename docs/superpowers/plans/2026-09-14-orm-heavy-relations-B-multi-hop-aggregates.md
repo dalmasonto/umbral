@@ -19,6 +19,11 @@
 - Before each commit: `cargo fmt && cargo clippy --all-targets && cargo build && cargo test` (whole workspace).
 - Behavioral tests: real rows, public `annotate_*` API, read the annotated value back — the anti-inflation test is mandatory.
 - Depends on Plan A being merged (needs `RelPath::from_path`, `walk_joins`, `PathBase::TableRoot`).
+- **Security & Performance (binds every task — see the spec's "Security & Performance" section):**
+  - Each annotation is ONE correlated subquery — N annotations = one query with N subqueries, never N+1. Assert the query count for a multi-annotation fetch (one query) alongside the value round-trip.
+  - Subqueries schema-qualify every table (via `walk_joins`) and rely on FK/junction indexes; do not emit an aggregate that forces a full scan where an indexed correlated subquery is available.
+  - An aggregate expression must not reference a `Masked`/hidden column that the row-level read policy hides — no leak through `SUM`/`MIN`/`MAX` of a protected column.
+  - `filter_annotation` wraps once; do not re-emit the subquery per row.
 
 ## File Structure
 

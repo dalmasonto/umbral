@@ -19,6 +19,12 @@
 - Before each commit: `cargo fmt && cargo clippy --all-targets && cargo build && cargo test` (whole workspace).
 - Behavioral tests: real rows, public accessor, read the graph back; a query-counter check runs *alongside* the round-trip to prove a cache hit — never as the sole assertion.
 - Depends on Plan A being merged (`walk_joins` with `NullJoinPolicy::LeftForNullable`, `RelPath::from_path` incl. reverse-FK).
+- **Security & Performance (binds every task — see the spec's "Security & Performance" section):**
+  - The cache-aware accessor is THE latency win: a `select_related` hit is ZERO queries (Task 1 test). Deep `select_related` is ONE JOIN for the whole to-one chain, never N per-hop queries (Task 2 test). Both are query-counter-asserted.
+  - Do not make callers pay for depth they didn't ask for: `select_related("a")` hydrates one hop; `select_related("a__b__c")` hydrates three. A bare accessor with no `select_related` issues one lightweight query per hop on demand (Django semantics) — the framework never forces a deep JOIN on a single-hop need.
+  - Deep JOINs schema-qualify every level (via `walk_joins`) and apply row scoping (soft-delete/tenancy) to joined levels consistently with a direct read; a deep hydrate must not surface a soft-deleted or cross-tenant intermediate/leaf row.
+  - The prefixed deep-projection must not project a `Masked`/hidden column raw (bypassing decryption / the read policy); hydrated nested objects decrypt `Masked` fields exactly as a direct fetch does.
+  - Review lens: flag any re-query of a cached relation, any per-hop N+1 in deep hydration, or any hidden/masked column projected raw across a level.
 
 ## Interfaces produced by Plan A (consumed here)
 

@@ -19,6 +19,12 @@
 - Before each commit: `cargo fmt && cargo clippy --all-targets && cargo build && cargo test` (whole workspace) must pass.
 - Behavioral tests: real rows, the public path, read the graph back — never a SQL-string assertion as the sole assertion (a `to_sql`/query-count check may run *alongside* a round-trip).
 - Never wipe a DB or delete migration files to make a test pass.
+- **Security & Performance (binds every task — see the spec's "Security & Performance" section):**
+  - `walk_joins` schema-qualifies EVERY joined table (root, intermediates, junctions, leaf) via `schema_qualified_table` — a miss crosses tenant boundaries.
+  - The unification must NOT make a single hop heavier: the lightweight single-hop form in `to_one_hop` / `single_to_many_queryset` is preserved; the multi-table JOIN path is for genuine multi-hop only. A single-hop accessor's query shape/count is unchanged before vs. after A (regression-tested in Task 3).
+  - Row scoping is not bypassed by a JOIN: soft-delete (`deleted_at IS NULL`) on a traversed table is applied consistently with a direct read, OR its non-application is a documented, tested decision (Task 3).
+  - `Masked<T>`/encrypted columns crossing a hop decrypt through the same path as a direct read — no raw-column read that bypasses decryption.
+  - Review lens: flag any query-count regression, dropped `schema_qualified_table`/row-scoping on a joined table, or single hop routed through the heavy JOIN path.
 
 ## File Structure
 
@@ -286,7 +292,42 @@ async fn walk_joins_emits_inner_join_for_forward_fk_chain() {
     assert!(sql.contains("INNER JOIN"), "sql: {sql}");
     assert!(sql.matches("JOIN").count() >= 2, "two hops -> two joins: {sql}");
 }
+
+// SECURITY: every joined table is schema-qualified (multi-tenant isolation).
+// If a schema router is hard to install in a unit test, at minimum assert the
+// leaf/intermediate table names appear as sea-query-quoted identifiers routed
+// through schema_qualified_table (grep the builder, or run under a test router
+// that prefixes a schema and assert the prefix appears on EVERY table).
+#[tokio::test]
+async fn walk_joins_schema_qualifies_every_hop() {
+    // install the repo's test schema router (see db::router tests:
+    // schema_router_qualifies_table_references) mapping tables -> "tenant1".
+    // Build a 2-hop path and assert BOTH hop tables appear schema-qualified.
+    use umbral::orm::relation::RelPath;
+    let path = RelPath::from_path::<Post>("author__company").unwrap();
+    let sql = umbral::orm::relation::to_sql_for_path::<Company>(&path).unwrap();
+    assert_eq!(sql.matches("tenant1").count(), 3, "root+2 hops all qualified: {sql}");
+}
+
+// PERFORMANCE: a single hop keeps its lightweight shape — the unification must
+// not route one hop through the heavy multi-table JOIN plan. Assert the
+// single-hop accessor's SQL is the pre-A lightweight form (a direct filter /
+// junction subquery), NOT a multi-JOIN. Capture the pre-A SQL string in the
+// test as the golden and assert equality (behavior-preserving refactor).
+#[tokio::test]
+async fn single_hop_stays_lightweight() {
+    // post.author() is ONE forward FK. Its resolved SQL must be the
+    // single-hop form (one WHERE on the FK value / one subquery), with no
+    // second table joined. Assert the JOIN count is 0 or 1 (the single-hop
+    // form), never the deep multi-JOIN plan.
+    use umbral::orm::relation::RelPath;
+    let path = RelPath::from_path::<Post>("author").unwrap();
+    let sql = umbral::orm::relation::to_sql_for_path::<User>(&path).unwrap();
+    assert!(sql.matches(" JOIN ").count() <= 1, "single hop must stay lightweight: {sql}");
+}
 ```
+
+Also add, in the same file, a soft-delete scoping test (SECURITY): register a model with `#[umbral(soft_delete)]` as a traversal target, soft-delete a leaf row, and assert a multi-hop traversal does NOT return it — OR, if the framework's decision is that a JOIN does not re-apply the related manager's soft-delete scope (Django-style), assert that documented behavior explicitly and record the decision in the ledger. Resolve which behavior is correct during implementation by checking whether `resolve_leaf_queryset` applies `soft_delete_active` to intermediate tables today; make the traversal consistent with a direct read and document any deliberate exception.
 
 (If `to_sql_for_path` doesn't exist, add a thin `pub fn to_sql_for_path<Leaf: Model>(path: &RelPath) -> Result<String, sqlx::Error>` in `relation.rs` delegating to `relation_resolve::to_one_sql::<Leaf>(path, false)` — it is a probe surface, keep it.)
 

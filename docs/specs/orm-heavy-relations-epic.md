@@ -157,6 +157,27 @@ Behavioral: real `User → Profile → Country` rows; `select_related("profile__
 - **Ship-a-feature-ship-its-doc** — each sub-project adds its user-facing MDX page in the same PR.
 - **Commit cadence** — one logical change per commit; full-workspace `fmt`/`clippy`/`build`/`test` before each.
 
+## Security & Performance (cross-cutting — binds A, B, and C; a review lens on every task)
+
+**Performance — always the least-latent correct query shape. The framework, not the caller, picks it.**
+
+1. **A cache hit never re-queries.** A relation hydrated by `select_related` is served from cache with ZERO round-trips (C Task 1). `select_related` is a performance hint, never a correctness prerequisite, and never a hidden re-query.
+2. **A deep all-to-one chain is ONE JOIN, one round-trip** — never N awaited per-hop queries.
+3. **A single hop must not get heavier under the unification.** The lightweight single-hop form (the existing direct-filter / junction-subquery in `to_one_hop` / `single_to_many_queryset`) is preserved; `walk_joins`' multi-table JOIN path is used only for genuine multi-hop paths. A one-hop call keeps one-hop cost — the unification must not route a single hop through a heavier plan than it uses today. **Regression test:** the query shape / count for a single-hop accessor is unchanged before vs. after A.
+4. **No N+1.** Aggregates emit ONE correlated subquery per annotation (never N queries); reverse-FK / M2M list reads route through batched prefetch (`IN`-list), never per-parent queries. Where a JOIN would multiply parent rows by child cardinality (to-many on a list page), `prefetch_related` stays the default — do not silently turn a list read into a row-multiplying JOIN. **Tests assert query counts** to prove no N+1.
+5. **Scalar terminals stay scalar.** `.exists()` → `SELECT 1 … LIMIT 1`; `.count()` → `COUNT(...)`; never fetch-all-then-count in Rust.
+6. **JOINs/subqueries rely on indexes.** FK and junction columns must be indexed (the migration engine already emits FK indexes, gaps2 #72); any new link/junction column this epic introduces must carry an index, or the correlated subqueries in B and the JOINs in A/C degrade on large tables.
+
+**Security — the unified `walk_joins` is the single place isolation must be right, on every joined table (root, intermediates, junctions, leaf).**
+
+1. **Parameterized always.** No value ever string-interpolated into SQL; sea-query binds every value (existing rule).
+2. **Multi-tenant isolation preserved.** Every table reference in every builder goes through `schema_qualified_table(...)`. The unified walker must schema-qualify EVERY joined table — a miss on an intermediate or junction table crosses tenant boundaries. **Test:** a traversal under a non-default schema router qualifies every hop.
+3. **Traversal does not bypass row scoping.** Soft-delete (`deleted_at IS NULL`) and any RLS/tenancy scope are applied to traversed tables consistently with a direct read, so a multi-hop path never exposes a row a direct query would hide. Where the framework deliberately does not re-apply a related manager's scope across a JOIN (a known Django-style subtlety), that non-application is a **documented, tested** decision — not an accident. **Test:** a soft-deleted leaf is not returned via a multi-hop traversal (or the documented exception is asserted).
+4. **`Masked<T>` / encrypted columns crossing a hop decrypt through the same path as a direct read** — the unified walker must never emit a raw-column read that bypasses decryption. One walker means one place to get this right (this is the drift risk the unification exists to kill).
+5. **No hidden/masked column leaks through an aggregate or projection** — a deep `select_related` projection or an aggregate expression must not surface a column the row-level read policy hides.
+
+**Review lens (added to every task reviewer's constraints block):** flag (a) any query-count regression, N+1, or a single hop routed through the heavy JOIN path; (b) any builder path that drops `schema_qualified_table` or row-scoping on a joined table; (c) any over-fetch where a scalar/less-latent shape is correct; (d) any raw-column read of a `Masked`/hidden column across a hop.
+
 # Risks and open questions
 
 - **A touches tested read paths.** Mitigated: refactor strictly under the existing green suite; the loud-error change is the only intended behavior delta.
