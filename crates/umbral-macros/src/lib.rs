@@ -1773,6 +1773,17 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // Match arms for the per-field
     // `HydrateRelated::set_reverse_fk_resolved_json` body.
     let mut reverse_fk_resolved_arms: Vec<TokenStream2> = Vec::new();
+    // Heavy-relations epic, Task 2b — one entry per declared `ReverseSet<C>`
+    // field: (field ident, child type, fk column). Drives a cache-aware
+    // INHERENT `fn <field>(&self) -> QuerySet<C>` emitted alongside
+    // `Model::objects()` below, so `post.comment_set()` serves the field's
+    // own `.prefetch_related("comment_set")` cache with zero further
+    // queries. This is DISTINCT from (and takes priority over, by Rust's
+    // inherent-over-trait method resolution) the always-queries trait
+    // accessor `reverse_fk_impls` emits on the FK's target type from the
+    // CHILD's own derive expansion — that one has no visibility into
+    // whether the parent declared a matching `ReverseSet` field at all.
+    let mut reverse_set_field_accessors: Vec<(syn::Ident, syn::Type, String)> = Vec::new();
 
     // Embedded `#[umbral(flatten)]` bases, in declaration order. Each
     // entry records how many of the model's OWN column specs preceded it
@@ -1926,6 +1937,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     self.#field_ident.set_resolved(decoded);
                 }
             });
+            reverse_set_field_accessors.push((field_ident.clone(), inner.clone(), fk_col.clone()));
             continue;
         }
 
@@ -2924,6 +2936,62 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         })
         .collect();
 
+    // Heavy-relations epic, Task 2b — a cache-aware INHERENT accessor for
+    // each declared `ReverseSet<C>` field on THIS struct (the parent side),
+    // named after the field itself. Rust resolves an inherent method ahead
+    // of a trait method of the same name, so when a field is named to match
+    // the `reverse_fk_impls` convention above (`<child_snake>_set`, the
+    // common case), this inherent method wins the call `parent.field()` —
+    // serving `.prefetch_related("field")`'s cache with zero further
+    // queries — while the trait-based accessor (which has no visibility
+    // into this struct's own fields) remains the always-queries fallback
+    // reachable only when no ReverseSet field shadows its name.
+    //
+    // Ordering-safety mirrors the M2M forward accessor above: the prefetch
+    // hydration (`hydrate_reverse_fk_for_field`) applies no ORDER BY, so the
+    // cache is served only when the child model declares no default
+    // ORDERING — otherwise a fresh query's `#inner::ORDERING` would sort
+    // rows the cache never did.
+    let reverse_set_accessor_methods: Vec<TokenStream2> = reverse_set_field_accessors
+        .iter()
+        .map(|(field_ident, inner, fk_col)| {
+            let doc = format!(
+                "Cache-aware reverse-FK accessor for the `{field_ident}` field. Serves \
+                 the `.prefetch_related(\"{field_ident}\")`-loaded `ReverseSet` cache with \
+                 zero further queries when present (and `{inner}` declares no default \
+                 ordering); otherwise resolves via a fresh query, same as the \
+                 auto-generated cross-crate `<child>_set()` accessor (heavy-relations \
+                 epic, Task 2b).",
+                field_ident = field_ident,
+                inner = quote!(#inner),
+            );
+            let hop = quote! {
+                ::umbral::orm::relation::HopSpec {
+                    kind: ::umbral::orm::relation::HopKind::ReverseFk,
+                    from_table: <#struct_name as ::umbral::orm::Model>::TABLE,
+                    to_table: <#inner as ::umbral::orm::Model>::TABLE,
+                    fk_column: #fk_col,
+                    fk_on_from: false,
+                    required: false,
+                    junction: ::core::option::Option::None,
+                }
+            };
+            quote! {
+                #[doc = #doc]
+                pub fn #field_ident(&self) -> ::umbral::orm::QuerySet<#inner> {
+                    if <#inner as ::umbral::orm::Model>::ORDERING.is_empty() {
+                        if let ::core::option::Option::Some(__c) = self.#field_ident.__resolved_many() {
+                            let __rows: ::std::vec::Vec<#inner> = __c.to_vec();
+                            return ::umbral::orm::relation::to_many_hop(self, #hop)
+                                .__with_prefetched(__rows);
+                        }
+                    }
+                    ::umbral::orm::relation::to_many_hop(self, #hop)
+                }
+            }
+        })
+        .collect();
+
     // Cross-crate reverse-OneToOne accessor — same trait-trick as reverse-FK
     // (above). As of Task 5 the method returns a CHAINABLE `Relation<Child>`
     // (not a bare `Future<Option<Child>>`), so `parent.child()` composes into a
@@ -3120,7 +3188,24 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                         ),
                     }
                 };
-                rel_accessors.push((field_name.clone(), ret, false, hop, None));
+                // Heavy-relations epic, Task 2b: serve `.prefetch_related(field)`'s
+                // `M2M::__resolved_many()` cache from the accessor with zero further
+                // queries — BUT only when the child model declares no default
+                // ORDERING. The prefetch hydration join (`hydrate_prefetch_related`
+                // in `queryset/hydration.rs`) applies no ORDER BY, while a fresh
+                // `to_many_hop(...).fetch()` DOES apply `#target::ORDERING` at
+                // terminal time (`Manager::queryset()` snapshots it into
+                // `default_ordering`). Serving the cache when the target has a
+                // declared ordering would silently return DB-natural JOIN order
+                // instead — gated out here rather than risk that divergence.
+                let cache_read = quote! {
+                    if <#target as ::umbral::orm::Model>::ORDERING.is_empty() {
+                        self.#field_name.__resolved_many()
+                    } else {
+                        ::core::option::Option::None
+                    }
+                };
+                rel_accessors.push((field_name.clone(), ret, false, hop, Some(cache_read)));
             }
             // A parent-side reverse-O2O back-link (`#[sqlx(skip)] OneToOne<T>`)
             // is intentionally NOT emitted here: the chainable `parent.child()`
@@ -3160,13 +3245,13 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // `To` from the method's return type.
     //
     // `self_has_fields` gates the cache-aware short-circuit (heavy-relations
-    // epic, Plan C Task 1): only the `M` / `&M` receivers actually HAVE
-    // `self.#name` (the model's own FK/O2O field) to read a cache off of.
-    // `Relation<M>` / `QuerySet<M>` carry a path (and, for `Relation<M>`, its
-    // OWN resolved value — not this field's), never the model's fields, so
-    // those two impls keep calling the hop builder unconditionally, exactly
-    // like the reverse-O2O parent-side accessor (which has no local field at
-    // all).
+    // epic, Plan C Task 1 for to-one / Task 2b for to-many): only the `M` /
+    // `&M` receivers actually HAVE `self.#name` (the model's own FK/O2O/M2M
+    // field) to read a cache off of. `Relation<M>` / `QuerySet<M>` carry a
+    // path (and, for `Relation<M>`, its OWN resolved value — not this
+    // field's), never the model's fields, so those two impls keep calling
+    // the hop builder unconditionally, exactly like the reverse-O2O
+    // parent-side accessor (which has no local field at all).
     let make_relations_impl =
         |target_ty: TokenStream2, src: &TokenStream2, self_has_fields: bool| -> TokenStream2 {
             let methods: Vec<TokenStream2> = rel_accessors
@@ -3177,13 +3262,28 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     } else {
                         quote!(::umbral::orm::relation::to_many_hop)
                     };
-                    match (self_has_fields, cache_read) {
-                        (true, Some(cache_read)) => quote! {
+                    match (self_has_fields, cache_read, *is_to_one) {
+                        (true, Some(cache_read), true) => quote! {
                             fn #name(&self) -> #ret {
                                 if let ::core::option::Option::Some(__c) = #cache_read {
                                     return ::umbral::orm::Relation::from_resolved(
                                         ::core::clone::Clone::clone(__c),
                                     );
+                                }
+                                #call(#src, #hop)
+                            }
+                        },
+                        // Task 2b — to-many (M2M forward): attach the cached rows
+                        // onto the freshly-built `QuerySet` via `__with_prefetched`
+                        // rather than short-circuiting the hop builder entirely, so
+                        // the returned QuerySet still carries the real predicate /
+                        // `RelPath` for a later `.filter()` etc. to invalidate
+                        // against (see `QuerySet::prefetched`'s doc comment).
+                        (true, Some(cache_read), false) => quote! {
+                            fn #name(&self) -> #ret {
+                                if let ::core::option::Option::Some(__c) = #cache_read {
+                                    let __rows: ::std::vec::Vec<_> = __c.to_vec();
+                                    return #call(#src, #hop).__with_prefetched(__rows);
                                 }
                                 #call(#src, #hop)
                             }
@@ -3707,6 +3807,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             }
 
             #(#m2m_helper_methods)*
+            #(#reverse_set_accessor_methods)*
         }
 
         // Reverse-FK accessors emitted on each FK target (gap #30).

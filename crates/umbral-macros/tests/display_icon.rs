@@ -294,7 +294,13 @@ fn validator_text_format_round_trips_through_meta_snapshot() {
 
 use umbral::orm::{HydrateRelated, M2M};
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+// `Clone` is required: the heavy-relations epic's cache-aware M2M forward
+// accessor (`PostWithTags::tags()`, Task 2b) clones the cached row set via
+// `.to_vec()` on a `.prefetch_related("tags")` hit — every `#[derive(Model)]`
+// struct used as an M2M/ReverseSet target is expected to derive `Clone` for
+// exactly this reason (same convention `ForeignKey`'s cache-aware to-one
+// accessor established, Task 2).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 struct Tag {
     id: i64,
     name: String,

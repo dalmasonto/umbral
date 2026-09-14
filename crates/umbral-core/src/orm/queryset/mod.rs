@@ -282,6 +282,36 @@ pub struct QuerySet<T> {
     /// (`dev.software_groups().software()`) is composed before the Task-5
     /// derive lands. `None` for an ordinary `T::objects()` QuerySet.
     pub(crate) rel_path: Option<crate::orm::relation::RelPath>,
+    /// Heavy-relations epic, Task 2b — the prefetched, UNFILTERED row set a
+    /// to-many relation accessor (`blog.categories()` / `post.comment_set()`)
+    /// attaches via [`Self::__with_prefetched`] when the backing
+    /// `M2M`/`ReverseSet` field's `.prefetch_related(...)` cache was
+    /// populated. `Some(rows)` means the read terminals (`fetch`/`count`/
+    /// `first`/`exists`) serve `rows` directly with zero further queries;
+    /// `None` (the default for every OTHER QuerySet, including every
+    /// `T::objects()`-rooted one) means the normal query path runs.
+    ///
+    /// **Invariant every builder method must uphold**: this slot holds
+    /// EXACTLY what a fresh, unfiltered query would return — same rows,
+    /// same order. Any method that could narrow, reorder, or otherwise
+    /// change the row set (`filter`/`exclude`/`order_by`/`limit`/`offset`/
+    /// `distinct`/`only`/`with_deleted`/`only_deleted`/`select_related`/
+    /// `join_related`/`prefetch_related`/`annotate_related` and siblings/
+    /// `union`/`intersect`/`except`, and the pool overrides `on`/`on_pg`)
+    /// clears this slot back to `None` so the next terminal re-queries
+    /// instead of serving a stale or wrongly-scoped cache. Fail-safe design:
+    /// clearing too eagerly costs an extra query; clearing too rarely would
+    /// return wrong data, so every builder that isn't OBVIOUSLY inert on the
+    /// read shape (`atomic`/`non_atomic`/`on_tx`/`poisoned`) clears it.
+    ///
+    /// Deliberately dropped (not cloned) by `Clone` below — see that impl's
+    /// comment — and read via move (`Option::take`) rather than `.clone()` in
+    /// the terminals, so this field imposes NO `T: Clone` bound anywhere on
+    /// `QuerySet<T>` itself. Only the codegen call site that BUILDS the Vec
+    /// (`__resolved_many()` → `.to_vec()` on the relation's target model)
+    /// needs `Target: Clone` — already the project-wide convention for every
+    /// `#[derive(Model)]` struct that participates in a relation.
+    pub(crate) prefetched: Option<Vec<T>>,
     _phantom: PhantomData<T>,
 }
 
@@ -291,6 +321,17 @@ pub struct QuerySet<T> {
 // `PhantomData<T>` clones for any `T`). The doc comment above already
 // promised cheap cloning; this is what makes `Paginator` (and any
 // requery-without-consume caller) slice the same query per page.
+//
+// `prefetched` (Task 2b) is deliberately DROPPED on clone rather than
+// cloned: propagating it would force a `T: Clone` bound onto this impl,
+// which — unlike `Relation<T>`'s equivalent bound (confined to FK target
+// types) — would ripple across every `QuerySet<T>` in the codebase,
+// including the ~120+ existing `#[derive(Model)]` fixtures that don't
+// derive `Clone`. Dropping it is also the SAFE direction per the field's
+// own fail-safe contract: a clone without the cache just re-queries on its
+// next terminal instead of risking a stale read — never wrong data, only a
+// forgone optimization on an uncommon path (nothing in this codebase clones
+// a relation-accessor's `QuerySet` before its first terminal).
 impl<T> Clone for QuerySet<T> {
     fn clone(&self) -> Self {
         Self {
@@ -316,13 +357,15 @@ impl<T> Clone for QuerySet<T> {
             poison: self.poison.clone(),
             leaf_distinct: self.leaf_distinct.clone(),
             rel_path: self.rel_path.clone(),
+            prefetched: None,
             _phantom: PhantomData,
         }
     }
 }
 
 // Manual `Debug` for the same `T: Debug`-free reason; `Predicate<T>`'s own
-// `Debug` is likewise `T`-free.
+// `Debug` is likewise `T`-free. `prefetched` reports a length, not the rows
+// themselves, so this impl stays unbounded on `T` too.
 impl<T> std::fmt::Debug for QuerySet<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `Predicate<T>` is intentionally not `Debug` (its `SimpleExpr`
@@ -349,6 +392,10 @@ impl<T> std::fmt::Debug for QuerySet<T> {
             .field("annotations", &self.annotations)
             .field("poison", &self.poison)
             .field("leaf_distinct", &self.leaf_distinct)
+            .field(
+                "prefetched",
+                &format_args!("{:?}", self.prefetched.as_ref().map(|v| v.len())),
+            )
             .finish()
     }
 }
@@ -503,6 +550,7 @@ impl<T> QuerySet<T> {
             poison: None,
             leaf_distinct: None,
             rel_path: None,
+            prefetched: None,
             _phantom: PhantomData,
         }
     }
@@ -529,6 +577,7 @@ impl<T> QuerySet<T> {
     /// models that aren't tagged `#[umbral(soft_delete)]`.
     pub fn with_deleted(mut self) -> Self {
         self.with_deleted = true;
+        self.prefetched = None;
         self
     }
 
@@ -537,6 +586,7 @@ impl<T> QuerySet<T> {
     /// aren't tagged `#[umbral(soft_delete)]`.
     pub fn only_deleted(mut self) -> Self {
         self.only_deleted = true;
+        self.prefetched = None;
         self
     }
 
@@ -549,6 +599,7 @@ impl<T> QuerySet<T> {
     /// is already a hard DELETE).
     pub fn hard_delete(mut self) -> Self {
         self.hard_delete = true;
+        self.prefetched = None;
         self
     }
 
@@ -586,6 +637,7 @@ impl<T> QuerySet<T> {
     /// raises). This keeps the chainable surface return-type-stable.
     pub fn only(mut self, cols: &[&str]) -> Self {
         self.only_cols = Some(cols.iter().map(|s| s.to_string()).collect());
+        self.prefetched = None;
         self
     }
 
@@ -849,6 +901,7 @@ impl<T> QuerySet<T> {
     /// once the resolved pool's backend is known).
     pub fn filter(mut self, p: Predicate<T>) -> Self {
         self.predicates.push(p);
+        self.prefetched = None;
         self
     }
 
@@ -874,6 +927,7 @@ impl<T> QuerySet<T> {
         };
         self.query.order_by(Alias::new(o.column), order);
         self.explicit_order = true;
+        self.prefetched = None;
         self
     }
 
@@ -881,6 +935,7 @@ impl<T> QuerySet<T> {
     pub fn limit(mut self, n: u64) -> Self {
         self.query.limit(n);
         self.user_limit = Some(n);
+        self.prefetched = None;
         self
     }
 
@@ -888,6 +943,7 @@ impl<T> QuerySet<T> {
     pub fn offset(mut self, n: u64) -> Self {
         self.query.offset(n);
         self.user_offset = Some(n);
+        self.prefetched = None;
         self
     }
 
@@ -903,6 +959,7 @@ impl<T> QuerySet<T> {
     /// bare `SELECT` takes are released immediately, defeating the point.
     pub fn for_update_skip_locked(mut self) -> Self {
         self.for_update_skip_locked = true;
+        self.prefetched = None;
         self
     }
 
@@ -913,6 +970,7 @@ impl<T> QuerySet<T> {
     /// use [`Self::on_pg`].
     pub fn on(mut self, pool: &sqlx::SqlitePool) -> Self {
         self.explicit_pool = Some(DbPool::Sqlite(pool.clone()));
+        self.prefetched = None;
         self
     }
 
@@ -923,6 +981,7 @@ impl<T> QuerySet<T> {
     /// Postgres instance) reach for this directly.
     pub fn on_pg(mut self, pool: &sqlx::PgPool) -> Self {
         self.explicit_pool = Some(DbPool::Postgres(pool.clone()));
+        self.prefetched = None;
         self
     }
 
@@ -996,6 +1055,7 @@ impl<T> QuerySet<T> {
     /// silently no-op'd.
     pub fn select_related(mut self, field_name: impl Into<String>) -> Self {
         self.select_related.push(field_name.into());
+        self.prefetched = None;
         self
     }
 
@@ -1006,6 +1066,7 @@ impl<T> QuerySet<T> {
         for name in field_names {
             self.select_related.push(name.to_string());
         }
+        self.prefetched = None;
         self
     }
 
@@ -1046,6 +1107,7 @@ impl<T> QuerySet<T> {
             path: field_name.into(),
             kind: None,
         });
+        self.prefetched = None;
         self
     }
 
@@ -1057,6 +1119,7 @@ impl<T> QuerySet<T> {
                 kind: None,
             });
         }
+        self.prefetched = None;
         self
     }
 
@@ -1069,6 +1132,7 @@ impl<T> QuerySet<T> {
             path: path.into(),
             kind: Some(JoinKind::Left),
         });
+        self.prefetched = None;
         self
     }
 
@@ -1079,6 +1143,7 @@ impl<T> QuerySet<T> {
             path: path.into(),
             kind: Some(JoinKind::Inner),
         });
+        self.prefetched = None;
         self
     }
 
@@ -1092,6 +1157,7 @@ impl<T> QuerySet<T> {
             path: path.into(),
             kind: Some(JoinKind::Right),
         });
+        self.prefetched = None;
         self
     }
 
@@ -1132,6 +1198,7 @@ impl<T> QuerySet<T> {
     ///   the right method.
     pub fn prefetch_related(mut self, field_name: impl Into<String>) -> Self {
         self.prefetch_related.push(field_name.into());
+        self.prefetched = None;
         self
     }
 
@@ -1141,6 +1208,7 @@ impl<T> QuerySet<T> {
         for name in field_names {
             self.prefetch_related.push(name.to_string());
         }
+        self.prefetched = None;
         self
     }
 
@@ -1229,6 +1297,7 @@ impl<T> QuerySet<T> {
         self.predicates.clear();
         base.union(ty, other_select);
         self.query = base;
+        self.prefetched = None;
         self
     }
 
@@ -1242,6 +1311,7 @@ impl<T> QuerySet<T> {
     /// covers most use cases.
     pub fn distinct(mut self) -> Self {
         self.query.distinct();
+        self.prefetched = None;
         self
     }
 
@@ -1260,6 +1330,24 @@ impl<T> QuerySet<T> {
     /// flag), so calling it there changes nothing.
     pub fn with_duplicates(mut self) -> Self {
         self.leaf_distinct = None;
+        self.prefetched = None;
+        self
+    }
+
+    /// Codegen-facing prefetch-cache attachment (heavy-relations epic,
+    /// Task 2b). `#[derive(Model)]`'s to-many relation accessors
+    /// (`blog.categories()` / `post.comment_set()`) call THIS to attach a
+    /// `.prefetch_related(...)`-loaded row set onto the `QuerySet` they'd
+    /// otherwise return unattached — the read terminals then serve `rows`
+    /// with zero further queries until a builder call clears the slot (see
+    /// the `prefetched` field's own doc comment for the full invalidation
+    /// list). `pub` (not `pub(crate)`) because the generated call site lives in the
+    /// CONSUMER crate, same reason `to_many_hop` and `__resolved`/
+    /// `__resolved_many` are `pub`; `#[doc(hidden)]` keeps it out of
+    /// autocomplete and docs since it is not part of the ergonomic surface.
+    #[doc(hidden)]
+    pub fn __with_prefetched(mut self, rows: Vec<T>) -> Self {
+        self.prefetched = Some(rows);
         self
     }
 }
@@ -1908,12 +1996,23 @@ impl<T: Model> QuerySet<T> {
     /// If `.select_related(name)` was called, a follow-up batch query
     /// populates `ForeignKey<U>.resolved` for each named field before
     /// the rows are returned.
-    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
+    pub async fn fetch(mut self) -> Result<Vec<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        // Heavy-relations epic, Task 2b: a to-many relation accessor whose
+        // backing `M2M`/`ReverseSet` field was `.prefetch_related(...)`-
+        // loaded attaches the row set here (see the `prefetched` field's doc
+        // comment). Every builder method that could make this cache stale
+        // clears the slot back to `None`, so by the time we reach this
+        // terminal a `Some` here is always safe to serve directly — zero
+        // further queries. `.take()` moves the rows out (no `T: Clone`
+        // needed) since `self` is owned here.
+        if let Some(rows) = self.prefetched.take() {
+            return Ok(rows);
+        }
         if self.only_cols.is_some() {
             return Err(only_with_typed_terminal_error("fetch"));
         }
@@ -2296,6 +2395,11 @@ impl<T: Model> QuerySet<T> {
     /// tuple impl rather than the user struct — count() doesn't need
     /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
+        // Heavy-relations epic, Task 2b — see `fetch()`'s matching check and
+        // the `prefetched` field's doc comment.
+        if let Some(rows) = &self.prefetched {
+            return Ok(rows.len() as i64);
+        }
         self.check_annotations()?;
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
@@ -2355,6 +2459,13 @@ impl<T: Model> QuerySet<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        // Heavy-relations epic, Task 2b: check the cache BEFORE `.limit(1)`
+        // — that builder call clears `prefetched` (it's one of the
+        // narrowing methods), so the check has to come first or every
+        // `exists()` call would defeat its own cache hit.
+        if let Some(rows) = &self.prefetched {
+            return Ok(!rows.is_empty());
+        }
         let rows = self.limit(1).fetch().await?;
         Ok(!rows.is_empty())
     }
@@ -3145,6 +3256,7 @@ impl<T: Model> QuerySet<T> {
             child_filter: None,
             m2m_junction,
         });
+        self.prefetched = None;
         self
     }
 
@@ -3176,6 +3288,7 @@ impl<T: Model> QuerySet<T> {
     pub fn order_by_annotation(mut self, alias: &str, desc: bool) -> Self {
         self.annotation_order.push((alias.to_string(), desc));
         self.explicit_order = true;
+        self.prefetched = None;
         self
     }
 

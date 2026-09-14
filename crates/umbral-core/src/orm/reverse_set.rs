@@ -106,6 +106,21 @@ impl<C: Model> ReverseSet<C> {
         self.resolved.as_deref()
     }
 
+    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
+    /// does. `#[derive(Model)]`'s generated reverse-FK accessor
+    /// (`post.comment_set()`) calls THIS, not [`Self::resolved`]: the
+    /// accessor expands in the CONSUMER crate, and a later task
+    /// (heavy-relations Plan C, Task 4) demotes the ergonomic `resolved()`
+    /// to `pub(crate)` once it's no longer the public read path.
+    /// `__resolved_many` stays `pub` (kept out of docs/autocomplete via
+    /// `#[doc(hidden)]` only) so the generated call site keeps compiling
+    /// across that removal. Named to mirror `M2M::__resolved_many` — the
+    /// forward-M2M sibling of this to-many cache read.
+    #[doc(hidden)]
+    pub fn __resolved_many(&self) -> Option<&[C]> {
+        self.resolved.as_deref()
+    }
+
     /// Set the parent's PK on this slot so the prefetch loader knows
     /// which `WHERE <fk_column> = parent_pk` bucket to target.
     /// Called by the macro-emitted `set_m2m_parent_ids` arm with the
