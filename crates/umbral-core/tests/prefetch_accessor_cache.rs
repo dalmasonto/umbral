@@ -148,6 +148,21 @@ pub struct Comment {
     pub post: ForeignKey<Post>,
 }
 
+/// Reverse-FK target that DECLARES a default ordering — the negative-case
+/// sibling of `Comment`. Its accessor must NEVER serve the prefetch cache,
+/// because a fresh query would apply `ORDER BY id DESC` while the hydrated
+/// `Vec` is in unordered (insertion/DB-natural) order — the two are not
+/// equivalent, so the `ORDERING.is_empty()` gate must keep this path
+/// re-querying.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "pac_ordered_comment", ordering = ["-id"])]
+pub struct OrderedComment {
+    #[umbral(primary_key)]
+    pub id: i64,
+    pub body: String,
+    pub post: ForeignKey<Post>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "pac_post")]
 pub struct Post {
@@ -158,6 +173,10 @@ pub struct Post {
     #[serde(skip)]
     #[umbral(reverse_fk = "post")]
     pub comment_set: ReverseSet<Comment>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbral(reverse_fk = "post")]
+    pub ordered_comment_set: ReverseSet<OrderedComment>,
 }
 
 // =========================================================================
@@ -188,6 +207,7 @@ async fn boot() -> sqlx::SqlitePool {
             .model::<Blog>()
             .model::<Post>()
             .model::<Comment>()
+            .model::<OrderedComment>()
             .build()
             .expect("App::build");
 
@@ -228,6 +248,13 @@ async fn boot() -> sqlx::SqlitePool {
                 .execute(&pool)
                 .await
                 .expect("seed comment");
+        }
+        for body in &["ordered-a", "ordered-b"] {
+            sqlx::query("INSERT INTO pac_ordered_comment (body, post) VALUES (?, 1)")
+                .bind(*body)
+                .execute(&pool)
+                .await
+                .expect("seed ordered comment");
         }
 
         pool
@@ -415,5 +442,59 @@ async fn accessor_without_prefetch_still_queries() {
     assert!(
         count() >= 1,
         "un-prefetched reverse-FK accessor must fall back to a real query"
+    );
+}
+
+/// The ORDERING-equivalence gate, proven behaviorally (not just by code
+/// inspection): `OrderedComment` declares `#[umbral(ordering = ["-id"])]`,
+/// so a fresh `post.ordered_comment_set().fetch()` applies `ORDER BY id
+/// DESC` while the `.prefetch_related("ordered_comment_set")`-hydrated
+/// `Vec` carries no such ordering (the hydration join/IN query never
+/// applies `ORDER BY`). Serving that cache would silently return
+/// DB-natural order pretending to be the declared order, so the
+/// `<Target as Model>::ORDERING.is_empty()` gate in the generated
+/// accessor must see the non-empty ordering and skip the cache, issuing a
+/// real query every time — this test asserts exactly that (`count() >=
+/// 1`), the mirror image of the zero-query assertions above.
+#[tokio::test]
+async fn ordered_target_never_serves_prefetch_cache() {
+    let _g = query_lock().await;
+    boot().await;
+
+    let post = Post::objects()
+        .filter(post::ID.eq(1))
+        .prefetch_related("ordered_comment_set")
+        .get()
+        .await
+        .expect("get with prefetch_related");
+    assert_eq!(
+        post.ordered_comment_set.resolved().map(|r| r.len()),
+        Some(2),
+        "sanity: prefetch populated the ordered ReverseSet cache with both rows"
+    );
+
+    reset().await;
+    let fetched = post
+        .ordered_comment_set()
+        .fetch()
+        .await
+        .expect("gated fetch re-queries");
+    assert_eq!(fetched.len(), 2, "fetch() must still return both rows");
+    assert!(
+        count() >= 1,
+        "OrderedComment declares a default ordering, so post.ordered_comment_set() must NOT \
+         serve the prefetch cache — it must issue a real (ORDER BY id DESC) query instead"
+    );
+
+    reset().await;
+    let n = post
+        .ordered_comment_set()
+        .count()
+        .await
+        .expect("gated count re-queries");
+    assert_eq!(n, 2);
+    assert!(
+        count() >= 1,
+        "count() on an ordered-target accessor must also bypass the cache and re-query"
     );
 }
