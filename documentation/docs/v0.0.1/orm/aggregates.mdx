@@ -194,6 +194,49 @@ umbral::orm::annotate_related: ambiguous reverse relation `order` on `Store` - c
 
 Declaring a `#[umbral(reverse_fk = "buyer_store")] ReverseSet<Order>` field picks the FK explicitly and resolves it. An unknown relation name fails loudly too, and the error lists the auto-discoverable children so you can see the available names.
 
+## Multi-hop aggregates: aggregating across relation paths
+
+`annotate_count` also accepts a deep, `__`-separated relation path — `"posts__comments"` counts comments across every post a user has, in one correlated subquery. `annotate_sum` / `annotate_avg` / `annotate_min` / `annotate_max` do the same for a column reached through a path: the last `__` segment names the column, the prefix names the path to it.
+
+```rust
+use umbral::orm::Op;
+
+let rows = User::objects()
+    .annotate_sum("price_total", "posts__price")     // SUM(price) over every post
+    .annotate_count("posts__comments")               // COUNT across every post's comments
+    .filter_annotation("posts__comments_count", Op::Gt, 0.into())
+    .order_by_annotation("posts__comments_count", true)
+    .fetch_annotated()
+    .await?;
+```
+
+Each of these deep-path annotations compiles to its **own** correlated subquery — the same JOIN-walking engine relation traversal and `select_related` use internally, wrapped in a `SELECT <AGG>(...)` instead of projected as rows. There is no shared JOIN and no `GROUP BY` on the base table.
+
+<Callout type="info">
+  Stacking a `SUM` over one relation and a `COUNT` over a different (or overlapping) relation can never inflate one against the other. A naive `JOIN posts JOIN comments` approach multiplies: a post's price would be counted once per comment on it. Because each annotation is its own independent correlated subquery, `price_total` and `posts__comments_count` are each computed against their own JOIN, with nothing to multiply against — the classic multi-aggregate JOIN-multiplication bug is impossible by construction.
+</Callout>
+
+### Filtering on an annotation: `filter_annotation`
+
+An annotation alias is a SELECT-list expression, not a real column, so neither SQLite nor Postgres accepts it directly in a `WHERE`. `filter_annotation(alias, op, value)` is a portable stand-in for SQL `HAVING`: it wraps the whole annotated query as a derived table and filters that table's alias column, applied exactly once regardless of how many rows come back.
+
+```rust
+use umbral::orm::Op;
+
+// Only users with at least one comment across their posts.
+let active = User::objects()
+    .annotate_count("posts__comments")
+    .filter_annotation("posts__comments_count", Op::Gt, 0.into())
+    .values(&["id"])
+    .await?;
+```
+
+`Op` is the small, portable comparison set both backends render identically: `Eq`, `Ne`, `Gt`, `Gte`, `Lt`, `Lte`. Multiple `filter_annotation` calls AND together, the same way `.filter()` does. Call `.limit()` / `.offset()` **after** `filter_annotation` in the chain so pagination applies to the filtered set.
+
+An alias that was never annotated (a typo, or a `filter_annotation`/`order_by_annotation` before the matching `annotate_*` call) fails loudly at query time rather than emitting SQL against a column the derived table never produced.
+
+See `docs/specs/orm-heavy-relations-epic.md` (sub-project B, "Multi-hop aggregates") for the full design rationale, including why the subquery-per-annotation shape was chosen over a shared-JOIN `GROUP BY`.
+
 ## Pitfalls
 
 **Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL: use it when you need an unconditional integer return.

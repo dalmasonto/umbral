@@ -161,6 +161,55 @@ pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
 pub use write::{SaveError, slugify};
 
+/// A portable scalar comparison operator for
+/// [`crate::orm::queryset::QuerySet::filter_annotation`] — the small closed
+/// set SQLite and Postgres both render identically, so `filter_annotation`
+/// needs no per-backend `SimpleExpr` variant the way `Predicate` does.
+///
+/// Heavy-relations epic Task 3: no prior general-purpose comparison enum
+/// existed to reuse here. `Predicate`/`column` build comparisons through
+/// typed combinators (`col.gt(value)`) baked directly into a `SimpleExpr`
+/// at construction time, and `umbral-rest`'s `__gt`/`__lt`/… REST filter
+/// suffixes dispatch off raw strings inside that plugin's own dynamic
+/// filter builder — neither is a reusable enum. `Op` is new and narrow: it
+/// exists only to let `filter_annotation` name an operator against an
+/// ANNOTATION ALIAS, which isn't a typed column and so can't go through
+/// `column`'s combinators at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    /// `alias = value`
+    Eq,
+    /// `alias <> value`
+    Ne,
+    /// `alias > value`
+    Gt,
+    /// `alias >= value`
+    Gte,
+    /// `alias < value`
+    Lt,
+    /// `alias <= value`
+    Lte,
+}
+
+impl Op {
+    /// Apply this operator: `lhs <op> rhs`.
+    pub(crate) fn apply(
+        self,
+        lhs: sea_query::SimpleExpr,
+        rhs: sea_query::Value,
+    ) -> sea_query::SimpleExpr {
+        use sea_query::ExprTrait;
+        match self {
+            Op::Eq => lhs.eq(rhs),
+            Op::Ne => lhs.ne(rhs),
+            Op::Gt => lhs.gt(rhs),
+            Op::Gte => lhs.gte(rhs),
+            Op::Lt => lhs.lt(rhs),
+            Op::Lte => lhs.lte(rhs),
+        }
+    }
+}
+
 /// A typed boolean condition on rows of `T`.
 ///
 /// Built by inherent methods on the column types in `column` and passed

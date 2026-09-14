@@ -33,6 +33,7 @@
 //! a generic-over-`R` impl, so a user struct with standard field
 //! types satisfies both bounds without any per-backend ceremony.
 
+mod aggregate_path;
 mod backend_pg;
 mod backend_sqlite;
 mod errors;
@@ -231,6 +232,13 @@ pub struct QuerySet<T> {
     /// `order_by`, which is typed against the model's own columns and so cannot
     /// name a computed alias.
     pub(crate) annotation_order: Vec<(String, bool)>,
+    /// Heavy-relations epic Task 3 — `filter_annotation(alias, op, value)`: a
+    /// portable HAVING stand-in over an annotation alias (an annotation is a
+    /// SELECT-list expression, not a real column, so it can't go in a plain
+    /// `WHERE`). Applied by wrapping the whole built statement as a derived
+    /// table ONCE, at the end of `build_query_for` — never re-emitted per
+    /// row. Multiple calls AND together, mirroring `.filter()`'s semantics.
+    pub(crate) annotation_filters: Vec<(String, crate::orm::Op, sea_query::Value)>,
     /// audit_2 plugin-storage-tasks #6 — when `true`, a read terminal appends
     /// `FOR UPDATE SKIP LOCKED` (Postgres only). Lets N contending workers each
     /// claim a DIFFERENT row instead of all piling onto the same head row and
@@ -351,6 +359,7 @@ impl<T> Clone for QuerySet<T> {
             join_related: self.join_related.clone(),
             annotations: self.annotations.clone(),
             annotation_order: self.annotation_order.clone(),
+            annotation_filters: self.annotation_filters.clone(),
             user_limit: self.user_limit,
             user_offset: self.user_offset,
             for_update_skip_locked: self.for_update_skip_locked,
@@ -424,6 +433,19 @@ pub(crate) struct RelatedAnnotation {
     /// `Some(junction_table)` when this annotation counts M2M junction
     /// rows instead of child rows (`annotate_count` over an `M2M<T>`).
     pub(crate) m2m_junction: Option<String>,
+    /// Heavy-relations epic Plan B Task 3 — a deep (`__`-separated)
+    /// relation-PATH aggregate's already fully-built correlated subquery
+    /// (from [`aggregate_path::build_aggregate_subquery`], which walks the
+    /// path via [`relation_resolve::walk_joins`]). `Some(_)` short-circuits
+    /// `build_query_for`'s legacy single-hop subquery construction below —
+    /// `resolved`/`agg` stay populated too (`resolved`'s `Ok((leaf_table,
+    /// ..))` is what lets `fetch_annotated`'s existing per-column `SqlType`
+    /// lookup work unmodified; a resolve failure sets `resolved = Err(..)`
+    /// so it surfaces through the pre-existing `check_annotations` gate,
+    /// same as an unresolved single-hop relation name does). `None` for
+    /// every annotation added via the original single-hop
+    /// `annotate_related` / `annotate_count` path.
+    pub(crate) deep_subquery: Option<sea_query::SelectStatement>,
 }
 
 /// Outcome of auto-discovering a reverse-FK relation (gaps2 #45) when
@@ -525,6 +547,20 @@ pub(crate) fn discover_reverse_relation_by_table(
     }
 }
 
+/// Lowercase method-name fragment for an [`crate::orm::AggregateKind`] —
+/// used only to name the offending method in `annotate_path_agg`'s
+/// missing-`__`-column error (`annotate_sum(...)`, `annotate_avg(...)`, …).
+fn agg_kind_name(kind: crate::orm::AggregateKind) -> &'static str {
+    use crate::orm::AggregateKind::*;
+    match kind {
+        Count => "count",
+        Sum => "sum",
+        Avg => "avg",
+        Min => "min",
+        Max => "max",
+    }
+}
+
 impl<T> QuerySet<T> {
     pub(crate) fn new(query: sea_query::SelectStatement) -> Self {
         Self {
@@ -544,6 +580,7 @@ impl<T> QuerySet<T> {
             join_related: Vec::new(),
             annotations: Vec::new(),
             annotation_order: Vec::new(),
+            annotation_filters: Vec::new(),
             for_update_skip_locked: false,
             user_limit: None,
             user_offset: None,
@@ -776,6 +813,22 @@ impl<T> QuerySet<T> {
         // this infallible path; the fallible consumers call
         // `check_annotations()` first and fail loudly instead.
         for ann in &self.annotations {
+            // Heavy-relations epic Task 3 — a deep relation-PATH aggregate
+            // (`annotate_count("posts__comments")`, `annotate_sum(alias,
+            // "posts__price")`) already carries its complete, self-contained
+            // correlated subquery (built via `aggregate_path`, which walks
+            // the path through `walk_joins`). Emit it as-is and skip the
+            // legacy single-hop construction below entirely.
+            if let Some(sub) = &ann.deep_subquery {
+                q.expr_as(
+                    sea_query::SimpleExpr::SubQuery(
+                        None,
+                        Box::new(sea_query::SubQueryStatement::SelectStatement(sub.clone())),
+                    ),
+                    Alias::new(ann.alias.as_str()),
+                );
+                continue;
+            }
             // M2M-junction annotations count rows of the junction table
             // (`<parent>_<field>`, columns parent_id / child_id),
             // correlated on parent_id = <parent>.<pk>.
@@ -884,6 +937,27 @@ impl<T> QuerySet<T> {
         // multiplicity. `count()` mirrors this with `COUNT(DISTINCT pk)`.
         if self.leaf_distinct.is_some() {
             q.distinct();
+        }
+        // Heavy-relations epic Task 3 — `filter_annotation`: a portable
+        // HAVING stand-in. An annotation alias is a SELECT-list expression,
+        // not a real column, so neither backend accepts it directly in a
+        // WHERE; wrapping the whole built statement as a derived table and
+        // filtering ITS alias column works identically on SQLite and
+        // Postgres. Applied ONCE, here, as the LAST step — every fallible
+        // reader (`fetch`/`fetch_annotated`/`values`/`explain`/`to_sql`)
+        // shares this one `build_query_for`, so the wrap can never be
+        // re-emitted per row or per terminal.
+        if !self.annotation_filters.is_empty() {
+            let mut outer = Query::select();
+            outer
+                .column(sea_query::Asterisk)
+                .from_subquery(q, Alias::new("__anno"));
+            for (alias, op, value) in &self.annotation_filters {
+                outer.and_where(
+                    op.apply(Expr::col(Alias::new(alias.as_str())).into(), value.clone()),
+                );
+            }
+            return outer;
         }
         q
     }
@@ -3255,6 +3329,7 @@ impl<T: Model> QuerySet<T> {
             child_soft_delete,
             child_filter: None,
             m2m_junction,
+            deep_subquery: None,
         });
         self.prefetched = None;
         self
@@ -3292,9 +3367,158 @@ impl<T: Model> QuerySet<T> {
         self
     }
 
+    /// `annotate_count` also accepts a DEEP `__`-separated relation path
+    /// (heavy-relations epic Task 3), e.g. `"posts__comments"` — count
+    /// comments across every post a user has, in one correlated subquery.
+    /// The alias keeps the `__`: `posts__comments_count`.
+    ///
+    /// Routing: a bare (no `__`) name that matches a DECLARED
+    /// `#[umbral(reverse_fk = "...")]` field, OR that auto-discovers as a
+    /// reverse-FK relation, keeps the ORIGINAL single-hop mechanism
+    /// unchanged (same SQL shape, same soft-delete/child-filter/auto-discovery-error
+    /// behavior every existing caller depends on). A path with a `__` OR a
+    /// bare name that is a declared M2M field routes through the new
+    /// [`aggregate_path::build_aggregate_subquery`] correlated-subquery
+    /// builder, which walks the path via [`relation_resolve::walk_joins`] —
+    /// the single-hop M2M case is routed here too specifically so a plain
+    /// `annotate_count("tags")` over an `M2M<T>` field exercises the SAME
+    /// `walk_joins` M2M arm a deep path does (heavy-relations epic Task 3
+    /// ruling: `walk_joins`' M2M/`ReverseFk` arms need a real behavioral
+    /// caller, not just this one going through the pre-existing junction-
+    /// row-counting shape).
+    ///
+    /// ```rust,ignore
+    /// let rows = User::objects()
+    ///     .annotate_count("posts__comments")
+    ///     .fetch_annotated()
+    ///     .await?;
+    /// ```
     pub fn annotate_count(self, relation: &str) -> Self {
+        if relation.contains("__") || T::M2M_RELATIONS.iter().any(|r| r.field_name == relation) {
+            return self.annotate_path_agg(
+                &format!("{relation}_count"),
+                relation,
+                crate::orm::AggregateKind::Count,
+            );
+        }
         let alias = format!("{relation}_count");
         self.annotate_related(&alias, relation, crate::orm::Aggregate::count())
+    }
+
+    /// `SUM` across a relation path — `annotate_sum("price_total",
+    /// "posts__price")` sums the `price` column of every post the user has,
+    /// as one correlated subquery. The LAST `__` segment names the column
+    /// on the related model; the prefix names the path to it. Sibling of
+    /// [`Self::annotate_avg`] / [`Self::annotate_min`] / [`Self::annotate_max`]
+    /// (same signature, same path-splitting rule, differ only in the SQL
+    /// aggregate function).
+    ///
+    /// An unresolvable path, or a path with no `__` at all (nothing to split
+    /// a relation prefix from), poisons this annotation — every fallible
+    /// consumer (`fetch_annotated`, `explain`, `values`) reports it loudly,
+    /// same as an unknown `annotate_count` relation does.
+    pub fn annotate_sum(self, alias: &str, path: &str) -> Self {
+        self.annotate_path_agg(alias, path, crate::orm::AggregateKind::Sum)
+    }
+
+    /// `AVG` across a relation path. See [`Self::annotate_sum`].
+    pub fn annotate_avg(self, alias: &str, path: &str) -> Self {
+        self.annotate_path_agg(alias, path, crate::orm::AggregateKind::Avg)
+    }
+
+    /// `MIN` across a relation path. See [`Self::annotate_sum`].
+    pub fn annotate_min(self, alias: &str, path: &str) -> Self {
+        self.annotate_path_agg(alias, path, crate::orm::AggregateKind::Min)
+    }
+
+    /// `MAX` across a relation path. See [`Self::annotate_sum`].
+    pub fn annotate_max(self, alias: &str, path: &str) -> Self {
+        self.annotate_path_agg(alias, path, crate::orm::AggregateKind::Max)
+    }
+
+    /// Shared builder behind [`Self::annotate_count`]'s deep-path branch and
+    /// [`Self::annotate_sum`]/`annotate_avg`/`annotate_min`/`annotate_max`.
+    ///
+    /// `AggregateKind::Count` treats the WHOLE `path` as the relation path
+    /// (no column to aggregate — it counts `DISTINCT <leaf pk>`). Every
+    /// other kind splits `path` at the LAST `__`: everything before is the
+    /// relation path, everything after is the column on the leaf model.
+    fn annotate_path_agg(
+        mut self,
+        alias: &str,
+        path: &str,
+        kind: crate::orm::AggregateKind,
+    ) -> Self {
+        let (rel_path, column): (&str, Option<&str>) = match kind {
+            crate::orm::AggregateKind::Count => (path, None),
+            _ => match path.rfind("__") {
+                Some(idx) => (&path[..idx], Some(&path[idx + 2..])),
+                None => {
+                    self.annotations.push(RelatedAnnotation {
+                        alias: alias.to_string(),
+                        agg: crate::orm::Aggregate::count(),
+                        resolved: Err(format!(
+                            "umbral::orm::annotate_{}(\"{alias}\", \"{path}\"): the path must be \
+                             `<relation>__<column>` (e.g. \"posts__price\") — sum/avg/min/max \
+                             aggregate a COLUMN on the related model, not the relation itself",
+                            agg_kind_name(kind),
+                        )),
+                        child_soft_delete: false,
+                        child_filter: None,
+                        m2m_junction: None,
+                        deep_subquery: None,
+                    });
+                    self.prefetched = None;
+                    return self;
+                }
+            },
+        };
+
+        match aggregate_path::build_aggregate_subquery::<T>(rel_path, kind, column) {
+            Ok((sub, leaf_table)) => {
+                let agg = match kind {
+                    crate::orm::AggregateKind::Count => crate::orm::Aggregate::count(),
+                    crate::orm::AggregateKind::Sum => {
+                        crate::orm::Aggregate::sum(column.expect("checked above"))
+                    }
+                    crate::orm::AggregateKind::Avg => {
+                        crate::orm::Aggregate::avg(column.expect("checked above"))
+                    }
+                    crate::orm::AggregateKind::Min => {
+                        crate::orm::Aggregate::min(column.expect("checked above"))
+                    }
+                    crate::orm::AggregateKind::Max => {
+                        crate::orm::Aggregate::max(column.expect("checked above"))
+                    }
+                };
+                self.annotations.push(RelatedAnnotation {
+                    alias: alias.to_string(),
+                    agg,
+                    // Only `leaf_table` is read back (by `fetch_annotated`'s
+                    // per-column `SqlType` lookup, keyed on `(child_table,
+                    // column)`); the other three legacy-shape slots are
+                    // unused once `deep_subquery` is `Some(_)`.
+                    resolved: Ok((leaf_table, String::new(), String::new(), String::new())),
+                    child_soft_delete: false,
+                    child_filter: None,
+                    m2m_junction: None,
+                    deep_subquery: Some(sub),
+                });
+            }
+            Err(e) => {
+                self.annotations.push(RelatedAnnotation {
+                    alias: alias.to_string(),
+                    agg: crate::orm::Aggregate::count(),
+                    resolved: Err(e.to_string()),
+                    child_soft_delete: false,
+                    child_filter: None,
+                    m2m_junction: None,
+                    deep_subquery: None,
+                });
+            }
+        }
+        self.prefetched = None;
+        self
     }
 
     /// Like [`Self::annotate_count`] but counts only the children
@@ -3331,6 +3555,44 @@ impl<T: Model> QuerySet<T> {
         queryset
     }
 
+    /// Filter on a PREVIOUSLY-annotated alias — a portable stand-in for SQL
+    /// `HAVING`, since an annotation is a SELECT-list expression rather
+    /// than a real column and neither backend accepts one directly in a
+    /// `WHERE`. Implemented by wrapping the whole built statement as a
+    /// derived table exactly once (`SELECT * FROM (<annotated>) AS __anno
+    /// WHERE <alias> <op> <value>`) inside [`Self::build_query_for`] — every
+    /// terminal shares that one build, so the wrap can never be re-run per
+    /// row. Multiple `filter_annotation` calls AND together, like
+    /// `.filter()`.
+    ///
+    /// ```rust,ignore
+    /// let active_authors = User::objects()
+    ///     .annotate_count("posts__comments")
+    ///     .filter_annotation("posts__comments_count", Op::Gt, 0.into())
+    ///     .order_by_annotation("posts__comments_count", true)
+    ///     .values(&["id"])
+    ///     .await?;
+    /// ```
+    ///
+    /// An alias that was never annotated is a loud error at query time —
+    /// see [`Self::check_annotations`] — the same "poison now, fail at the
+    /// terminal" contract [`Self::order_by_annotation`] already uses.
+    ///
+    /// Precedence note: this wraps the statement AS ALREADY BUILT, which
+    /// includes any `.limit()`/`.offset()` called BEFORE this in the chain.
+    /// Call `.limit()`/`.offset()` AFTER `.filter_annotation(...)` so
+    /// pagination applies to the FILTERED set, not the pre-filter one.
+    pub fn filter_annotation(
+        mut self,
+        alias: &str,
+        op: crate::orm::Op,
+        value: sea_query::Value,
+    ) -> Self {
+        self.annotation_filters.push((alias.to_string(), op, value));
+        self.prefetched = None;
+        self
+    }
+
     /// Loud-failure check for BOTH poison kinds an infallible builder can
     /// record: the general `poison` field, and poisoned annotations
     /// (unknown relation names from `annotate_related`).
@@ -3355,6 +3617,19 @@ impl<T: Model> QuerySet<T> {
                 let known: Vec<&str> = self.annotations.iter().map(|a| a.alias.as_str()).collect();
                 return Err(sqlx::Error::Protocol(format!(
                     "order_by_annotation(\"{alias}\") names an annotation that was never added; \
+                     annotated aliases on this queryset: {known:?}"
+                )));
+            }
+        }
+        // Heavy-relations epic Task 3 — `filter_annotation("typo", ..)` must
+        // fail loudly here too, for the same reason `order_by_annotation`
+        // does: the wrap's outer WHERE would otherwise reference a column
+        // the derived table never produced.
+        for (alias, _, _) in &self.annotation_filters {
+            if !self.annotations.iter().any(|a| &a.alias == alias) {
+                let known: Vec<&str> = self.annotations.iter().map(|a| a.alias.as_str()).collect();
+                return Err(sqlx::Error::Protocol(format!(
+                    "filter_annotation(\"{alias}\") names an annotation that was never added; \
                      annotated aliases on this queryset: {known:?}"
                 )));
             }
@@ -4384,6 +4659,36 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::order_by_annotation`].
     pub fn order_by_annotation(&self, alias: &str, desc: bool) -> QuerySet<T> {
         self.queryset().order_by_annotation(alias, desc)
+    }
+
+    /// See [`QuerySet::annotate_sum`].
+    pub fn annotate_sum(&self, alias: &str, path: &str) -> QuerySet<T> {
+        self.queryset().annotate_sum(alias, path)
+    }
+
+    /// See [`QuerySet::annotate_avg`].
+    pub fn annotate_avg(&self, alias: &str, path: &str) -> QuerySet<T> {
+        self.queryset().annotate_avg(alias, path)
+    }
+
+    /// See [`QuerySet::annotate_min`].
+    pub fn annotate_min(&self, alias: &str, path: &str) -> QuerySet<T> {
+        self.queryset().annotate_min(alias, path)
+    }
+
+    /// See [`QuerySet::annotate_max`].
+    pub fn annotate_max(&self, alias: &str, path: &str) -> QuerySet<T> {
+        self.queryset().annotate_max(alias, path)
+    }
+
+    /// See [`QuerySet::filter_annotation`].
+    pub fn filter_annotation(
+        &self,
+        alias: &str,
+        op: crate::orm::Op,
+        value: sea_query::Value,
+    ) -> QuerySet<T> {
+        self.queryset().filter_annotation(alias, op, value)
     }
 
     /// See [`QuerySet::annotate_as`] — the typed GROUP BY rollup.
