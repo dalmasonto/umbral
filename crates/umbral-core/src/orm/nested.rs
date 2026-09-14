@@ -242,6 +242,32 @@ pub async fn write_nested_tree_gated<G: NestedWriteGate>(
     body: &mut Map<String, Value>,
     tx: &mut Transaction,
 ) -> Result<Map<String, Value>, G::Error> {
+    // Pass 1 (TaskFlow #436): validate the WHOLE tree first — every node's
+    // pre-DB field errors, path-keyed, collected together — and refuse before
+    // writing a single row if any field is invalid. This is what lets a bad
+    // top-level field and a bad nested field surface in ONE response, keyed
+    // `contact` and `posts[0].slug`, instead of the parent insert masking the
+    // children.
+    let mut master: Vec<WriteError> = Vec::new();
+    let mut vnodes: usize = 0;
+    collect_create_tree_errors(
+        gate,
+        spec,
+        meta,
+        body,
+        "",
+        None,
+        0,
+        &mut vnodes,
+        &mut master,
+    )
+    .await?;
+    if !master.is_empty() {
+        return Err(NestedError::Write(WriteError::Multiple { errors: master }).into());
+    }
+    // Pass 2: execute on the tx. Genuine DB-INSERT-level failures (a UNIQUE
+    // clash, a coercion) stay fail-fast here and roll the tx back — still
+    // path-keyed, because `insert_tree` wraps each node's error with the path.
     let mut nodes: usize = 0;
     write_nested_subtree(gate, spec, meta, body, tx, 0, &mut nodes).await
 }
@@ -264,10 +290,228 @@ pub async fn write_nested_subtree<G: NestedWriteGate>(
     depth: usize,
     nodes: &mut usize,
 ) -> Result<Map<String, Value>, G::Error> {
-    insert_tree(gate, spec, meta, body, tx, depth, nodes).await
+    insert_tree(gate, spec, meta, body, tx, depth, nodes, "").await
+}
+
+// =========================================================================
+// Pass 1 — tree-wide validation collection (TaskFlow #436).
+//
+// The execute walk (`insert_tree` / `upsert_child`) writes the parent first
+// and then each child on the same tx, `?`-bailing on the FIRST failure. That
+// means (a) a bad top-level field masks every nested error (the parent insert
+// fails before any child is validated) and (b) sibling children after the
+// first bad one are never reported. The response also keyed a child's error
+// by its BARE column name (`slug`), so a client couldn't tell WHICH nested
+// item failed.
+//
+// This pass walks the whole tree WITHOUT writing anything, runs the pure /
+// pre-DB field validators on every node, and path-prefixes each node's error
+// keys (`posts[0].slug`, `posts[0].comments[1].body`). All errors merge into
+// one `WriteError::Multiple`, returned before any SQL runs. Only if the tree
+// is clean does the execute pass run. DB-INSERT-level failures the pre-DB
+// pass cannot see (a UNIQUE clash, a type coercion) stay fail-fast inside the
+// execute pass and roll the whole tx back — still path-keyed, because the
+// execute pass wraps its per-node error with `WriteError::into_prefixed`.
+// =========================================================================
+
+/// The pre-DB field errors for one CREATE node: required / blank / choices /
+/// FK-existence / M2M-shape (`validate_on_create`) plus numeric bounds and
+/// text-format (the TaskFlow #436 collecting passes). `fk_to_skip` is the
+/// child→parent FK the framework injects at write time; the caller never
+/// supplies it, so its "required" / bad-value errors here are false positives
+/// and are dropped.
+async fn node_create_errors(
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    fk_to_skip: Option<&str>,
+) -> Vec<WriteError> {
+    let mut errs = crate::orm::validation::validate_on_create(meta, body).await;
+    errs.extend(crate::orm::validation::validate_numeric_bounds(meta, body));
+    errs.extend(crate::orm::validation::validate_text_format(meta, body));
+    if let Some(fk) = fk_to_skip {
+        errs.retain(|e| !error_solely_targets(e, fk));
+    }
+    errs
+}
+
+/// The pre-DB field errors for one UPDATE (upsert) node. Update semantics:
+/// `validate_on_update` only flags fields the body EXPLICITLY sent blank
+/// (partial-update contract), plus numeric bounds / text-format on whatever
+/// the body carries. Ownership / cross-parent (a `NotFound`) stays fail-fast
+/// in the execute pass.
+async fn node_update_errors(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
+    let mut errs = crate::orm::validation::validate_on_update(meta, body).await;
+    errs.extend(crate::orm::validation::validate_numeric_bounds(meta, body));
+    errs.extend(crate::orm::validation::validate_text_format(meta, body));
+    errs
+}
+
+/// True when `e` is a single-field validation error keyed solely to `field` —
+/// used to drop the framework-injected FK column's false-positive
+/// required/blank/FK errors from a child node's validation.
+fn error_solely_targets(e: &WriteError, field: &str) -> bool {
+    let map = e.field_errors();
+    map.len() == 1 && map.contains_key(field)
+}
+
+/// Merge one node's raw errors into the tree-wide `master` list, path-keyed.
+/// Wrapping through `WriteError::into_prefixed` reuses the flattening +
+/// prefixing logic (and preserves any non-field message).
+fn push_node_errors(node_errs: Vec<WriteError>, path: &str, master: &mut Vec<WriteError>) {
+    if node_errs.is_empty() {
+        return;
+    }
+    if let WriteError::Multiple { errors } =
+        (WriteError::Multiple { errors: node_errs }).into_prefixed(path)
+    {
+        master.extend(errors);
+    }
+}
+
+/// The path a child array element occupies, e.g. `posts[0]` at the root or
+/// `posts[0].comments[1]` deeper — the drill-down key prefix.
+fn child_path(parent_path: &str, field: &str, index: usize) -> String {
+    if parent_path.is_empty() {
+        format!("{field}[{index}]")
+    } else {
+        format!("{parent_path}.{field}[{index}]")
+    }
+}
+
+/// Pass 1 for a CREATE tree: collect every node's pre-DB field errors,
+/// path-keyed, into `master`. Structural problems (a nested field that isn't
+/// an array, a non-object item, an unknown/blocked child table, an ambiguous
+/// FK, exceeding depth / the node budget) stay fail-fast as `NestedError` —
+/// they are not per-field validation and there is only ever one.
+#[allow(clippy::too_many_arguments)]
+async fn collect_create_tree_errors<G: NestedWriteGate>(
+    gate: &G,
+    spec: &NestedSpec,
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    path: &str,
+    fk_to_skip: Option<&str>,
+    depth: usize,
+    nodes: &mut usize,
+    master: &mut Vec<WriteError>,
+) -> Result<(), NestedError> {
+    if depth > MAX_NEST_DEPTH {
+        return Err(NestedError::MaxDepth(MAX_NEST_DEPTH));
+    }
+    push_node_errors(
+        node_create_errors(meta, body, fk_to_skip).await,
+        path,
+        master,
+    );
+    collect_child_errors(gate, spec, meta, body, path, depth, nodes, master, false).await
+}
+
+/// Pass 1 for an UPDATE (upsert) tree: the root and every pk-bearing item are
+/// validated with update semantics; a pk-less item is a create-subtree and is
+/// validated as a CREATE (with the child→parent FK skipped).
+#[allow(clippy::too_many_arguments)]
+async fn collect_update_tree_errors<G: NestedWriteGate>(
+    gate: &G,
+    spec: &NestedSpec,
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    path: &str,
+    depth: usize,
+    nodes: &mut usize,
+    master: &mut Vec<WriteError>,
+) -> Result<(), NestedError> {
+    if depth > MAX_NEST_DEPTH {
+        return Err(NestedError::MaxDepth(MAX_NEST_DEPTH));
+    }
+    push_node_errors(node_update_errors(meta, body).await, path, master);
+    collect_child_errors(gate, spec, meta, body, path, depth, nodes, master, true).await
+}
+
+/// Shared child-array recursion for both collect passes. Walks each declared
+/// nested array; when `is_update` an item carrying its primary key recurses as
+/// an update node, otherwise (and always under `is_update == false`) as a
+/// create subtree.
+#[allow(clippy::too_many_arguments)]
+async fn collect_child_errors<G: NestedWriteGate>(
+    gate: &G,
+    spec: &NestedSpec,
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    path: &str,
+    depth: usize,
+    nodes: &mut usize,
+    master: &mut Vec<WriteError>,
+    is_update: bool,
+) -> Result<(), NestedError> {
+    let specs = spec.get(&meta.table).cloned().unwrap_or_default();
+    for (field, child_table) in &specs {
+        let items = match body.get(field) {
+            Some(Value::Array(a)) => a.clone(),
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => {
+                return Err(NestedError::BadInput(format!(
+                    "nested field `{field}` must be an array"
+                )));
+            }
+        };
+        if items.is_empty() {
+            continue;
+        }
+        let child = resolve_child_meta(gate, child_table)?;
+        let fk = child_fk_to(&child, &meta.table)?.to_string();
+        let child_pk = pk_column(&child)?.name.clone();
+        for (i, item) in items.iter().enumerate() {
+            let Value::Object(child_body) = item else {
+                return Err(NestedError::BadInput(format!(
+                    "items in nested `{field}` must be objects"
+                )));
+            };
+            *nodes += 1;
+            if *nodes > gate.max_nodes() {
+                return Err(NestedError::MaxNodes(gate.max_nodes()));
+            }
+            let cpath = child_path(path, field, i);
+            let has_pk = child_body.get(&child_pk).is_some_and(|v| !v.is_null());
+            if is_update && has_pk {
+                Box::pin(collect_update_tree_errors(
+                    gate,
+                    spec,
+                    &child,
+                    child_body,
+                    &cpath,
+                    depth + 1,
+                    nodes,
+                    master,
+                ))
+                .await?;
+            } else {
+                Box::pin(collect_create_tree_errors(
+                    gate,
+                    spec,
+                    &child,
+                    child_body,
+                    &cpath,
+                    Some(&fk),
+                    depth + 1,
+                    nodes,
+                    master,
+                ))
+                .await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Recursively insert a row and every declared child subtree on the open `tx`.
+///
+/// `path` is this node's drill-down prefix (`""` at the root, `posts[0]` for a
+/// child, …). Pass 1 has already caught every pre-DB field error, so the only
+/// failures reachable here are DB-INSERT-level (UNIQUE clash, coercion) or
+/// infra; a per-node write error is re-keyed under `path` via
+/// [`WriteError::into_prefixed`] so a nested UNIQUE clash surfaces as
+/// `posts[0].slug`, not a bare `slug`, while the tx rolls back whole.
+#[allow(clippy::too_many_arguments)]
 async fn insert_tree<G: NestedWriteGate>(
     gate: &G,
     spec: &NestedSpec,
@@ -276,6 +520,7 @@ async fn insert_tree<G: NestedWriteGate>(
     tx: &mut Transaction,
     depth: usize,
     nodes: &mut usize,
+    path: &str,
 ) -> Result<Map<String, Value>, G::Error> {
     if depth > MAX_NEST_DEPTH {
         return Err(NestedError::MaxDepth(MAX_NEST_DEPTH).into());
@@ -315,7 +560,8 @@ async fn insert_tree<G: NestedWriteGate>(
     // same tx, so M2M links ride along atomically.
     let mut row = DynQuerySet::for_meta(meta)
         .insert_json_in_tx(body, tx)
-        .await?;
+        .await
+        .map_err(|w| NestedError::from(w.into_prefixed(path)))?;
     let pk_name = pk_column(meta)?.name.clone();
     let pk_value = row.get(&pk_name).cloned().ok_or_else(|| {
         NestedError::BadInput("nested: row has no primary key after insert".into())
@@ -325,7 +571,7 @@ async fn insert_tree<G: NestedWriteGate>(
     // Recurse into each declared child array.
     for (field, child, fk, items) in pending {
         let mut created = Vec::with_capacity(items.len());
-        for item in items {
+        for (i, item) in items.into_iter().enumerate() {
             let Value::Object(mut child_body) = item else {
                 return Err(NestedError::BadInput(format!(
                     "items in nested `{field}` must be objects"
@@ -353,6 +599,7 @@ async fn insert_tree<G: NestedWriteGate>(
                 tx,
                 depth + 1,
                 nodes,
+                &child_path(path, &field, i),
             ))
             .await?;
             created.push(Value::Object(crow));
@@ -501,6 +748,16 @@ pub async fn update_nested_tree_gated<G: NestedWriteGate>(
     body: &mut Map<String, Value>,
     tx: &mut Transaction,
 ) -> Result<Map<String, Value>, G::Error> {
+    // Pass 1 (TaskFlow #436): validate the whole upsert tree first — path-keyed,
+    // collected — and refuse before any write if a field is invalid. Runs on the
+    // intact body, BEFORE the nested arrays are split out below.
+    let mut master: Vec<WriteError> = Vec::new();
+    let mut vnodes: usize = 0;
+    collect_update_tree_errors(gate, spec, meta, body, "", 0, &mut vnodes, &mut master).await?;
+    if !master.is_empty() {
+        return Err(NestedError::Write(WriteError::Multiple { errors: master }).into());
+    }
+
     // Split the parent's declared nested arrays out of the body.
     let specs = spec.get(&meta.table).cloned().unwrap_or_default();
     let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
@@ -532,7 +789,8 @@ pub async fn update_nested_tree_gated<G: NestedWriteGate>(
     DynQuerySet::for_meta(meta)
         .filter_eq_string(pk_name, id)
         .update_json_in_tx(body, tx)
-        .await?;
+        .await
+        .map_err(|w| NestedError::from(w.into_prefixed("")))?;
 
     // The parent's typed pk value, read on the tx — used as the FK when
     // CREATING a child (so an i64 FK gets a number, not the stringified id).
@@ -551,7 +809,7 @@ pub async fn update_nested_tree_gated<G: NestedWriteGate>(
     let mut results: Vec<(String, Vec<Value>)> = Vec::new();
     for (field, child, fk, items) in pending {
         let mut upserted = Vec::with_capacity(items.len());
-        for item in items {
+        for (i, item) in items.into_iter().enumerate() {
             let Value::Object(child_body) = item else {
                 return Err(NestedError::BadInput(format!(
                     "items in nested `{field}` must be objects"
@@ -570,6 +828,7 @@ pub async fn update_nested_tree_gated<G: NestedWriteGate>(
                 tx,
                 1,
                 &mut nodes,
+                &child_path("", &field, i),
             )
             .await?;
             upserted.push(Value::Object(crow));
@@ -604,6 +863,7 @@ struct Upsert<'a, G: NestedWriteGate> {
     spec: &'a NestedSpec,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_child<G: NestedWriteGate>(
     ctx: &Upsert<'_, G>,
     meta: &ModelMeta,
@@ -612,6 +872,7 @@ async fn upsert_child<G: NestedWriteGate>(
     tx: &mut Transaction,
     depth: usize,
     nodes: &mut usize,
+    path: &str,
 ) -> Result<Map<String, Value>, G::Error> {
     let gate = ctx.gate;
     let spec = ctx.spec;
@@ -635,7 +896,10 @@ async fn upsert_child<G: NestedWriteGate>(
         gate.strip_hidden(&meta.table, &mut body);
         gate.check_create(&meta.table)?;
         body.insert(anchor.fk_col.to_string(), anchor.pk_value.clone());
-        return Box::pin(insert_tree(gate, spec, meta, &mut body, tx, depth, nodes)).await;
+        return Box::pin(insert_tree(
+            gate, spec, meta, &mut body, tx, depth, nodes, path,
+        ))
+        .await;
     };
 
     // UPDATE — enforce this child's own update permission before any read.
@@ -695,7 +959,8 @@ async fn upsert_child<G: NestedWriteGate>(
     DynQuerySet::for_meta(meta)
         .filter_eq_string(&pk_col, &pk_str)
         .update_json_in_tx(&body, tx)
-        .await?;
+        .await
+        .map_err(|w| NestedError::from(w.into_prefixed(path)))?;
     let mut row = fetch_one_in_tx(meta, &pk_col, &pk_str, tx).await?;
     let this_pk_value = row
         .get(&pk_col)
@@ -706,7 +971,7 @@ async fn upsert_child<G: NestedWriteGate>(
     // Recurse into grandchildren (upsert), scoped to this row.
     for (field, gc, gc_fk, items) in pending {
         let mut out = Vec::with_capacity(items.len());
-        for item in items {
+        for (i, item) in items.into_iter().enumerate() {
             let Value::Object(gc_body) = item else {
                 return Err(NestedError::BadInput(format!(
                     "items in nested `{field}` must be objects"
@@ -725,6 +990,7 @@ async fn upsert_child<G: NestedWriteGate>(
                 tx,
                 depth + 1,
                 nodes,
+                &child_path(path, &field, i),
             ))
             .await?;
             out.push(Value::Object(grow));
