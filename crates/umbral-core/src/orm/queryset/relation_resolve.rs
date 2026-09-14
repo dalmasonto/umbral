@@ -41,10 +41,13 @@
 // is fused into the walker's loop, so extraction is non-trivial and would touch
 // the tested select_related/join_related paths. Folded into the unification.)
 //
-// WITHIN this module the forward-JOIN walk is now unified: both
+// WITHIN this module the JOIN walk is now unified across every hop kind
+// (forward FK/O2O, reverse O2O, reverse-FK, M2M — see `walk_joins` below):
 // `build_to_one_select` (deep to-one) and `build_prefix_pivot_subquery` (the
-// to-one prefix of a crossing-to-many chain, Task 4) call the single
-// `walk_forward_joins` helper — no local duplication remains.
+// to-one prefix of a crossing-to-many chain) both call the single
+// `walk_joins` helper — no local duplication remains. `apply_join_related`
+// (`queryset/mod.rs`) is not yet rebuilt on it — that is the still-deferred
+// cross-module unification the TODO above names.
 
 use sea_query::{
     Alias, Expr, JoinType, PostgresQueryBuilder, Query, SelectStatement, SimpleExpr,
@@ -55,7 +58,7 @@ use sea_query_binder::SqlxBinder;
 use crate::db::DbPool;
 use crate::migrate::{ModelMeta, registered_models_opt};
 use crate::orm::queryset::{Manager, QuerySet};
-use crate::orm::relation::{HopKind, HopSpec, PathBase, RelPath};
+use crate::orm::relation::{HopKind, HopSpec, NullJoinPolicy, PathBase, RelPath};
 use crate::orm::{Model, Predicate};
 
 /// Per-level table alias (`__rel_0` is the root, `__rel_1` the first hop's
@@ -67,7 +70,7 @@ fn level_alias(level: usize) -> Alias {
 
 /// The primary-key column name of a registered table, looked up the same way
 /// [`super::resolve_join_hops`] does — from the migrate registry.
-fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a str> {
+pub(crate) fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a str> {
     registered
         .iter()
         .find(|m| m.table == table)?
@@ -77,61 +80,124 @@ fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a str> {
         .map(|c| c.name.as_str())
 }
 
-/// Walk an all-to-one hop chain, appending one INNER JOIN per hop onto
-/// `select` and returning the final (leaf-most) table alias.
+/// Walk a hop chain of ANY [`HopKind`], appending one JOIN (two, for an
+/// `M2M` hop — parent-to-junction, junction-to-target) per hop onto `select`
+/// and returning the final (leaf-most) table alias.
 ///
-/// The single forward-JOIN builder shared by [`build_to_one_select`] (the
-/// deep to-one resolver) and [`build_prefix_pivot_subquery`] (the to-one
-/// prefix of a crossing-to-many chain). The caller must already have added
-/// the root table to `select` under `root_alias` (which must equal
-/// `level_alias(0)`, since intermediate targets are aliased `level_alias(idx
-/// + 1)`); the caller owns the final projection and `WHERE` afterward. The
-/// two `fk_on_from` directions are driven exactly as the module doc
-/// describes: forward FK/O2O joins `near.<fk> = far.<pk>`, reverse O2O joins
-/// `near.<pk> = far.<fk>`.
-fn walk_forward_joins(
+/// The single JOIN builder shared by every hop→SQL consumer:
+/// [`build_to_one_select`] (the deep to-one resolver) and
+/// [`build_prefix_pivot_subquery`] (the to-one prefix of a crossing-to-many
+/// chain) today; `apply_join_related` (`queryset/mod.rs`) in a later task.
+/// The caller must already have added the root table to `select` under
+/// `root_alias`; the caller owns the final projection and `WHERE` afterward.
+///
+/// Join direction per hop:
+/// - `fk_on_from = true` (forward FK / O2O): `near.<fk> = far.<pk>`.
+/// - `fk_on_from = false` (reverse O2O parent-side, or reverse-FK): the FK
+///   column lives on the FAR table — `near.<pk> = far.<fk>`.
+/// - `M2M`: two joins through [`HopSpec::junction`] —
+///   `near.<pk> = junction.<parent_column>` then
+///   `junction.<target_column> = far.<pk>`.
+///
+/// `policy` decides the JOIN TYPE per hop: [`NullJoinPolicy::Inner`] always
+/// INNER JOINs (a NULL/absent link drops the row — traversal's shape);
+/// [`NullJoinPolicy::LeftForNullable`] LEFT JOINs when `!hop.required` (keep
+/// the parent row even when the link is absent — hydration's shape).
+///
+/// EVERY joined table (intermediate targets AND the M2M junction) is routed
+/// through [`crate::db::router::schema_qualified_table`] — the multi-tenant
+/// isolation guarantee holds for every hop kind, not just the forward case.
+pub(crate) fn walk_joins(
     select: &mut SelectStatement,
-    hops: &[HopSpec],
     root_alias: Alias,
+    hops: &[HopSpec],
+    policy: NullJoinPolicy,
+    prefix: &str,
     registered: &[ModelMeta],
 ) -> Result<Alias, sqlx::Error> {
     let mut near_alias = root_alias;
     for (idx, hop) in hops.iter().enumerate() {
-        let far_alias = level_alias(idx + 1);
-        let on = if hop.fk_on_from {
-            // Forward FK / O2O: FK column on the NEAR table -> FAR pk.
-            let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
-                protocol_error(&format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.to_table
-                ))
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
-                .equals((far_alias.clone(), Alias::new(far_pk)))
-        } else {
-            // Reverse O2O (parent side): FK column on the FAR table -> NEAR pk.
-            let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
-                protocol_error(&format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.from_table
-                ))
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(near_pk)))
-                .equals((far_alias.clone(), Alias::new(hop.fk_column)))
+        let far_alias = Alias::new(format!("{prefix}{}", idx + 1));
+        let jt = match policy {
+            NullJoinPolicy::LeftForNullable if !hop.required => JoinType::LeftJoin,
+            _ => JoinType::InnerJoin,
         };
-        select.join_as(
-            JoinType::InnerJoin,
-            crate::db::router::schema_qualified_table(hop.to_table),
-            far_alias.clone(),
-            on,
-        );
+        match hop.kind {
+            HopKind::M2M => {
+                let junction = hop
+                    .junction
+                    .ok_or_else(|| protocol_error("M2M hop is missing its JunctionSpec"))?;
+                let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
+                    protocol_error(&format!(
+                        "cannot resolve primary key of `{}` (is the model registered?)",
+                        hop.from_table
+                    ))
+                })?;
+                let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
+                    protocol_error(&format!(
+                        "cannot resolve primary key of `{}` (is the model registered?)",
+                        hop.to_table
+                    ))
+                })?;
+                let junction_alias = Alias::new(format!("{prefix}j{idx}"));
+                select.join_as(
+                    jt,
+                    crate::db::router::schema_qualified_table(junction.table),
+                    junction_alias.clone(),
+                    Expr::col((near_alias.clone(), Alias::new(near_pk)))
+                        .equals((junction_alias.clone(), Alias::new(junction.parent_column))),
+                );
+                select.join_as(
+                    jt,
+                    crate::db::router::schema_qualified_table(hop.to_table),
+                    far_alias.clone(),
+                    Expr::col((junction_alias, Alias::new(junction.target_column)))
+                        .equals((far_alias.clone(), Alias::new(far_pk))),
+                );
+            }
+            HopKind::Fk | HopKind::O2OForward | HopKind::O2OReverse | HopKind::ReverseFk => {
+                let on = if hop.fk_on_from {
+                    // Forward FK / O2O: FK column on the NEAR table -> FAR pk.
+                    let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
+                        protocol_error(&format!(
+                            "cannot resolve primary key of `{}` (is the model registered?)",
+                            hop.to_table
+                        ))
+                    })?;
+                    Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
+                        .equals((far_alias.clone(), Alias::new(far_pk)))
+                } else {
+                    // Reverse O2O (parent side) / reverse-FK: FK column on the
+                    // FAR table -> NEAR pk.
+                    let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
+                        protocol_error(&format!(
+                            "cannot resolve primary key of `{}` (is the model registered?)",
+                            hop.from_table
+                        ))
+                    })?;
+                    Expr::col((near_alias.clone(), Alias::new(near_pk)))
+                        .equals((far_alias.clone(), Alias::new(hop.fk_column)))
+                };
+                select.join_as(
+                    jt,
+                    crate::db::router::schema_qualified_table(hop.to_table),
+                    far_alias.clone(),
+                    on,
+                );
+            }
+        }
         near_alias = far_alias;
     }
     Ok(near_alias)
 }
 
-/// Build the single flat `SELECT <leaf.*> FROM <root> JOIN … WHERE root.pk = ?`
-/// statement for an all-to-one [`RelPath`].
+/// Build the single flat `SELECT <leaf.*> FROM <root> JOIN …` statement for
+/// an all-to-one [`RelPath`] — `WHERE root.pk = ? LIMIT 1` anchored when
+/// `path.base` is [`PathBase::SinglePk`] (the object-rooted `Relation<T>`
+/// terminal shape), or a bare table-rooted JOIN with no `WHERE`/`LIMIT` when
+/// it is [`PathBase::TableRoot`] (the [`RelPath::from_path`] shape a later
+/// `select_related`/aggregate consumer hangs its own projection/predicates
+/// off of — every root row, not one).
 ///
 /// Errors (loudly, never a wrong query) when the path has no hops, when a hop
 /// is to-many (M2M / reverse-FK belong to a later task), or when an
@@ -163,21 +229,27 @@ pub(crate) fn build_to_one_select<Leaf: Model>(
              use a single-hop relation (which needs no registry)",
         )
     })?;
-    let PathBase::SinglePk {
-        table: base_table,
-        pk_column: base_pk_column,
-        pk_value,
-    } = &path.base;
 
     let mut q = Query::select();
     let root_alias = level_alias(0);
+    let root_table: &str = match &path.base {
+        PathBase::SinglePk { table, .. } => table,
+        PathBase::TableRoot { table } => table,
+    };
     q.from_as(
-        crate::db::router::schema_qualified_table(base_table),
+        crate::db::router::schema_qualified_table(root_table),
         root_alias.clone(),
     );
 
     // Walk the hops, joining each target onto the previous level's alias.
-    let near_alias = walk_forward_joins(&mut q, &path.hops, root_alias.clone(), &registered)?;
+    let near_alias = walk_joins(
+        &mut q,
+        root_alias.clone(),
+        &path.hops,
+        NullJoinPolicy::Inner,
+        "__rel_",
+        &registered,
+    )?;
 
     // Project the leaf's own columns, aliased to their bare names so `Leaf`'s
     // `FromRow` reads them by field name regardless of the JOIN aliasing.
@@ -188,11 +260,21 @@ pub(crate) fn build_to_one_select<Leaf: Model>(
         );
     }
 
-    q.and_where(
-        Expr::col((root_alias, Alias::new(*base_pk_column)))
-            .eq(SimpleExpr::Value(pk_value.clone())),
-    );
-    q.limit(1);
+    // `SinglePk` anchors at the one root row and wants exactly it back;
+    // `TableRoot` has no single row to anchor on — it enumerates every root
+    // row the JOIN chain reaches (the later `select_related`/aggregate
+    // consumer adds its own predicates/limit on top of this base query).
+    if let PathBase::SinglePk {
+        pk_column,
+        pk_value,
+        ..
+    } = &path.base
+    {
+        q.and_where(
+            Expr::col((root_alias, Alias::new(*pk_column))).eq(SimpleExpr::Value(pk_value.clone())),
+        );
+        q.limit(1);
+    }
 
     Ok(q)
 }
@@ -363,11 +445,16 @@ fn build_leaf_select<Leaf: Model>(path: &RelPath) -> Result<(SelectStatement, St
             .to_string()
     })?;
 
-    let PathBase::SinglePk {
-        table: base_table,
-        pk_column: base_pk_column,
-        pk_value,
-    } = &path.base;
+    let (base_table, base_pk_column, pk_value) = match &path.base {
+        PathBase::SinglePk {
+            table,
+            pk_column,
+            pk_value,
+        } => (table, pk_column, pk_value),
+        PathBase::TableRoot { .. } => {
+            return Err("TableRoot base has no pk to anchor a single-object traversal".to_string());
+        }
+    };
 
     let leaf_table = Leaf::TABLE;
     let leaf_pk = leaf_pk_col::<Leaf>();
@@ -446,10 +533,19 @@ fn build_prefix_pivot_subquery(
         crate::db::router::schema_qualified_table(base_table),
         root_alias.clone(),
     );
-    // Shared forward-JOIN walk; map its `sqlx::Error` to this builder's
-    // `String` error channel (the `resolve_leaf_queryset` poison text).
-    let near_alias = walk_forward_joins(&mut q, prefix, root_alias.clone(), registered)
-        .map_err(|e| e.to_string())?;
+    // Shared JOIN walk; map its `sqlx::Error` to this builder's `String`
+    // error channel (the `resolve_leaf_queryset` poison text). Every hop here
+    // is to-one by construction (the all-to-one prefix), so `walk_joins`
+    // behaves exactly as the former forward-only walker did.
+    let near_alias = walk_joins(
+        &mut q,
+        root_alias.clone(),
+        prefix,
+        NullJoinPolicy::Inner,
+        "__rel_",
+        registered,
+    )
+    .map_err(|e| e.to_string())?;
     // Project the pivot's PK (the last prefix target's PK).
     let pivot_table = prefix.last().expect("prefix is non-empty").to_table;
     let pivot_pk = pk_of(registered, pivot_table).ok_or_else(|| {

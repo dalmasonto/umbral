@@ -383,7 +383,7 @@ pub(crate) struct RelatedAnnotation {
 /// the parent declares no matching `ReverseSet` field. The resolver
 /// scans the registry for children whose FK targets the parent table
 /// and matches `relation` against their conventional name forms.
-enum AutoDiscovery {
+pub(crate) enum AutoDiscovery {
     /// Exactly one (child, fk_column) candidate matched.
     Resolved {
         child_table: String,
@@ -410,10 +410,22 @@ enum AutoDiscovery {
 /// `M2M_RELATIONS` are resolved by the caller BEFORE this runs, so
 /// they always take precedence.
 fn discover_reverse_relation<T: crate::orm::Model>(relation: &str) -> AutoDiscovery {
+    discover_reverse_relation_by_table(T::TABLE, relation)
+}
+
+/// The table-name-keyed core of [`discover_reverse_relation`], shared with
+/// [`crate::orm::relation::RelPath::from_path`] (orm-heavy-relations epic,
+/// Plan A Task 2) for a hop whose parent is an INTERMEDIATE table reached
+/// mid-path, where there is no `T: Model` type parameter to hang a
+/// `T::TABLE` const off — the string resolver only has the table name
+/// carried in the migrate registry.
+pub(crate) fn discover_reverse_relation_by_table(
+    parent_table: &str,
+    relation: &str,
+) -> AutoDiscovery {
     if !crate::migrate::is_initialised() {
         return AutoDiscovery::NotFound(Vec::new());
     }
-    let parent_table = T::TABLE;
     // Each candidate: (child_table, fk_column, child_soft_delete).
     let mut candidates: Vec<(String, String, bool)> = Vec::new();
     let mut discoverable: Vec<String> = Vec::new();

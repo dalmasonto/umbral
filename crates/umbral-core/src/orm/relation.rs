@@ -122,6 +122,22 @@ pub enum PathBase {
         /// The root object's primary-key value.
         pk_value: sea_query::Value,
     },
+    /// A path rooted at a table itself (no specific row) — the base for
+    /// `select_related` / aggregate JOINs, which hang off the outer query's
+    /// own FROM rather than a `WHERE pk = ?`. Produced by [`RelPath::from_path`].
+    TableRoot {
+        /// The root table.
+        table: &'static str,
+    },
+}
+
+/// Whether a nullable hop LEFT-joins (keep the parent row) or INNER-joins
+/// (a null link drops the row). Traversal uses `Inner`; hydration /
+/// `select_related` uses `LeftForNullable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NullJoinPolicy {
+    Inner,
+    LeftForNullable,
 }
 
 /// An ordered relation path: a base node plus the hops taken from it.
@@ -141,6 +157,277 @@ impl RelPath {
         self.hops.push(hop);
         self
     }
+
+    /// Resolve a `__`-separated relation path off a typed root, into a
+    /// [`RelPath`] rooted at [`PathBase::TableRoot`] — the string-resolver
+    /// counterpart to composing `to_one_hop`/`to_many_hop` calls by hand.
+    ///
+    /// `RelPath::from_path::<Post>("author__company")` builds the same
+    /// two-hop path a chain of `to_one_hop` calls would, but from a bare
+    /// path string — the shape `select_related` / `join_related` / `values`
+    /// traversal, and the later aggregate/hydration engine (heavy-relations
+    /// epic, sub-projects B/C), resolve a relation name string through.
+    ///
+    /// Each `__`-separated segment resolves, in order:
+    /// 1. A forward FK/O2O field on the current table (`T::FIELDS` for the
+    ///    typed root; the migrate registry's `Column::fk_target` for a
+    ///    deeper hop, where there is no `T: Model` to hang a const off).
+    ///    `O2OForward` when the field/column is `unique`, else `Fk`.
+    /// 2. A forward M2M field (`T::M2M_RELATIONS`, root hop only — see the
+    ///    "Deferred" note below).
+    /// 3. A reverse-FK: a declared `#[umbral(reverse_fk = "...")]` relation
+    ///    (`T::REVERSE_FK_RELATIONS`, root hop only) or an auto-discovered
+    ///    child table whose FK targets the current table, matched against
+    ///    `relation` by the same conventional name forms the `annotate_related`
+    ///    / `prefetch_related` accessors use (bare table name, struct name in
+    ///    `snake_case` / lowercase, or any of those with a `_set` suffix) —
+    ///    see [`crate::orm::queryset::discover_reverse_relation_by_table`].
+    ///
+    /// Errors loudly — never silently drops a segment — on an unresolved
+    /// segment (names the bad segment and the table it failed to resolve
+    /// against) or an ambiguous auto-discovered reverse-FK (names every
+    /// candidate and points at the disambiguation escape hatches).
+    ///
+    /// Deferred (not in Plan A Task 2's scope — no test exercises it, and
+    /// none of B/C's Task-1-dependent work needs it yet): a deeper-than-root
+    /// M2M segment. The migrate registry's `ModelMeta` carries plain
+    /// columns, not `M2MRelationSpec` metadata, so resolving `a__b__c` where
+    /// `b` is an M2M field on the (registry-only) intermediate table `a`
+    /// would need the registry to carry M2M relation metadata too — tracked
+    /// as a follow-up, not a silent gap: this method errors loudly (`` `b`
+    /// on `<table>` is not a foreign key ``) rather than resolving wrongly.
+    pub fn from_path<T: Model>(path: &str) -> Result<RelPath, sqlx::Error> {
+        let segs: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
+        if segs.is_empty() {
+            return Err(protocol_error("empty relation path"));
+        }
+
+        // A deeper hop (segs[1..]) resolves a forward-FK column against an
+        // intermediate table via the migrate registry (no `T::FIELDS` const
+        // once we're off the typed root); fetch it once, up front, only when
+        // the path actually needs it — a single-segment path stays
+        // registry-free, matching the rest of the Task-1 object-rooted
+        // machinery's "no App needed for one hop" property.
+        let registered = if segs.len() > 1 {
+            Some(crate::migrate::registered_models_opt().ok_or_else(|| {
+                protocol_error(
+                    "no model registry available to resolve a multi-segment relation \
+                     path — build an App (which registers models) before resolving a \
+                     deep `from_path` chain",
+                )
+            })?)
+        } else {
+            None
+        };
+
+        let mut hops: Vec<HopSpec> = Vec::with_capacity(segs.len());
+        let mut current_table: &'static str;
+
+        // Hop 0, off the typed root.
+        if let Some(f) = T::FIELDS.iter().find(|f| f.name == segs[0]) {
+            let tgt = f.fk_target.ok_or_else(|| {
+                protocol_error(&format!(
+                    "`{}` on `{}` is not a relation (no fk_target)",
+                    segs[0],
+                    T::NAME
+                ))
+            })?;
+            hops.push(HopSpec {
+                kind: if f.unique {
+                    HopKind::O2OForward
+                } else {
+                    HopKind::Fk
+                },
+                from_table: T::TABLE,
+                to_table: tgt,
+                fk_column: f.name,
+                fk_on_from: true,
+                required: !f.nullable,
+                junction: None,
+            });
+            current_table = tgt;
+        } else if let Some(rel) = T::M2M_RELATIONS.iter().find(|r| r.field_name == segs[0]) {
+            // Junction convention: `<table>_<field>` / `parent_id` /
+            // `child_id` — the same shape the derive emits (see
+            // `umbral-macros`' `FieldKind::Many2Many` arm) and `orm::m2m`
+            // documents. `M2MRelationSpec` doesn't carry the junction name
+            // (only `field_name`/`target_table`/`target_name`), so it's
+            // rebuilt here by the same convention, not read off a const.
+            let junction_table = intern(&format!("{}_{}", T::TABLE, rel.field_name));
+            hops.push(HopSpec {
+                kind: HopKind::M2M,
+                from_table: T::TABLE,
+                to_table: rel.target_table,
+                fk_column: "",
+                fk_on_from: false,
+                required: false,
+                junction: Some(JunctionSpec {
+                    table: junction_table,
+                    parent_column: "parent_id",
+                    target_column: "child_id",
+                }),
+            });
+            current_table = rel.target_table;
+        } else if let Some(rev) = reverse_fk_lookup::<T>(segs[0])? {
+            hops.push(HopSpec {
+                kind: HopKind::ReverseFk,
+                from_table: T::TABLE,
+                to_table: rev.child_table,
+                fk_column: rev.fk_column,
+                fk_on_from: false,
+                required: false,
+                junction: None,
+            });
+            current_table = rev.child_table;
+        } else {
+            return Err(protocol_error(&format!(
+                "unknown relation `{}` on `{}`",
+                segs[0],
+                T::NAME
+            )));
+        }
+
+        // Deeper hops read the migrate registry for `current_table` —
+        // forward FK (a column with an `fk_target`) OR reverse FK (a child
+        // table whose column points back at `current_table`).
+        if let Some(registered) = &registered {
+            for seg in &segs[1..] {
+                let meta = registered
+                    .iter()
+                    .find(|m| m.table == current_table)
+                    .ok_or_else(|| {
+                        protocol_error(&format!("table `{current_table}` not registered"))
+                    })?;
+                if let Some(col) = meta.fields.iter().find(|c| c.name == *seg) {
+                    let tgt = col.fk_target.as_deref().ok_or_else(|| {
+                        protocol_error(&format!(
+                            "`{seg}` on `{current_table}` is not a foreign key"
+                        ))
+                    })?;
+                    let to_table = intern(tgt);
+                    hops.push(HopSpec {
+                        kind: if col.unique {
+                            HopKind::O2OForward
+                        } else {
+                            HopKind::Fk
+                        },
+                        from_table: current_table,
+                        to_table,
+                        fk_column: intern(seg),
+                        fk_on_from: true,
+                        required: !col.nullable,
+                        junction: None,
+                    });
+                    current_table = to_table;
+                } else if let Some(rev) = reverse_fk_lookup_by_table(current_table, seg)? {
+                    hops.push(HopSpec {
+                        kind: HopKind::ReverseFk,
+                        from_table: current_table,
+                        to_table: rev.child_table,
+                        fk_column: rev.fk_column,
+                        fk_on_from: false,
+                        required: false,
+                        junction: None,
+                    });
+                    current_table = rev.child_table;
+                } else {
+                    return Err(protocol_error(&format!(
+                        "unknown relation `{seg}` on `{current_table}`"
+                    )));
+                }
+            }
+        }
+
+        Ok(RelPath {
+            base: PathBase::TableRoot { table: T::TABLE },
+            hops,
+        })
+    }
+}
+
+/// A resolved reverse-FK hop: the child table a segment named, and the FK
+/// column on it that points back at the parent (current) table.
+struct ReverseHop {
+    child_table: &'static str,
+    fk_column: &'static str,
+}
+
+/// Hop-0 reverse-FK resolution off the typed root `T`: a declared
+/// `#[umbral(reverse_fk = "...")] ReverseSet<Child>` field takes precedence
+/// (matched by field name, exactly like [`Model::REVERSE_FK_RELATIONS`]'s
+/// other consumers); otherwise fall back to the same auto-discovery scan
+/// [`crate::orm::queryset::annotate_related`] uses.
+fn reverse_fk_lookup<T: Model>(seg: &str) -> Result<Option<ReverseHop>, sqlx::Error> {
+    if let Some(spec) = T::REVERSE_FK_RELATIONS.iter().find(|r| r.field_name == seg) {
+        return Ok(Some(ReverseHop {
+            child_table: spec.target_table,
+            fk_column: spec.fk_column,
+        }));
+    }
+    reverse_fk_lookup_by_table(T::TABLE, seg)
+}
+
+/// Reverse-FK resolution for a hop whose parent is an intermediate table
+/// reached mid-path (no `T: Model` type parameter to check a declared
+/// `REVERSE_FK_RELATIONS` const against — only the migrate registry knows
+/// this table). `Ok(None)` when nothing matches (the caller reports the
+/// unresolved-segment error, naming the table); `Err` only for a genuine
+/// ambiguity (two-or-more candidates), naming every candidate.
+fn reverse_fk_lookup_by_table(
+    parent_table: &str,
+    seg: &str,
+) -> Result<Option<ReverseHop>, sqlx::Error> {
+    use crate::orm::queryset::{AutoDiscovery, discover_reverse_relation_by_table};
+    match discover_reverse_relation_by_table(parent_table, seg) {
+        AutoDiscovery::Resolved {
+            child_table,
+            fk_column,
+            ..
+        } => Ok(Some(ReverseHop {
+            child_table: intern(&child_table),
+            fk_column: intern(&fk_column),
+        })),
+        AutoDiscovery::Ambiguous(candidates) => Err(protocol_error(&format!(
+            "umbral::orm::relation::from_path: ambiguous reverse relation `{seg}` on \
+             `{parent_table}` — candidates: [{}]; declare a \
+             `#[umbral(reverse_fk = \"<fk>\")] ReverseSet<Child>` field (or use the \
+             `<child>_via_<field>_set` accessor) to disambiguate",
+            candidates.join(", "),
+        ))),
+        AutoDiscovery::NotFound(_) => Ok(None),
+    }
+}
+
+/// Intern an owned string into a leaked `&'static str`, deduplicating on
+/// content so a repeated name (e.g. every path through the same table)
+/// leaks at most once per unique string for the life of the process.
+///
+/// `HopSpec`'s fields are `&'static str` (the derive's macro-emitted hops
+/// are all string literals or `T::TABLE`/`T::NAME` consts — genuinely
+/// `'static`), but [`RelPath::from_path`]'s deeper hops read table/column
+/// names out of the migrate registry's `ModelMeta`/`Column`, which are
+/// owned `String`s reconstructed from a `OnceLock` snapshot — never
+/// `'static` themselves. Chosen over widening `HopSpec` to
+/// `Cow<'static, str>` (the spec's other option) because that would touch
+/// every existing `HopSpec` literal across the derive (5 call sites) AND
+/// lose `HopSpec`'s `Copy` impl everywhere it's already copied by value
+/// (`relation.rs`, `relation_resolve.rs`, and every hand-built `HopSpec` in
+/// the existing traversal test suite) — churn disproportionate to what
+/// Task 2 needs. A process-wide intern pool is the standard trick for
+/// "occasionally need a `String` to act `'static`" and only touches the
+/// NEW resolver path.
+fn intern(s: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = pool.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = guard.get(s) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    guard.insert(leaked);
+    leaked
 }
 
 /// Anything a relation chain can start from: a loaded object (`&From`) or an
@@ -394,11 +681,18 @@ where
             ));
         }
 
-        let PathBase::SinglePk {
-            table: base_table,
-            pk_column: base_pk_column,
-            pk_value: base_pk_value,
-        } = path.base;
+        let (base_table, base_pk_column, base_pk_value) = match path.base {
+            PathBase::SinglePk {
+                table,
+                pk_column,
+                pk_value,
+            } => (table, pk_column, pk_value),
+            PathBase::TableRoot { .. } => {
+                return Err(protocol_error(
+                    "TableRoot base has no pk to anchor a single-object traversal",
+                ));
+            }
+        };
 
         let to_pk_col = pk_column_name::<T>();
 
@@ -537,7 +831,19 @@ pub fn to_many_hop<From: Model, To: Model>(
 /// junction subquery (`M2M`) or reverse-FK predicate (`ReverseFk`) form. Kept
 /// registry-free so it resolves in a bare `.on(&pool)` test.
 fn single_to_many_queryset<To: Model>(base: &PathBase, hop: &HopSpec) -> QuerySet<To> {
-    let PathBase::SinglePk { pk_value, .. } = base;
+    let pk_value = match base {
+        PathBase::SinglePk { pk_value, .. } => pk_value,
+        PathBase::TableRoot { .. } => {
+            return Manager::<To>::new()
+                .filter(Predicate::new(Expr::cust("1 = 1")))
+                .poisoned(
+                    "single_to_many_queryset requires a SinglePk base (an object-rooted \
+                 relation source); a TableRoot base (from RelPath::from_path) has no \
+                 row to anchor a single-hop to-many query — it resolves through the \
+                 unified walk_joins path instead",
+                );
+        }
+    };
     let predicate: Predicate<To> = match hop.kind {
         HopKind::ReverseFk => Predicate::new(
             Expr::col(Alias::new(hop.fk_column)).eq(SimpleExpr::Value(pk_value.clone())),
@@ -558,4 +864,13 @@ fn single_to_many_queryset<To: Model>(base: &PathBase, hop: &HopSpec) -> QuerySe
         _ => unreachable!("to-one HopKind rejected by the leading assert"),
     };
     Manager::<To>::new().filter(predicate)
+}
+
+/// Render the SQLite SQL a to-one [`RelPath`] resolves to — a probe surface
+/// for tests that build a path directly (via [`RelPath::from_path`] or by
+/// hand) without going through a `Relation<T>` handle. Delegates to the same
+/// builder [`Relation::to_sql`] uses, so it exercises the real `walk_joins`
+/// engine, never a parallel code path.
+pub fn to_sql_for_path<Leaf: Model>(path: &RelPath) -> Result<String, sqlx::Error> {
+    crate::orm::queryset::relation_resolve::to_one_sql::<Leaf>(path, false)
 }

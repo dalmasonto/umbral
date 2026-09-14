@@ -142,6 +142,22 @@ async fn forward_fk_relation_into_future_awaits() {
     assert_eq!(author.name, "grace");
 }
 
+/// Phase 1 (heavy-relations epic), Task 1: `PathBase::TableRoot` constructs
+/// and holds its table, and `NullJoinPolicy` is a distinct, comparable enum —
+/// the two pieces of static shape the unified `walk_joins` engine needs.
+#[test]
+fn table_root_base_constructs() {
+    use umbral::orm::relation::{NullJoinPolicy, PathBase};
+    let b = PathBase::TableRoot { table: "auth_user" };
+    match b {
+        PathBase::TableRoot { table } => assert_eq!(table, "auth_user"),
+        _ => panic!("wrong variant"),
+    }
+    // exhaustiveness / Copy sanity for the policy enum
+    let p = NullJoinPolicy::LeftForNullable;
+    assert_ne!(p, NullJoinPolicy::Inner);
+}
+
 /// `get_opt()` returns `Some` when the target exists.
 #[tokio::test]
 async fn forward_fk_get_opt_some() {
