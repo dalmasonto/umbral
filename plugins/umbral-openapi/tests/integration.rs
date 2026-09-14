@@ -38,7 +38,12 @@ struct Secret {
 
 // Review #4: FK + M2M to a String-slug-PK target must render as `string`
 // in the OpenAPI schema, not `integer/int64`.
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+//
+// `Clone` is required: `OaCat` is `OaArticle.cat`'s FK target, and the
+// heavy-relations epic's cache-aware to-one accessor (`article.cat()`)
+// clones the cached row on a `select_related` hit — every `#[derive(Model)]`
+// struct is expected to derive `Clone` for exactly this reason.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "oa_cat")]
 struct OaCat {
     #[umbral(primary_key)]

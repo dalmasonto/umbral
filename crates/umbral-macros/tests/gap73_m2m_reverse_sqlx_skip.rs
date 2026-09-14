@@ -16,14 +16,20 @@
 
 use umbral::orm::{ForeignKey, M2M, Model, ReverseSet};
 
-#[derive(Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
 pub struct Tag {
     id: i64,
     name: String,
 }
 
 // M2M WITH `#[sqlx(skip)]` — the correct form. Compiles.
-#[derive(Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+//
+// `Clone` is required here (not just decorative): `Post` is `Comment.post`'s
+// FK target, and the heavy-relations epic's cache-aware to-one accessor
+// (`comment.post()`) clones the cached row on a `select_related` hit — every
+// `#[derive(Model)]` struct is expected to derive `Clone` for exactly this
+// reason (see `ForeignKey`'s doc comment).
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
 pub struct Post {
     id: i64,
     title: String,
@@ -38,7 +44,7 @@ pub struct Post {
 }
 
 // ReverseSet WITH `#[sqlx(skip)]` — the correct form. Compiles.
-#[derive(Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
 pub struct Comment {
     id: i64,
     body: String,

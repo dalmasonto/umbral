@@ -3027,8 +3027,22 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // Each generated method is a thin `HopSpec` literal + hop-builder call;
     // the resolver (Tasks 1/3/4) owns every byte of SQL, per the ORM rules.
     let relations_trait_name = format_ident!("{}Relations", struct_name);
-    // (method ident, return type, is_to_one, HopSpec literal tokens).
-    let mut rel_accessors: Vec<(syn::Ident, TokenStream2, bool, TokenStream2)> = Vec::new();
+    // (method ident, return type, is_to_one, HopSpec literal tokens, cache-read
+    // expression). The cache-read expression, when present, reads the
+    // backing field's `__resolved()` — the codegen-facing cache reader added
+    // alongside `ForeignKey`/`OneToOne` (heavy-relations epic, Plan C Task 1)
+    // — as an `Option<&Target>` expression assuming `self` is a receiver that
+    // actually HAS this field (`M` / `&M`, never `Relation<M>` / `QuerySet<M>`,
+    // which carry no model fields — see `make_relations_impl` below). `None`
+    // for a to-many hop (M2M/reverse-FK): no local cache slot to check yet
+    // (Task 2b).
+    let mut rel_accessors: Vec<(
+        syn::Ident,
+        TokenStream2,
+        bool,
+        TokenStream2,
+        Option<TokenStream2>,
+    )> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
@@ -3056,7 +3070,8 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                         junction: ::core::option::Option::None,
                     }
                 };
-                rel_accessors.push((field_name.clone(), ret, true, hop));
+                let cache_read = quote!(self.#field_name.__resolved());
+                rel_accessors.push((field_name.clone(), ret, true, hop, Some(cache_read)));
             }
             FieldKind::NullableForeignKey(inner_ty) => {
                 // Nullable forward FK — same hop, `required: false` so the
@@ -3074,7 +3089,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                         junction: ::core::option::Option::None,
                     }
                 };
-                rel_accessors.push((field_name.clone(), ret, true, hop));
+                // The field is `Option<ForeignKey<Target>>` — one extra
+                // `.as_ref().and_then(..)` hop to reach `__resolved()`.
+                let cache_read =
+                    quote!(self.#field_name.as_ref().and_then(|__fk| __fk.__resolved()));
+                rel_accessors.push((field_name.clone(), ret, true, hop, Some(cache_read)));
             }
             FieldKind::Many2Many(inner_ty) => {
                 // Forward M2M through the auto-generated junction table
@@ -3101,7 +3120,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                         ),
                     }
                 };
-                rel_accessors.push((field_name.clone(), ret, false, hop));
+                rel_accessors.push((field_name.clone(), ret, false, hop, None));
             }
             // A parent-side reverse-O2O back-link (`#[sqlx(skip)] OneToOne<T>`)
             // is intentionally NOT emitted here: the chainable `parent.child()`
@@ -3139,28 +3158,50 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     //   QuerySet<M> → `&self` is `&QuerySet<M>` → pass `self`
     // `From` is inferred from the source's unique `RelationSource<M>` impl;
     // `To` from the method's return type.
-    let make_relations_impl = |target_ty: TokenStream2, src: &TokenStream2| -> TokenStream2 {
-        let methods: Vec<TokenStream2> = rel_accessors
-            .iter()
-            .map(|(name, ret, is_to_one, hop)| {
-                let call = if *is_to_one {
-                    quote!(::umbral::orm::relation::to_one_hop)
-                } else {
-                    quote!(::umbral::orm::relation::to_many_hop)
-                };
-                quote! {
-                    fn #name(&self) -> #ret {
-                        #call(#src, #hop)
+    //
+    // `self_has_fields` gates the cache-aware short-circuit (heavy-relations
+    // epic, Plan C Task 1): only the `M` / `&M` receivers actually HAVE
+    // `self.#name` (the model's own FK/O2O field) to read a cache off of.
+    // `Relation<M>` / `QuerySet<M>` carry a path (and, for `Relation<M>`, its
+    // OWN resolved value — not this field's), never the model's fields, so
+    // those two impls keep calling the hop builder unconditionally, exactly
+    // like the reverse-O2O parent-side accessor (which has no local field at
+    // all).
+    let make_relations_impl =
+        |target_ty: TokenStream2, src: &TokenStream2, self_has_fields: bool| -> TokenStream2 {
+            let methods: Vec<TokenStream2> = rel_accessors
+                .iter()
+                .map(|(name, ret, is_to_one, hop, cache_read)| {
+                    let call = if *is_to_one {
+                        quote!(::umbral::orm::relation::to_one_hop)
+                    } else {
+                        quote!(::umbral::orm::relation::to_many_hop)
+                    };
+                    match (self_has_fields, cache_read) {
+                        (true, Some(cache_read)) => quote! {
+                            fn #name(&self) -> #ret {
+                                if let ::core::option::Option::Some(__c) = #cache_read {
+                                    return ::umbral::orm::Relation::from_resolved(
+                                        ::core::clone::Clone::clone(__c),
+                                    );
+                                }
+                                #call(#src, #hop)
+                            }
+                        },
+                        _ => quote! {
+                            fn #name(&self) -> #ret {
+                                #call(#src, #hop)
+                            }
+                        },
                     }
+                })
+                .collect();
+            quote! {
+                impl #relations_trait_name for #target_ty {
+                    #(#methods)*
                 }
-            })
-            .collect();
-        quote! {
-            impl #relations_trait_name for #target_ty {
-                #(#methods)*
             }
-        }
-    };
+        };
     let relations_impls = if rel_accessors.is_empty() {
         // No forward relations — still emit the (empty) trait + impls so the
         // surface is uniform across every model and Task 6's prelude glob is
@@ -3176,14 +3217,20 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     } else {
         let rel_trait_methods: Vec<TokenStream2> = rel_accessors
             .iter()
-            .map(|(name, ret, _, _)| quote! { fn #name(&self) -> #ret; })
+            .map(|(name, ret, _, _, _)| quote! { fn #name(&self) -> #ret; })
             .collect();
-        let impl_owned = make_relations_impl(quote!(#struct_name), &quote!(self));
-        let impl_ref = make_relations_impl(quote!(&#struct_name), &quote!(*self));
-        let impl_relation =
-            make_relations_impl(quote!(::umbral::orm::Relation<#struct_name>), &quote!(self));
-        let impl_queryset =
-            make_relations_impl(quote!(::umbral::orm::QuerySet<#struct_name>), &quote!(self));
+        let impl_owned = make_relations_impl(quote!(#struct_name), &quote!(self), true);
+        let impl_ref = make_relations_impl(quote!(&#struct_name), &quote!(*self), true);
+        let impl_relation = make_relations_impl(
+            quote!(::umbral::orm::Relation<#struct_name>),
+            &quote!(self),
+            false,
+        );
+        let impl_queryset = make_relations_impl(
+            quote!(::umbral::orm::QuerySet<#struct_name>),
+            &quote!(self),
+            false,
+        );
         quote! {
             #relations_trait_doc
             pub trait #relations_trait_name {

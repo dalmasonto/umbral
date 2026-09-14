@@ -30,7 +30,11 @@ use umbral_admin::{AdminModel, AdminPlugin, InlineKind, InlineModel};
 use umbral_auth::{AuthPlugin, AuthUser, create_user};
 use umbral_sessions::SessionsPlugin;
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+// `Clone` is required: `Post` is `Comment.post`'s FK target, and the
+// heavy-relations epic's cache-aware to-one accessor (`comment.post()`)
+// clones the cached row on a `select_related` hit — every `#[derive(Model)]`
+// struct is expected to derive `Clone` for exactly this reason.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Post {
     id: i64,
     #[umbral(string)]

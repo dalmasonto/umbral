@@ -216,6 +216,19 @@ impl<T: Model> ForeignKey<T> {
         self.resolved.as_deref()
     }
 
+    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
+    /// does. `#[derive(Model)]`'s generated to-one accessor (`post.author()`)
+    /// calls THIS, not [`Self::resolved`]: the accessor expands in the
+    /// CONSUMER crate, and a later task (heavy-relations Plan C, Task 4)
+    /// demotes the ergonomic `resolved()` to `pub(crate)` once it's no longer
+    /// the public read path. `__resolved` stays `pub` (kept out of docs and
+    /// autocomplete via `#[doc(hidden)]` only) so the generated call site
+    /// keeps compiling across that removal.
+    #[doc(hidden)]
+    pub fn __resolved(&self) -> Option<&T> {
+        self.resolved.as_deref()
+    }
+
     /// Attach an already-fetched model row to this FK.
     ///
     /// Called internally by the `select_related` machinery in `QuerySet`

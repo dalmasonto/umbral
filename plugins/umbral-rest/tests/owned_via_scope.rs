@@ -25,7 +25,11 @@ use umbral::auth::{FnAuthentication, Identity};
 use umbral::orm::ForeignKey;
 use umbral_rest::{AllowAny, ResourceConfig, RestPlugin};
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+// `Clone` is required: `Developer` is `Gig.developer`'s FK target, and the
+// heavy-relations epic's cache-aware to-one accessor clones the cached row
+// on a `select_related` hit — every `#[derive(Model)]` struct is expected to
+// derive `Clone` for exactly this reason.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Developer {
     id: i64,
     #[umbral(string)]

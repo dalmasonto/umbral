@@ -553,10 +553,44 @@ fn pk_column_name<M: Model>() -> &'static str {
 pub struct Relation<T: Model> {
     path: RelPath,
     explicit_pool: Option<DbPool>,
+    /// A pre-hydrated value — populated when this handle was built from a
+    /// `select_related`-loaded FK/O2O cache slot via [`Self::from_resolved`].
+    /// `get()`/`get_opt()` serve this before touching the database, which is
+    /// what makes the derive-generated accessor zero-query after
+    /// `select_related`. `None` for every path built by [`to_one_hop`]
+    /// (traversal from a bare PK — the pre-Task-1 behaviour).
+    resolved: Option<T>,
     _t: PhantomData<T>,
 }
 
 impl<T: Model> Relation<T> {
+    /// Build a [`Relation<T>`] that already carries its resolved value — the
+    /// derive-generated to-one accessor's cache-hit path (`post.author()`
+    /// after `select_related("author")` populated the FK's cache).
+    ///
+    /// The path still gets a proper [`PathBase::SinglePk`] built from the
+    /// object's own primary key, so a FURTHER hop off this handle (e.g.
+    /// `post.author().company()`, once that accessor also composes off a
+    /// `Relation<T>`) still has a real base to chain from — it just never
+    /// gets used because [`Self::get_opt`] short-circuits on `resolved`
+    /// first.
+    pub fn from_resolved(obj: T) -> Self {
+        let path = RelPath {
+            base: PathBase::SinglePk {
+                table: T::TABLE,
+                pk_column: pk_column_name::<T>(),
+                pk_value: obj.primary_key().into(),
+            },
+            hops: Vec::new(),
+        };
+        Relation {
+            path,
+            explicit_pool: None,
+            resolved: Some(obj),
+            _t: PhantomData,
+        }
+    }
+
     /// Pin this relation's terminal query to an explicit SQLite pool.
     ///
     /// Wins over the ambient default — used by tests that drive the ORM
@@ -631,7 +665,15 @@ where
     /// `None`. A single forward-FK / reverse-O2O hop keeps the Task-1 subquery
     /// path, which needs no model registry and so works in a bare `.on(&pool)`
     /// test without a booted `App`.
-    pub async fn get_opt(self) -> Result<Option<T>, sqlx::Error> {
+    ///
+    /// When this handle was built via [`Self::from_resolved`] (the
+    /// `select_related`-cache hit path), the resolved value is returned
+    /// directly — BEFORE any of the above, and with zero database round
+    /// trips.
+    pub async fn get_opt(mut self) -> Result<Option<T>, sqlx::Error> {
+        if let Some(obj) = self.resolved.take() {
+            return Ok(Some(obj));
+        }
         if self.path.hops.len() > 1 {
             let pool = self.resolve_pool()?;
             return crate::orm::queryset::relation_resolve::resolve_to_one_path::<T>(
@@ -761,6 +803,7 @@ pub fn to_one_hop<From: Model, To: Model>(
     Relation {
         path: src.into_rel_path().push(hop),
         explicit_pool: None,
+        resolved: None,
         _t: PhantomData,
     }
 }

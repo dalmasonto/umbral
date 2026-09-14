@@ -18,13 +18,18 @@ use tower::ServiceExt;
 use umbral::orm::ForeignKey;
 use umbral_rest::{AllowAny, ResourceConfig, RestPlugin};
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+// `Clone` is required on `Order` and `OrderItem`: each is an FK target
+// (`OrderItem.order`, `Component.item`), and the heavy-relations epic's
+// cache-aware to-one accessor clones the cached row on a `select_related`
+// hit — every `#[derive(Model)]` struct is expected to derive `Clone` for
+// exactly this reason.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Order {
     id: i64,
     customer: String,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct OrderItem {
     id: i64,
     #[umbral(on_delete = "cascade")]

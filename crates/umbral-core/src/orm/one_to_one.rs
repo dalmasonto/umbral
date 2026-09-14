@@ -178,6 +178,19 @@ impl<C: Model> OneToOne<C> {
         self.resolved.as_deref()
     }
 
+    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
+    /// does. `#[derive(Model)]`'s generated to-one accessor (the O2O
+    /// child-side `developer.user()`) calls THIS, not [`Self::resolved`]:
+    /// the accessor expands in the CONSUMER crate, and a later task
+    /// (heavy-relations Plan C, Task 4) demotes the ergonomic `resolved()`
+    /// to `pub(crate)` once it's no longer the public read path. `__resolved`
+    /// stays `pub` (kept out of docs/autocomplete via `#[doc(hidden)]` only)
+    /// so the generated call site keeps compiling across that removal.
+    #[doc(hidden)]
+    pub fn __resolved(&self) -> Option<&C> {
+        self.resolved.as_deref()
+    }
+
     /// Returns `true` if `.prefetch_related(...)` populated this
     /// slot (regardless of whether a matching child was found).
     /// `false` means the slot was never loaded and `resolved()`

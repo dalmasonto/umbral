@@ -32,7 +32,12 @@ struct Post {
 // Review #4: a FK to a String-slug-PK target. `?cat=` / `?cat__in=` filters
 // must coerce against the target PK type (text), not reject the slug as
 // "not an integer".
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+//
+// `Clone` is required: `Cat` is `Doc.cat`'s FK target, and the
+// heavy-relations epic's cache-aware to-one accessor clones the cached row
+// on a `select_related` hit — every `#[derive(Model)]` struct is expected to
+// derive `Clone` for exactly this reason.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "flt_cat")]
 struct Cat {
     #[umbral(primary_key)]
