@@ -390,6 +390,84 @@ fn validate_choices(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteErr
     out
 }
 
+/// Reject numeric body values that fall outside a column's declared
+/// `min` / `max` bounds. Mirrors [`validate_choices`]: a *collecting*
+/// pass that walks every column and pushes one
+/// `WriteError::Validator` per out-of-range field, so a payload with
+/// several out-of-bounds numbers surfaces all of them in one response
+/// (TaskFlow #436) instead of stopping at the first.
+///
+/// Only JSON numbers are checked (`value.as_f64()`); strings, nulls,
+/// and absent keys are skipped — a string that should be numeric is
+/// the coercion step's problem, and null / absent is the
+/// required-field check's. A single value can't be both below `min`
+/// and above `max`, so at most one bound error per field is produced;
+/// the guarantee that matters is that EVERY out-of-range field
+/// surfaces, not that both bounds fire for one field.
+pub fn validate_numeric_bounds(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
+    let mut out = Vec::new();
+    for col in &meta.fields {
+        if col.min.is_none() && col.max.is_none() {
+            continue;
+        }
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        let Some(n) = value.as_f64() else {
+            continue;
+        };
+        if let Some(min) = col.min {
+            if n < min as f64 {
+                out.push(WriteError::Validator {
+                    field: col.name.clone(),
+                    message: format!("must be >= {min} (got {n})."),
+                });
+                continue;
+            }
+        }
+        if let Some(max) = col.max {
+            if n > max as f64 {
+                out.push(WriteError::Validator {
+                    field: col.name.clone(),
+                    message: format!("must be <= {max} (got {n})."),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Reject string body values that fail a column's declared
+/// `text_format` marker (`email` / `url` / `slug`). Collecting pass,
+/// same contract as [`validate_numeric_bounds`]: one
+/// `WriteError::Validator` per malformed field so multiple bad
+/// formats surface together (TaskFlow #436).
+///
+/// Only string values are checked; a non-string where a formatted
+/// string belongs falls through to the coercion step. Blank strings
+/// are left to the required-field check.
+pub fn validate_text_format(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
+    let mut out = Vec::new();
+    for col in &meta.fields {
+        let Some(fmt) = col.text_format.as_deref() else {
+            continue;
+        };
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        let Some(s) = value.as_str() else {
+            continue;
+        };
+        if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
+            out.push(WriteError::Validator {
+                field: col.name.clone(),
+                message: e.to_string(),
+            });
+        }
+    }
+    out
+}
+
 /// Validate every M2M relation on the parent.
 ///
 /// `Post.tags: M2M<Tag>` doesn't live on `model.fields` (it has

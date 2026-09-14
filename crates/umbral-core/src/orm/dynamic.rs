@@ -2106,7 +2106,6 @@ impl<'a> DynQuerySet<'a> {
         body: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
         self.ensure_writable()?;
-        use crate::orm::write::WriteError;
 
         // Phase -1 — normalise the body (strip `noform`, derive
         // `slug_from`). Shared with the tx path.
@@ -2120,26 +2119,38 @@ impl<'a> DynQuerySet<'a> {
                 None => body,
             };
 
-        // Phase 0 — pre-DB validation against the ambient pool. Skipped for a
-        // `.trusted()` bulk copy from a consistent source (the FK-existence
-        // check would reject a cyclic / not-yet-loaded reference).
-        if !self.trusted {
-            let validation_errors =
-                crate::orm::validation::validate_on_create(self.meta, body).await;
-            if !validation_errors.is_empty() {
-                return Err(WriteError::Multiple {
-                    errors: validation_errors,
-                });
-            }
-        }
+        // Phase 0 — structural pre-DB validation against the ambient pool.
+        // Skipped for a `.trusted()` bulk copy from a consistent source (the
+        // FK-existence check would reject a cyclic / not-yet-loaded reference).
+        // TaskFlow #436: run it WITHOUT early-returning so it can no longer
+        // mask the value-level (Phase-1) errors below.
+        let structural = if self.trusted {
+            Vec::new()
+        } else {
+            crate::orm::validation::validate_on_create(self.meta, body).await
+        };
+        // Value-level validators (numeric bounds, text-format). Collecting
+        // passes so every out-of-range / malformed field surfaces at once;
+        // they run even under `.trusted()` (same as the old in-loop checks).
+        let mut value_errors = crate::orm::validation::validate_numeric_bounds(self.meta, body);
+        value_errors.extend(crate::orm::validation::validate_text_format(
+            self.meta, body,
+        ));
 
-        // Phase 1 — build the INSERT + read back the PK shape.
-        // Shared with the tx path.
+        // Phase 1 — build the INSERT + read back the PK shape (shared with
+        // the tx path). Coercion / cleaner / seal failures accumulate rather
+        // than abort; fields already flagged above are skipped.
+        let skip = errored_field_names(&structural, &value_errors);
+        let (plan, coercion_errors) = build_insert_plan(self.meta, body, self.presealed, &skip)?;
+        value_errors.extend(coercion_errors);
+        if let Some(err) = merge_write_errors(structural, value_errors) {
+            return Err(err);
+        }
         let InsertPlan {
             mut q,
             pk_name,
             pk_ty,
-        } = build_insert_plan(self.meta, body, self.presealed)?;
+        } = plan;
 
         // gaps #77: fire `pre_save:<table>` for the dynamic-write
         // path so REST endpoints and admin form submits surface in
@@ -2308,7 +2319,6 @@ impl<'a> DynQuerySet<'a> {
         tx: &mut crate::db::Transaction,
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
         self.ensure_writable()?;
-        use crate::orm::write::WriteError;
 
         // Phase -1 — normalise (shared with the pool path).
         let body_owned: serde_json::Map<String, serde_json::Value>;
@@ -2321,27 +2331,36 @@ impl<'a> DynQuerySet<'a> {
                 None => body,
             };
 
-        // Phase 0 — validation reads through the transaction so an FK
-        // at an uncommitted parent resolves. Skipped under `.trusted()` (the
+        // Phase 0 — structural validation reads through the transaction so an
+        // FK at an uncommitted parent resolves. Skipped under `.trusted()` (the
         // transfer engine copying a consistent source): the FK-existence check
         // would reject a cyclic / not-yet-loaded reference even with DB-level
         // deferral, since it's an app-level SELECT, not the constraint.
-        if !self.trusted {
-            let validation_errors =
-                crate::orm::validation::validate_on_create_in_tx(self.meta, body, tx).await;
-            if !validation_errors.is_empty() {
-                return Err(WriteError::Multiple {
-                    errors: validation_errors,
-                });
-            }
-        }
+        // TaskFlow #436: no early return, so Phase 0 can't mask Phase 1.
+        let structural = if self.trusted {
+            Vec::new()
+        } else {
+            crate::orm::validation::validate_on_create_in_tx(self.meta, body, tx).await
+        };
+        // Value-level validators (numeric bounds, text-format), collecting.
+        let mut value_errors = crate::orm::validation::validate_numeric_bounds(self.meta, body);
+        value_errors.extend(crate::orm::validation::validate_text_format(
+            self.meta, body,
+        ));
 
-        // Phase 1 — build the INSERT (shared with the pool path).
+        // Phase 1 — build the INSERT (shared with the pool path). Coercion
+        // errors accumulate; already-flagged fields are skipped.
+        let skip = errored_field_names(&structural, &value_errors);
+        let (plan, coercion_errors) = build_insert_plan(self.meta, body, self.presealed, &skip)?;
+        value_errors.extend(coercion_errors);
+        if let Some(err) = merge_write_errors(structural, value_errors) {
+            return Err(err);
+        }
         let InsertPlan {
             mut q,
             pk_name,
             pk_ty,
-        } = build_insert_plan(self.meta, body, self.presealed)?;
+        } = plan;
 
         match tx.backend_name() {
             "sqlite" => {
@@ -2434,7 +2453,6 @@ impl<'a> DynQuerySet<'a> {
         tx: &mut crate::db::Transaction,
     ) -> Result<u64, crate::orm::write::WriteError> {
         self.ensure_writable()?;
-        use crate::orm::write::WriteError;
 
         // Phase -1 — strip `noform` + unauthorized-`privileged` columns and
         // derive `slug_from` (mirrors the pool path).
@@ -2448,16 +2466,17 @@ impl<'a> DynQuerySet<'a> {
                 None => body,
             };
 
-        // Phase 0 — pre-DB validation, same shape as `update_json`. FK
-        // existence reads through the open tx so an FK at an uncommitted
-        // sibling row in the same batch resolves.
-        let validation_errors =
+        // Phase 0 — structural pre-DB validation, same shape as `update_json`.
+        // FK existence reads through the open tx so an FK at an uncommitted
+        // sibling row in the same batch resolves. TaskFlow #436: collected,
+        // not early-returned, so it can no longer mask the value-level errors.
+        let structural =
             crate::orm::validation::validate_on_update_in_tx(self.meta, body, tx).await;
-        if !validation_errors.is_empty() {
-            return Err(WriteError::Multiple {
-                errors: validation_errors,
-            });
-        }
+        let mut value_errors = crate::orm::validation::validate_numeric_bounds(self.meta, body);
+        value_errors.extend(crate::orm::validation::validate_text_format(
+            self.meta, body,
+        ));
+        let skip = errored_field_names(&structural, &value_errors);
 
         let mut q = Query::update();
         q.table(crate::db::router::schema_qualified_table(&self.meta.table));
@@ -2486,14 +2505,11 @@ impl<'a> DynQuerySet<'a> {
                 }
                 continue;
             };
-            validate_numeric_bounds(col, json)?;
-            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
-                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                    return Err(WriteError::Validator {
-                        field: col.name.clone(),
-                        message: e.to_string(),
-                    });
-                }
+            // TaskFlow #436: numeric / text-format checks now run as collecting
+            // passes above; skip a field already flagged (structural, numeric or
+            // format) so it isn't reported twice.
+            if skip.contains(&col.name) {
+                continue;
             }
             // gaps3 #34: apply declared trim/lowercase to the incoming string
             // before masking / binding, so admin-form + REST writes store the
@@ -2501,21 +2517,45 @@ impl<'a> DynQuerySet<'a> {
             let normalized_json = normalize_json_for_col(col, json);
             let json = normalized_json.as_ref().unwrap_or(json);
             // features #83: app-defined clean/validate hooks. Before masking, so a
-            // hook sees the plaintext it is meant to inspect.
-            let cleaned_json = crate::orm::cleaners::apply(&self.meta.table, &col.name, json)?;
+            // hook sees the plaintext it is meant to inspect. Coercion / cleaner /
+            // seal failures accumulate rather than abort (TaskFlow #436).
+            let cleaned_json = match crate::orm::cleaners::apply(&self.meta.table, &col.name, json)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
             let json = cleaned_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
-            let sealed = crate::orm::write::seal_masked_json(col, json)?;
-            let sea_value = crate::orm::write::json_to_sea_value(
+            let sealed = match crate::orm::write::seal_masked_json(col, json) {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
+            let sea_value = match crate::orm::write::json_to_sea_value(
                 col.ty,
                 sealed.as_ref().unwrap_or(json),
                 col.nullable,
                 &col.name,
                 fk_target_pk_sql_type(col),
-            )?;
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
             q.value(Alias::new(&col.name), sea_value);
             any = true;
+        }
+        // TaskFlow #436: return every field error together, before any SQL runs.
+        if let Some(err) = merge_write_errors(structural, value_errors) {
+            return Err(err);
         }
         let touches_m2m = self
             .meta
@@ -2657,7 +2697,6 @@ impl<'a> DynQuerySet<'a> {
         body: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
         self.ensure_writable()?;
-        use crate::orm::write::WriteError;
 
         // Phase -1 — strip `noform` + unauthorized-`privileged` columns
         // (server-managed fields the client must not overwrite).
@@ -2688,12 +2727,14 @@ impl<'a> DynQuerySet<'a> {
             Vec::new()
         };
 
-        let validation_errors = crate::orm::validation::validate_on_update(self.meta, body).await;
-        if !validation_errors.is_empty() {
-            return Err(WriteError::Multiple {
-                errors: validation_errors,
-            });
-        }
+        // Phase 0 — structural validation, collected (not early-returned) so it
+        // can no longer mask the value-level errors below (TaskFlow #436).
+        let structural = crate::orm::validation::validate_on_update(self.meta, body).await;
+        let mut value_errors = crate::orm::validation::validate_numeric_bounds(self.meta, body);
+        value_errors.extend(crate::orm::validation::validate_text_format(
+            self.meta, body,
+        ));
+        let skip = errored_field_names(&structural, &value_errors);
 
         let mut q = Query::update();
         q.table(crate::db::router::schema_qualified_table(&self.meta.table));
@@ -2726,16 +2767,11 @@ impl<'a> DynQuerySet<'a> {
                 }
                 continue;
             };
-            validate_numeric_bounds(col, json)?;
-            // BUG-11/12/13: same wrapper-type pre-validation as
-            // insert_json.
-            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
-                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                    return Err(WriteError::Validator {
-                        field: col.name.clone(),
-                        message: e.to_string(),
-                    });
-                }
+            // TaskFlow #436: numeric bounds (BUG-11/12/13 text-format too) now run
+            // as collecting passes above; skip a field already flagged so it isn't
+            // reported twice.
+            if skip.contains(&col.name) {
+                continue;
             }
             // gaps3 #34: apply declared trim/lowercase to the incoming string
             // before masking / binding, so admin-form + REST writes store the
@@ -2743,21 +2779,45 @@ impl<'a> DynQuerySet<'a> {
             let normalized_json = normalize_json_for_col(col, json);
             let json = normalized_json.as_ref().unwrap_or(json);
             // features #83: app-defined clean/validate hooks. Before masking, so a
-            // hook sees the plaintext it is meant to inspect.
-            let cleaned_json = crate::orm::cleaners::apply(&self.meta.table, &col.name, json)?;
+            // hook sees the plaintext it is meant to inspect. Coercion / cleaner /
+            // seal failures accumulate rather than abort (TaskFlow #436).
+            let cleaned_json = match crate::orm::cleaners::apply(&self.meta.table, &col.name, json)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
             let json = cleaned_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
-            let sealed = crate::orm::write::seal_masked_json(col, json)?;
-            let sea_value = crate::orm::write::json_to_sea_value(
+            let sealed = match crate::orm::write::seal_masked_json(col, json) {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
+            let sea_value = match crate::orm::write::json_to_sea_value(
                 col.ty,
                 sealed.as_ref().unwrap_or(json),
                 col.nullable,
                 &col.name,
                 fk_target_pk_sql_type(col),
-            )?;
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    value_errors.push(e);
+                    continue;
+                }
+            };
             q.value(Alias::new(&col.name), sea_value);
             any = true;
+        }
+        // TaskFlow #436: return every field error together, before any SQL runs.
+        if let Some(err) = merge_write_errors(structural, value_errors) {
+            return Err(err);
         }
         // Detect whether the body wants to touch any M2M
         // relations. If so, we'll write junctions *after* the
@@ -3731,30 +3791,50 @@ fn classify_or_sqlx(
     crate::orm::write::WriteError::Sqlx(e)
 }
 
-fn validate_numeric_bounds(
-    col: &Column,
-    json: &serde_json::Value,
-) -> Result<(), crate::orm::write::WriteError> {
-    let Some(n) = json.as_f64() else {
-        return Ok(());
-    };
-    if let Some(min) = col.min {
-        if n < min as f64 {
-            return Err(crate::orm::write::WriteError::Validator {
-                field: col.name.clone(),
-                message: format!("must be >= {min} (got {n})."),
-            });
-        }
+/// TaskFlow #436: the set of field names that already carry a
+/// validation error, so the coercion loop can skip them instead of
+/// reporting the same field twice. Flattens through `field_errors()`,
+/// which recurses into `Multiple` and keys every field-bound variant.
+fn errored_field_names(
+    structural: &[crate::orm::write::WriteError],
+    value_errors: &[crate::orm::write::WriteError],
+) -> std::collections::HashSet<String> {
+    structural
+        .iter()
+        .chain(value_errors.iter())
+        .flat_map(|e| e.field_errors().into_keys())
+        .collect()
+}
+
+/// TaskFlow #436: fold the structural (Phase-0: required / blank /
+/// choices / FK / M2M) and value (Phase-1: numeric / format /
+/// coercion) validation errors into one result.
+///
+/// - Empty everywhere → `None`; the write proceeds.
+/// - A single value error, no structural error → returned BARE. This
+///   preserves the long-standing single-error shape that callers and
+///   tests match on directly (a lone numeric-bound `Validator`, a lone
+///   `AmbiguousLocalTime` / `TypeMismatch` coercion error).
+/// - Anything else (any structural error, or more than one error
+///   total) → `WriteError::Multiple`, so every offending field shows
+///   up in one response.
+fn merge_write_errors(
+    structural: Vec<crate::orm::write::WriteError>,
+    value_errors: Vec<crate::orm::write::WriteError>,
+) -> Option<crate::orm::write::WriteError> {
+    use crate::orm::write::WriteError;
+    if structural.is_empty() {
+        return match value_errors.len() {
+            0 => None,
+            1 => Some(value_errors.into_iter().next().expect("len == 1")),
+            _ => Some(WriteError::Multiple {
+                errors: value_errors,
+            }),
+        };
     }
-    if let Some(max) = col.max {
-        if n > max as f64 {
-            return Err(crate::orm::write::WriteError::Validator {
-                field: col.name.clone(),
-                message: format!("must be <= {max} (got {n})."),
-            });
-        }
-    }
-    Ok(())
+    let mut all = structural;
+    all.extend(value_errors);
+    Some(WriteError::Multiple { errors: all })
 }
 
 /// Convert a JSON PK-shaped value (number or string) into a
@@ -4410,23 +4490,41 @@ struct InsertPlan {
     pk_ty: SqlType,
 }
 
-/// Phase 1 of the dynamic insert: validate min/max + text-format
-/// wrappers per column, coerce each JSON value to its `SeaValue`, and
-/// assemble the `Query::insert()`. Auto-increment integer PKs and
-/// absent-with-default columns are omitted so the backend fills them;
-/// `auto_now` / `auto_now_add` columns the body omitted are filled
-/// with `Utc::now()`. Shared by `insert_json` and `insert_json_in_tx`
-/// so column handling is identical on both paths; the methods differ
-/// only in which executor runs the statement.
+/// Phase 1 of the dynamic insert: coerce each JSON value to its
+/// `SeaValue` (applying trim/lowercase, cleaner hooks and masked-field
+/// sealing along the way) and assemble the `Query::insert()`.
+/// Auto-increment integer PKs and absent-with-default columns are
+/// omitted so the backend fills them; `auto_now` / `auto_now_add`
+/// columns the body omitted are filled with `Utc::now()`. Shared by
+/// `insert_json` and `insert_json_in_tx` so column handling is
+/// identical on both paths; the methods differ only in which executor
+/// runs the statement.
+///
+/// The pure-value validators (numeric min/max, text-format email/url/
+/// slug) moved OUT to the collecting passes in `orm::validation`
+/// (`validate_numeric_bounds` / `validate_text_format`) so a payload
+/// with several bad fields reports them all at once (TaskFlow #436).
+///
+/// `skip` names the columns that already picked up a validation error
+/// upstream (structural, numeric or format); their coercion is skipped
+/// so one field is never reported twice. Per-column coercion / cleaner
+/// / seal failures are ACCUMULATED into the returned `Vec` (that
+/// column is left out of the statement) rather than aborting on the
+/// first — the caller merges them with the upstream errors and returns
+/// them together, never executing SQL when the vec is non-empty. The
+/// outer `Err` is reserved for the structural "model has no PK"
+/// invariant.
 fn build_insert_plan(
     meta: &crate::migrate::ModelMeta,
     body: &serde_json::Map<String, serde_json::Value>,
     presealed: bool,
-) -> Result<InsertPlan, crate::orm::write::WriteError> {
+    skip: &std::collections::HashSet<String>,
+) -> Result<(InsertPlan, Vec<crate::orm::write::WriteError>), crate::orm::write::WriteError> {
     use crate::orm::write::{WriteError, is_default_pk};
 
     let mut cols: Vec<&str> = Vec::new();
     let mut values: Vec<SeaValue> = Vec::new();
+    let mut errors: Vec<WriteError> = Vec::new();
     for col in &meta.fields {
         if col.primary_key {
             let supplied = body.get(&col.name);
@@ -4462,21 +4560,24 @@ fn build_insert_plan(
         if json.is_null() {
             continue;
         }
-        validate_numeric_bounds(col, json)?;
-        if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
-            if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                return Err(WriteError::Validator {
-                    field: col.name.clone(),
-                    message: e.to_string(),
-                });
-            }
+        // TaskFlow #436: this field already failed a collecting pass
+        // (numeric / format / structural). Don't coerce it too — that
+        // would report the same field twice.
+        if skip.contains(&col.name) {
+            continue;
         }
         // gaps3 #34: apply declared trim/lowercase to the incoming string
         // before masking / binding (dynamic write path only).
         let normalized_json = normalize_json_for_col(col, json);
         let json = normalized_json.as_ref().unwrap_or(json);
         // features #83: app-defined clean/validate hooks.
-        let cleaned_json = crate::orm::cleaners::apply(&meta.table, &col.name, json)?;
+        let cleaned_json = match crate::orm::cleaners::apply(&meta.table, &col.name, json) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
         let json = cleaned_json.as_ref().unwrap_or(json);
         // Masked columns: seal the plaintext before binding (audit_2 core-orm C1).
         // gaps4 #2: unless the values are already sealed (a backup RESTORE), in
@@ -4484,15 +4585,27 @@ fn build_insert_plan(
         let sealed = if presealed {
             None
         } else {
-            crate::orm::write::seal_masked_json(col, json)?
+            match crate::orm::write::seal_masked_json(col, json) {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            }
         };
-        let sea_value = crate::orm::write::json_to_sea_value(
+        let sea_value = match crate::orm::write::json_to_sea_value(
             col.ty,
             sealed.as_ref().unwrap_or(json),
             col.nullable,
             &col.name,
             fk_target_pk_sql_type(col),
-        )?;
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
         cols.push(&col.name);
         values.push(sea_value);
     }
@@ -4511,7 +4624,7 @@ fn build_insert_plan(
     let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
     q.values_panic(exprs);
 
-    Ok(InsertPlan { q, pk_name, pk_ty })
+    Ok((InsertPlan { q, pk_name, pk_ty }, errors))
 }
 
 /// Transaction-aware sibling of [`write_m2m_junctions`]: mirrors each
