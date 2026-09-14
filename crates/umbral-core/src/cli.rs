@@ -474,7 +474,14 @@ pub fn command_catalog_with_app_commands(
 /// The output is a complete help screen (header, usage, command table,
 /// footer hint) ready to print to stdout (for `help`/`--help`) or
 /// stderr (after an `error: unknown command` line).
-pub fn render_help(catalog: &[(String, Option<String>)]) -> String {
+///
+/// `version`, when `Some`, is rendered into the header line
+/// (`umbral <version> - manage your umbral app`). Callers pass their own
+/// `env!("CARGO_PKG_VERSION")` so the version tracks the CLI binary rather
+/// than this core crate; both share the workspace version, but keeping it a
+/// parameter means the header can never quietly report the wrong crate's
+/// version.
+pub fn render_help(catalog: &[(String, Option<String>)], version: Option<&str>) -> String {
     // Dedup by name, preserving order so built-ins (passed first) win.
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut rows: Vec<(&str, &str)> = Vec::new();
@@ -524,7 +531,10 @@ pub fn render_help(catalog: &[(String, Option<String>)]) -> String {
     ];
 
     let mut s = String::new();
-    s.push_str("umbral - manage your umbral app\n\n");
+    match version {
+        Some(v) => s.push_str(&format!("umbral {v} - manage your umbral app\n\n")),
+        None => s.push_str("umbral - manage your umbral app\n\n"),
+    }
     s.push_str("Usage:\n  umbral <command> [options]\n");
 
     let mut rendered: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -753,7 +763,7 @@ mod tests {
             ),
             ("blank".to_string(), None),
         ];
-        let out = render_help(&catalog);
+        let out = render_help(&catalog, None);
 
         // Both descriptions present.
         assert!(
@@ -802,6 +812,25 @@ mod tests {
     }
 
     #[test]
+    fn render_help_includes_version_when_given() {
+        let catalog = vec![("migrate".to_string(), Some("Apply".to_string()))];
+        let out = render_help(&catalog, Some("9.9.9"));
+        assert!(
+            out.contains("9.9.9"),
+            "version should appear in the help header:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_help_omits_version_when_none() {
+        let catalog = vec![("migrate".to_string(), Some("Apply".to_string()))];
+        let out = render_help(&catalog, None);
+        // Header still renders; it just carries no version token.
+        assert!(out.contains("umbral"), "{out}");
+        assert!(!out.contains("9.9.9"), "{out}");
+    }
+
+    #[test]
     fn render_help_dedups_first_wins() {
         // Built-in `migrate` placed first should win over a plugin that
         // also registers `migrate` with a different description.
@@ -812,9 +841,52 @@ mod tests {
             ),
             ("migrate".to_string(), Some("a plugin override".to_string())),
         ];
-        let out = render_help(&catalog);
+        let out = render_help(&catalog, None);
         assert!(out.contains("Apply pending migrations"), "{out}");
         assert!(!out.contains("a plugin override"), "{out}");
+    }
+
+    struct FlaggyCmd;
+
+    #[async_trait]
+    impl PluginCommand for FlaggyCmd {
+        fn command(&self) -> clap::Command {
+            clap::Command::new("backfill")
+                .about("Backfill empty slugs")
+                .arg(clap::Arg::new("slug").required(true))
+                .arg(
+                    clap::Arg::new("limit")
+                        .long("limit")
+                        .value_parser(clap::value_parser!(u64)),
+                )
+        }
+        async fn run(&self, _matches: &ArgMatches) -> Result<(), CliError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn command_specific_help_renders_the_commands_own_flags() {
+        // #76: `umbral <usercmd> --help` renders THAT command's clap help —
+        // its about, required args, and flags — not the top-level catalog.
+        let plugins: Vec<Box<dyn Plugin>> = vec![Box::new(OnePlugin {
+            name: "app",
+            cmd: Box::new(|| Box::new(FlaggyCmd)),
+        })];
+        let out = dispatch(&plugins, ["argv0", "backfill", "--help"])
+            .await
+            .unwrap();
+        match out {
+            DispatchOutcome::Help(text) => {
+                assert!(
+                    text.contains("Backfill empty slugs"),
+                    "about missing:\n{text}"
+                );
+                assert!(text.contains("--limit"), "flag missing:\n{text}");
+                assert!(text.contains("slug"), "required arg missing:\n{text}");
+            }
+            other => panic!("expected command-specific Help, got {other:?}"),
+        }
     }
 
     #[tokio::test]

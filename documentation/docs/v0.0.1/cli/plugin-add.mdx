@@ -1,0 +1,58 @@
+---
+title: Adding a plugin (plugin add)
+description: "`umbral plugin add <name>` runs `cargo add` for a built-in or third-party umbral plugin and prints the one line that wires it into your App::builder()."
+sidebar_position: 4
+icon: puzzle
+---
+
+Every capability in umbral — auth, sessions, the admin, background tasks, REST — ships as a plugin. Adding one is two steps: depend on the crate, then register it on your `App::builder()`. `umbral plugin add` does the first and shows you the second.
+
+```bash
+umbral plugin add auth
+```
+
+```text
+Running: cargo add umbral-auth
+    Adding umbral-auth v0.0.12 to dependencies
+
+Added `umbral-auth`. Wire it into your App in src/main.rs:
+
+    App::builder()
+        .plugin(AuthPlugin::default())
+        // ... your other plugins / models ...
+        .build_deferred()?;
+```
+
+`<name>` is a **short name** (`auth`, `sessions`, `admin`, `tasks`, `rest`, …) or the **full crate name** (`umbral-auth`). Either resolves to the same crate and the correct `Plugin` struct — including the irregular ones (`oauth` → `OAuthPlugin`, `openapi` → `OpenApiPlugin`, `livereload` → `LiveReloadPlugin`).
+
+<Callout type="info">
+`umbral plugin add` only adds the dependency and prints the wiring line — it doesn't edit `src/main.rs` for you, so it never has to guess the shape of your builder. Paste the `.plugin(...)` line where your other plugins are registered.
+</Callout>
+
+## A name it doesn't recognize
+
+An unknown name is passed straight through to `cargo add`, so a third-party umbral plugin works too — you just don't get a wiring hint the tool can't know:
+
+```bash
+umbral plugin add some-community-plugin
+# note: `some-community-plugin` is not a built-in umbral plugin — adding it as a plain crate.
+# Running: cargo add some-community-plugin
+```
+
+## Passing flags to cargo add
+
+Anything after `--` is forwarded verbatim to `cargo add`:
+
+```bash
+umbral plugin add storage -- --features s3
+umbral plugin add rest -- --dry-run
+```
+
+## Requirements
+
+`plugin add` edits `Cargo.toml`, so it must run **inside a Cargo project** (it walks up for a `Cargo.toml` the same way `cargo` does). Outside one it errors and points you at [`umbral startproject`](./startproject).
+
+## See also
+
+- [Management commands](./management-commands) — the subcommands each plugin then contributes (`createsuperuser`, `tasks-worker`, …).
+- The plugin architecture and the `Plugin` trait: [`arch.md`](https://github.com/umbral-rs/umbral/blob/main/arch.md) and `crates/umbral-core/src/plugin.rs`.

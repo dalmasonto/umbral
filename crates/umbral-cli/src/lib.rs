@@ -86,6 +86,7 @@ pub fn in_cargo_project(start: &std::path::Path) -> bool {
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
+    version = env!("CARGO_PKG_VERSION"),
     about = "umbral management commands. Run from your project's binary.",
     disable_help_subcommand = true
 )]
@@ -819,7 +820,7 @@ pub fn builtin_command_names() -> Vec<String> {
 /// Render the full help screen (built-ins + plugin commands), for
 /// `umbral help` / `umbral --help` / bare `umbral`. Prints to stdout.
 fn render_full_help(app: &App) -> String {
-    umbral_core::cli::render_help(&full_catalog(app))
+    umbral_core::cli::render_help(&full_catalog(app), Some(env!("CARGO_PKG_VERSION")))
 }
 
 /// Render the unknown-command screen: an `error: unknown command` line
@@ -834,6 +835,147 @@ fn render_unknown(app: &App, bad: Option<&str>) -> String {
     }
     s.push_str(&render_full_help(app));
     s
+}
+
+/// Whether `args` (argv WITHOUT argv0) asks for the **top-level** command
+/// catalog — `help`, `--help`, or `-h` as the first meaningful token.
+///
+/// A `--help` that FOLLOWS a subcommand (`umbral migrate --help`) is
+/// command-specific and must NOT match here: it falls through to clap so the
+/// command's own flags and required args render. A single leading `--`
+/// separator is tolerated so `umbral -- help` reads the same as `umbral help`.
+///
+/// The global scaffolding binary (`main.rs`) calls this BEFORE `Cli::parse()`,
+/// because clap would otherwise print its own sparse help (only the four
+/// scaffold commands) the moment it sees `--help` — which is exactly the
+/// too-few-commands bug (#395). Intercepting first lets both `help` and
+/// `--help` reach the same unified catalog.
+pub fn wants_help(args: &[String]) -> bool {
+    let mut it = args.iter();
+    // `umbral -- help`: skip a lone `--` separator, then classify the next token.
+    let first = match it.next() {
+        Some(a) if a == "--" => it.next(),
+        other => other,
+    };
+    matches!(first.map(String::as_str), Some("help" | "--help" | "-h"))
+}
+
+/// The built-in command catalog with NO built `App` — the framework's own
+/// subcommands (read off the derived clap parser) plus the out-of-band
+/// scaffolders. This is what the global `umbral` binary shows for `--help` /
+/// `help` when run OUTSIDE a project, where it can't build the App to
+/// enumerate plugin-contributed commands.
+///
+/// It is deliberately `full_catalog` minus the app/plugin half: the same
+/// built-ins, grouped and styled identically by [`umbral_core::cli::render_help`],
+/// so help reads the same inside and outside a project — only the plugin
+/// section differs.
+pub fn static_catalog() -> Vec<(String, Option<String>)> {
+    let mut catalog: Vec<(String, Option<String>)> = Vec::new();
+    let root = <Cli as CommandFactory>::command();
+    for sub in root.get_subcommands() {
+        catalog.push((
+            sub.get_name().to_string(),
+            sub.get_about().map(|s| s.to_string()),
+        ));
+    }
+    // The out-of-band scaffolders (startproject / startapp / startplugin /
+    // startcommand) aren't subcommands of this parser — supply their rows so
+    // the "Create a project or plugin" group has content (gap 66).
+    catalog.extend(scaffold_command_catalog());
+    catalog
+}
+
+/// Full static help screen for the global binary run outside a project:
+/// the built-in catalog, styled by [`umbral_core::cli::render_help`] with the
+/// CLI version in the header, plus a one-line note that plugin-contributed
+/// commands appear when the same help runs inside a project.
+///
+/// Inside a project the global binary forwards `help`/`--help` to
+/// `cargo run -- help` instead, which reaches the LIVE full catalog
+/// (built-ins + every registered plugin command). This function is the
+/// no-project fallback, so it says where the missing half lives.
+pub fn render_static_help() -> String {
+    let mut s = umbral_core::cli::render_help(&static_catalog(), Some(env!("CARGO_PKG_VERSION")));
+    s.push_str(
+        "\nPlugin-contributed commands (e.g. createsuperuser, tasks-worker) are listed when you\n\
+         run `umbral help` inside a project.\n",
+    );
+    s
+}
+
+/// A resolved plan for `umbral plugin add <name>`: which crate to `cargo add`
+/// and, for a recognized built-in, the exact builder line to paste.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginAddPlan {
+    /// `<name>` is a recognized built-in plugin (by short name or full crate
+    /// name). `wiring` is the `.plugin(XPlugin::default())` line for main.rs.
+    Known {
+        krate: String,
+        struct_name: String,
+        wiring: String,
+    },
+    /// `<name>` is not a known built-in. Treat it as a crate name and pass it
+    /// straight to `cargo add` — a user adding a third-party umbral plugin
+    /// still gets the convenience, just without a wiring hint we can't know.
+    Passthrough { krate: String },
+}
+
+/// Every built-in plugin: `(short name, crate, Plugin struct)`.
+///
+/// The short name is what a user is likeliest to type
+/// (`umbral plugin add auth`); the full crate name (`umbral-auth`) resolves
+/// too. The struct casing is irregular enough — `OAuthPlugin`,
+/// `OpenApiPlugin`, `LiveReloadPlugin`, `RlsPlugin`, `GraphqlPlugin` — that a
+/// naive "capitalize the short name" rule gets several wrong, so the mapping
+/// is explicit. Keep it in sync with `plugins/` and
+/// [`scaffold::RESERVED_PLUGIN_NAMES`].
+pub const KNOWN_PLUGINS: &[(&str, &str, &str)] = &[
+    ("admin", "umbral-admin", "AdminPlugin"),
+    ("analytics", "umbral-analytics", "AnalyticsPlugin"),
+    ("auth", "umbral-auth", "AuthPlugin"),
+    ("cache", "umbral-cache", "CachePlugin"),
+    ("email", "umbral-email", "EmailPlugin"),
+    ("graphql", "umbral-graphql", "GraphqlPlugin"),
+    ("health", "umbral-health", "HealthPlugin"),
+    ("livereload", "umbral-livereload", "LiveReloadPlugin"),
+    ("logs", "umbral-logs", "LogsPlugin"),
+    ("oauth", "umbral-oauth", "OAuthPlugin"),
+    ("openapi", "umbral-openapi", "OpenApiPlugin"),
+    ("permissions", "umbral-permissions", "PermissionsPlugin"),
+    ("playground", "umbral-playground", "PlaygroundPlugin"),
+    ("realtime", "umbral-realtime", "RealtimePlugin"),
+    ("rest", "umbral-rest", "RestPlugin"),
+    ("rls", "umbral-rls", "RlsPlugin"),
+    ("security", "umbral-security", "SecurityPlugin"),
+    ("sessions", "umbral-sessions", "SessionsPlugin"),
+    ("signals", "umbral-signals", "SignalsPlugin"),
+    ("storage", "umbral-storage", "StoragePlugin"),
+    ("tasks", "umbral-tasks", "TasksPlugin"),
+    ("tenants", "umbral-tenants", "TenantsPlugin"),
+];
+
+/// Resolve `umbral plugin add <name>` into a [`PluginAddPlan`].
+///
+/// A recognized built-in (by short name or full crate name) becomes
+/// [`PluginAddPlan::Known`] with the wiring line; anything else becomes
+/// [`PluginAddPlan::Passthrough`] so a third-party plugin crate still gets
+/// `cargo add`ed.
+pub fn plan_plugin_add(name: &str) -> PluginAddPlan {
+    let name = name.trim();
+    match KNOWN_PLUGINS
+        .iter()
+        .find(|(short, krate, _)| *short == name || *krate == name)
+    {
+        Some((_, krate, struct_name)) => PluginAddPlan::Known {
+            krate: krate.to_string(),
+            struct_name: struct_name.to_string(),
+            wiring: format!(".plugin({struct_name}::default())"),
+        },
+        None => PluginAddPlan::Passthrough {
+            krate: name.to_string(),
+        },
+    }
 }
 
 /// `umbral dev` — wraps `cargo-watch` to re-run `cargo run` on source

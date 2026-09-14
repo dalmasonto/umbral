@@ -15,6 +15,27 @@ so the commands see your models and your plugins. The framework-global [`umbral`
 scaffolding (`startproject`, `startplugin`) and nothing else - it can't
 manage your database because it doesn't know about your models.
 
+## Getting help and the version
+
+`umbral help`, `umbral --help`, and `umbral -h` all print the **same** unified
+catalog — every built-in subcommand plus every command your plugins and project
+register — grouped and aligned. Run any of them **inside a project** and the
+listing includes your plugin-contributed commands (`createsuperuser`,
+`tasks-worker`, your own scaffolded commands); run them outside a project and
+you get the built-in catalog with a note that plugin commands appear inside a
+project.
+
+```bash
+umbral --help            # the full grouped catalog (same as `umbral help`)
+umbral --version         # e.g. `umbral 0.0.12`
+umbral migrate --help    # command-specific help: every flag and required arg
+```
+
+For a **specific** command, put `--help` after it: `umbral migrate --help`
+renders that command's own flags and required arguments (including the ones your
+plugin or project command declares). `cargo run -- --help` / `cargo run -- migrate --help`
+work identically from inside a project.
+
 ## The built-in subcommands
 
 <CardGrid cols={2}>

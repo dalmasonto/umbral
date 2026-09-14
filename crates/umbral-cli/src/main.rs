@@ -37,11 +37,13 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
+    version = env!("CARGO_PKG_VERSION"),
     about = "umbral CLI. Scaffolds projects, plugins and commands \
-             (startproject/startapp/startplugin/startcommand) and runs project-free \
-             utilities (maskkeygen) directly; every other command (serve, migrate, \
-             makemigrations, worker, seed_data, …) is forwarded to \
-             `cargo run -- <command>` in the current project.",
+             (startproject/startapp/startplugin/startcommand), adds plugins \
+             (plugin add) and runs project-free utilities (maskkeygen) directly; \
+             every other command (serve, migrate, makemigrations, worker, \
+             seed_data, …) is forwarded to `cargo run -- <command>` in the \
+             current project.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -127,12 +129,39 @@ enum Command {
         path: PathBuf,
     },
 
+    /// Manage this project's umbral plugins.
+    ///
+    /// `umbral plugin add <name>` adds a plugin crate to the project via
+    /// `cargo add` and prints the one line that wires it into your
+    /// `App::builder()`. `<name>` is a short name (`auth`, `sessions`, …) or a
+    /// full crate name (`umbral-auth`); an unknown name is passed straight to
+    /// `cargo add` so third-party plugins work too.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
     /// Any non-scaffolding command (`dev`, `migrate`, `makemigrations`,
     /// `serve`, `worker`, …) is captured here and forwarded to the current
     /// project's binary via `cargo run -- <args>`. So `umbral dev` runs
     /// `cargo run -- dev`.
     #[command(external_subcommand)]
     Forward(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginAction {
+    /// Add an umbral plugin to this project (runs `cargo add`) and print how
+    /// to wire it into `App::builder()`.
+    Add {
+        /// Plugin to add: a short name (`auth`, `sessions`, `admin`, …) or a
+        /// crate name (`umbral-auth`).
+        name: String,
+        /// Extra arguments forwarded verbatim to `cargo add` after the crate
+        /// (e.g. `-- --features postgres`).
+        #[arg(last = true)]
+        cargo_args: Vec<String>,
+    },
 }
 
 /// Forward `umbral <cmd> [args...]` to the current project via
@@ -315,7 +344,108 @@ fn print_report(r: &umbral_cli::scaffold::ScaffoldReport, name: &str, wants_dep:
     }
 }
 
+/// Top-level help for the global binary. Reaches the SAME unified catalog as
+/// `umbral help` for both `--help`/`-h` and a bare `umbral` (#395), instead of
+/// clap's sparse help that lists only the four scaffold commands.
+///
+/// Inside a project: forward to `cargo run -- help`, which renders the LIVE
+/// full catalog including every registered plugin command. Outside a project
+/// (no Cargo.toml, so the App can't be built to enumerate plugins): print the
+/// static built-in catalog, with a note saying where the plugin commands are.
+fn run_global_help() -> ExitCode {
+    let in_project = std::env::current_dir()
+        .map(|cwd| umbral_cli::in_cargo_project(&cwd))
+        .unwrap_or(false);
+    if in_project {
+        forward_to_project(&["help".to_string()])
+    } else {
+        print!("{}", umbral_cli::render_static_help());
+        ExitCode::SUCCESS
+    }
+}
+
+/// `umbral plugin add <name> [-- <cargo add args>]`.
+///
+/// Resolves `<name>` to a crate (a built-in short name, a full crate name, or
+/// a third-party crate passed through), runs `cargo add <crate>`, then prints
+/// the `.plugin(...)` line to wire it in. Requires a Cargo project, because
+/// `cargo add` edits `Cargo.toml`.
+fn run_plugin_add(name: &str, cargo_args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = std::env::current_dir()?;
+    if !umbral_cli::in_cargo_project(&cwd) {
+        return Err(format!(
+            "`umbral plugin add` must run inside a Cargo project — no Cargo.toml in {} (or any \
+             parent).\n  cd into your umbral project, or create one with `umbral startproject \
+             <name>`.",
+            cwd.display()
+        )
+        .into());
+    }
+
+    let plan = umbral_cli::plan_plugin_add(name);
+    let (krate, wiring) = match &plan {
+        umbral_cli::PluginAddPlan::Known { krate, wiring, .. } => (krate.clone(), Some(wiring)),
+        umbral_cli::PluginAddPlan::Passthrough { krate } => {
+            eprintln!(
+                "note: `{krate}` is not a built-in umbral plugin — adding it as a plain crate."
+            );
+            (krate.clone(), None)
+        }
+    };
+
+    let mut args = vec!["add".to_string(), krate.clone()];
+    args.extend(cargo_args.iter().cloned());
+    println!("Running: cargo {}", args.join(" "));
+    let status = std::process::Command::new("cargo")
+        .args(&args)
+        .status()
+        .map_err(|e| format!("failed to run `cargo add`: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "`cargo add {krate}` failed with status {}",
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "<signal>".to_string())
+        )
+        .into());
+    }
+
+    println!();
+    match wiring {
+        Some(wiring) => {
+            println!("Added `{krate}`. Wire it into your App in src/main.rs:");
+            println!();
+            println!("    App::builder()");
+            println!("        {wiring}");
+            println!("        // ... your other plugins / models ...");
+            println!("        .build_deferred()?;");
+            println!();
+            println!(
+                "(`::default()` is the common constructor; some plugins offer a builder — see the \
+                 plugin's docs.)"
+            );
+        }
+        None => {
+            println!(
+                "Added `{krate}`. See the crate's docs for how to register it on your \
+                 App::builder()."
+            );
+        }
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
+    // Unified top-level help / no-args: reach the same catalog as `umbral help`
+    // BEFORE clap can print its sparse four-command help (#395). A `--help`
+    // that follows a subcommand (`umbral migrate --help`) is NOT caught here —
+    // it forwards to the project so the command's own flags render.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.is_empty() || umbral_cli::wants_help(&raw) {
+        return run_global_help();
+    }
+
     let cli = Cli::parse();
     // Non-scaffolding commands are handled in one of two ways:
     //   1. Project-INDEPENDENT built-ins (e.g. `maskkeygen`) run right here —
@@ -361,6 +491,9 @@ fn main() -> ExitCode {
                 .map_err(Into::into)
         }
         Command::Startcommand { name, target, path } => run_startcommand(name, target, &path),
+        Command::Plugin { action } => match action {
+            PluginAction::Add { name, cargo_args } => run_plugin_add(&name, &cargo_args),
+        },
         // Handled by the early return above; kept for match exhaustiveness.
         Command::Forward(_) => unreachable!("Forward is dispatched before this match"),
     };
