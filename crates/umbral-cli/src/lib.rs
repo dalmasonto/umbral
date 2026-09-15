@@ -1817,5 +1817,58 @@ mod tests {
             out.contains("tasks-worker"),
             "listing missing plugin cmd:\n{out}"
         );
+
+        // --- invariant: help lists EXACTLY what dispatch can run ---
+        //
+        // This is what resolves the gap-66 trap for good. The unified help
+        // catalog must equal the set of commands `dispatch_with_argv` can route:
+        // no listed-but-unrunnable command (the scaffold bug — help advertised
+        // `startapp`, dispatch answered `unknown command`), and no runnable-but-
+        // hidden command. We compare `full_catalog` (help) against the SAME
+        // per-source predicates dispatch consults:
+        //   - scaffolders  → `scaffold_cli` (one `ScaffoldCli` clap type),
+        //   - plugin / app → `CommandSet` (the same `collect` dispatch routes through),
+        //   - built-ins    → the `Cli` clap parser's subcommands.
+        // Each group is already single-sourced, so a divergence *within* a group
+        // is impossible; this locks the remaining seam — a new command group added
+        // to help without its dispatch (or the reverse) fails here at `cargo test`
+        // before it can reach a user. (Folded into this test, not its own, because
+        // `settings::init` is a process-global `OnceLock` that panics on a second
+        // `App::build` — see the note above.)
+        use std::collections::BTreeSet;
+        let listed: BTreeSet<String> = full_catalog(&app).into_iter().map(|(n, _)| n).collect();
+
+        let builtins = builtin_command_names();
+        let reserved: Vec<&str> = builtins.iter().map(String::as_str).collect();
+        let commands =
+            umbral_core::cli::CommandSet::collect(app.commands(), app.plugins(), &reserved);
+        let mut dispatchable: BTreeSet<String> = BTreeSet::new();
+        dispatchable.extend(commands.catalog().into_iter().map(|(n, _)| n)); // plugin / app
+        dispatchable.extend(scaffold_cli::scaffold_command_names()); // scaffolders
+        dispatchable.extend(
+            // built-ins
+            <Cli as CommandFactory>::command()
+                .get_subcommands()
+                .map(|s| s.get_name().to_string()),
+        );
+
+        assert_eq!(
+            listed,
+            dispatchable,
+            "help catalog and dispatch have diverged.\n  \
+             listed in help but NOT dispatchable (would answer `unknown command`): {:?}\n  \
+             dispatchable but hidden from help: {:?}",
+            listed.difference(&dispatchable).collect::<Vec<_>>(),
+            dispatchable.difference(&listed).collect::<Vec<_>>(),
+        );
+
+        // The specific regression: every scaffolder is on BOTH sides.
+        for name in scaffold_cli::scaffold_command_names() {
+            assert!(listed.contains(&name), "help dropped scaffolder `{name}`");
+            assert!(
+                scaffold_cli::is_scaffold_command(&name),
+                "dispatch dropped scaffolder `{name}`"
+            );
+        }
     }
 }
