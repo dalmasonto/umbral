@@ -103,20 +103,23 @@ async fn m2m_add_and_prefetch_on_a_string_pk_parent() {
         .expect("prefetch");
 
     let rust = courses.iter().find(|c| c.code == "rust101").unwrap();
-    let mut names: Vec<&str> = rust
-        .students
-        .resolved()
-        .expect("M2M hydrated for a String-PK parent")
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
+    let rust_students = rust
+        .students()
+        .fetch()
+        .await
+        .expect("M2M hydrated for a String-PK parent");
+    let mut names: Vec<&str> = rust_students.iter().map(|s| s.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["alice", "bob"]);
 
-    // go101 has no students → resolved is Some(&[]).
+    // go101 has no students → the accessor resolves to [].
     let go = courses.iter().find(|c| c.code == "go101").unwrap();
     assert!(
-        go.students.resolved().expect("hydrated (empty)").is_empty(),
+        go.students()
+            .fetch()
+            .await
+            .expect("hydrated (empty)")
+            .is_empty(),
         "go101 has no students"
     );
 
@@ -129,13 +132,12 @@ async fn m2m_add_and_prefetch_on_a_string_pk_parent() {
         .await
         .expect("join_related");
     let rust = joined.iter().find(|c| c.code == "rust101").unwrap();
-    let mut jnames: Vec<&str> = rust
-        .students
-        .resolved()
-        .expect("M2M resolved via join_related")
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
+    let rust_jstudents = rust
+        .students()
+        .fetch()
+        .await
+        .expect("M2M resolved via join_related");
+    let mut jnames: Vec<&str> = rust_jstudents.iter().map(|s| s.name.as_str()).collect();
     jnames.sort();
     assert_eq!(jnames, vec!["alice", "bob"]);
 }

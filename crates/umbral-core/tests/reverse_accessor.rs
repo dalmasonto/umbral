@@ -265,8 +265,9 @@ async fn declared_reverse_set_and_generic_accessor_agree() {
         .expect("prefetch child_set");
     let p1 = parents.remove(0);
     let declared = p1
-        .child_set
-        .resolved()
+        .child_set()
+        .fetch()
+        .await
         .expect("child_set resolved after prefetch");
     let mut declared_labels: Vec<&str> = declared.iter().map(|c| c.label.as_str()).collect();
     declared_labels.sort();

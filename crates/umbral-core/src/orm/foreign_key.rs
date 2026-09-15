@@ -43,18 +43,18 @@
 //!     pub author: ForeignKey<User>,
 //! }
 //!
-//! // Lazy: only stores the PK.
+//! // Lazy: only stores the PK. `post.author().await?` issues a query.
 //! let post = Post::objects().filter(post::ID.eq(1)).get().await?;
 //! assert_eq!(post.author.id(), 7);
-//! assert!(post.author.resolved().is_none());
 //!
-//! // Eager: resolved slot is populated by the JOIN.
+//! // Eager: select_related populates the cache, so the same accessor
+//! // returns the hydrated row with zero further round-trips.
 //! let post = Post::objects()
 //!     .filter(post::ID.eq(1))
 //!     .select_related("author")
 //!     .get()
 //!     .await?;
-//! assert_eq!(post.author.resolved().unwrap().name, "Alice");
+//! assert_eq!(post.author().await?.name, "Alice");
 //! ```
 //!
 //! ## What is deferred
@@ -207,35 +207,29 @@ impl<T: Model> ForeignKey<T> {
         self.raw = raw;
     }
 
-    /// Return a reference to the eagerly-loaded model row, if any.
-    ///
-    /// `None` means `select_related` was not called (or was called but this
-    /// FK field was not named). `Some(&T)` means the JOIN was executed and
-    /// the full row is available without a round-trip.
-    pub fn resolved(&self) -> Option<&T> {
-        self.resolved.as_deref()
-    }
-
-    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
-    /// does. `#[derive(Model)]`'s generated to-one accessor (`post.author()`)
-    /// calls THIS, not [`Self::resolved`]: the accessor expands in the
-    /// CONSUMER crate, and a later task (heavy-relations Plan C, Task 4)
-    /// demotes the ergonomic `resolved()` to `pub(crate)` once it's no longer
-    /// the public read path. `__resolved` stays `pub` (kept out of docs and
-    /// autocomplete via `#[doc(hidden)]` only) so the generated call site
-    /// keeps compiling across that removal.
+    /// Codegen-facing cache reader. `None` means `select_related` was not
+    /// called (or was called but this FK field was not named); `Some(&T)`
+    /// means the JOIN was executed and the full row is available without a
+    /// round-trip. `#[derive(Model)]`'s generated to-one accessor
+    /// (`post.author()`) calls THIS to short-circuit to the cache before
+    /// issuing a query. Not a human-facing API — the awaited accessor
+    /// (`post.author().await?`) is the single public read path (heavy-
+    /// relations Plan C, Task 4 removed the ergonomic `resolved()` getter
+    /// this used to be). `pub` (kept out of docs/autocomplete via
+    /// `#[doc(hidden)]` only) because the accessor expands in the CONSUMER
+    /// crate and needs a public entry point to call.
     #[doc(hidden)]
     pub fn __resolved(&self) -> Option<&T> {
         self.resolved.as_deref()
     }
 
-    /// Attach an already-fetched model row to this FK.
-    ///
-    /// Called internally by the `select_related` machinery in `QuerySet`
-    /// after the JOIN rows are split and hydrated. Not intended for direct
-    /// user call sites, but `pub` so the ORM layer (different module) can
-    /// reach it.
-    pub fn set_resolved(&mut self, row: T) {
+    /// Codegen-facing cache writer. Called by `#[derive(Model)]`'s
+    /// generated `HydrateRelated` impl after `select_related` splits the
+    /// JOIN rows — that impl expands in the CONSUMER crate, so this needs
+    /// a public (doc-hidden) entry point the same way [`Self::__resolved`]
+    /// does for reads. Not a human-facing API.
+    #[doc(hidden)]
+    pub fn __set_resolved(&mut self, row: T) {
         self.resolved = Some(Box::new(row));
     }
 }

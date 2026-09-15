@@ -132,10 +132,7 @@ async fn identifying_relation_resolves_the_parent() {
         .expect("fetch with select_related");
 
     let s = settings.first().expect("the grace settings row");
-    let parent = s
-        .user
-        .resolved()
-        .expect("parent hydrated via select_related");
+    let parent = s.user().await.expect("parent hydrated via select_related");
     assert_eq!(parent.slug, "grace");
     assert_eq!(parent.name, "Grace");
 }

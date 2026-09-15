@@ -103,19 +103,22 @@ async fn m2m_add_and_prefetch_on_a_uuid_pk_parent() {
         .expect("prefetch");
 
     let quantum = labs.iter().find(|l| l.id == lab_id(1)).unwrap();
-    let mut names: Vec<&str> = quantum
-        .members
-        .resolved()
-        .expect("M2M hydrated for a UUID-PK parent")
-        .iter()
-        .map(|r| r.name.as_str())
-        .collect();
+    let quantum_members = quantum
+        .members()
+        .fetch()
+        .await
+        .expect("M2M hydrated for a UUID-PK parent");
+    let mut names: Vec<&str> = quantum_members.iter().map(|r| r.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["ada", "alan"]);
 
     let bio = labs.iter().find(|l| l.id == lab_id(2)).unwrap();
     assert!(
-        bio.members.resolved().expect("hydrated (empty)").is_empty(),
+        bio.members()
+            .fetch()
+            .await
+            .expect("hydrated (empty)")
+            .is_empty(),
         "bio lab has no members"
     );
 
@@ -127,13 +130,12 @@ async fn m2m_add_and_prefetch_on_a_uuid_pk_parent() {
         .await
         .expect("join_related");
     let quantum = joined.iter().find(|l| l.id == lab_id(1)).unwrap();
-    let mut jnames: Vec<&str> = quantum
-        .members
-        .resolved()
-        .expect("M2M resolved via join_related")
-        .iter()
-        .map(|r| r.name.as_str())
-        .collect();
+    let quantum_jmembers = quantum
+        .members()
+        .fetch()
+        .await
+        .expect("M2M resolved via join_related");
+    let mut jnames: Vec<&str> = quantum_jmembers.iter().map(|r| r.name.as_str()).collect();
     jnames.sort();
     assert_eq!(jnames, vec!["ada", "alan"]);
 }

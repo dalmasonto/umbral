@@ -385,12 +385,11 @@ async fn select_related_nested_is_constant_queries_not_n_plus_1() {
             .await
             .expect("fetch");
         assert_eq!(rows.len() as i64, n, "sanity: all parents returned");
-        // Deepest level hydrated from the batched chain, not per-row.
-        let author = rows[0]
-            .plugin
-            .resolved()
-            .and_then(|p| p.author.resolved())
-            .expect("author hydrated");
+        // Deepest level hydrated from the batched chain, not per-row — both
+        // hops must be served from cache (zero further queries) or the
+        // count assertion below would inflate.
+        let plugin = rows[0].plugin().await.expect("plugin hydrated");
+        let author = plugin.author().await.expect("author hydrated");
         assert_eq!(author.name, "Ada");
         counts.push(count());
     }
@@ -424,8 +423,16 @@ async fn prefetch_related_is_constant_queries_not_n_plus_1() {
             .await
             .expect("fetch");
         assert_eq!(rows.len() as i64, n);
-        assert_eq!(rows[0].reaction_set.resolved().map(|r| r.len()), Some(1));
-        assert_eq!(rows[0].tags.resolved().map(|t| t.len()), Some(2));
+        assert_eq!(
+            rows[0]
+                .reaction_set()
+                .fetch()
+                .await
+                .expect("reaction_set")
+                .len(),
+            1
+        );
+        assert_eq!(rows[0].tags().fetch().await.expect("tags").len(), 2);
         counts.push(count());
     }
     assert_eq!(
@@ -456,10 +463,13 @@ async fn nested_join_related_is_one_query_not_n() {
             .await
             .expect("fetch");
         assert_eq!(rows.len() as i64, n);
-        let author = rows[0]
-            .plugin
-            .resolved()
-            .and_then(|p| p.author.resolved())
+        let plugin = rows[0]
+            .plugin()
+            .await
+            .expect("plugin hydrated from the single joined query");
+        let author = plugin
+            .author()
+            .await
             .expect("author hydrated from the single joined query");
         assert_eq!(author.name, "Ada");
         counts.push(count());

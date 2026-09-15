@@ -1,6 +1,6 @@
 //! Nested `select_related("a__b__c")` traversal. Walks each FK hop
 //! with one batched `IN (...)` query and unpacks the full chain into
-//! `ForeignKey::resolved()` slots at every depth.
+//! the awaited accessor's cache at every depth.
 //!
 //! Query budget = `1 + len(hops)`. No N+1: each hop is one batched
 //! query across every parent of prior hops.
@@ -97,13 +97,13 @@ async fn two_hop_select_related_resolves_chain() {
         .expect("fetch");
     assert_eq!(posts.len(), 1);
     let p = &posts[0];
-    let author = p.author.resolved().expect("author hydrated");
+    let author = p.author().await.expect("author hydrated");
     assert_eq!(author.name, "alice");
     let manager = author
-        .manager
-        .as_ref()
-        .expect("alice has a manager wrapper")
-        .resolved()
+        .manager()
+        .get_opt()
+        .await
+        .expect("second hop query ok")
         .expect("manager hydrated through second hop");
     assert_eq!(manager.name, "ceo");
 }
@@ -120,20 +120,20 @@ async fn three_hop_select_related_resolves_full_chain() {
         .await
         .expect("fetch");
     assert_eq!(posts.len(), 1);
-    let charlie = posts[0].author.resolved().expect("author");
+    let charlie = posts[0].author().await.expect("author");
     assert_eq!(charlie.name, "charlie");
     let alice = charlie
-        .manager
-        .as_ref()
-        .expect("charlie's manager")
-        .resolved()
+        .manager()
+        .get_opt()
+        .await
+        .expect("second hop query ok")
         .expect("alice hydrated");
     assert_eq!(alice.name, "alice");
     let ceo = alice
-        .manager
-        .as_ref()
-        .expect("alice's manager")
-        .resolved()
+        .manager()
+        .get_opt()
+        .await
+        .expect("third hop query ok")
         .expect("ceo hydrated");
     assert_eq!(ceo.name, "ceo");
     // Bottom of the chain — ceo.manager is the column-NULL case.
@@ -160,31 +160,13 @@ async fn nested_select_related_batches_queries_per_hop_not_per_row() {
     let by_title: std::collections::HashMap<&str, &Post> =
         posts.iter().map(|p| (p.title.as_str(), p)).collect();
 
-    let first_mgr_name = by_title["first"]
-        .author
-        .resolved()
-        .unwrap()
-        .manager
-        .as_ref()
-        .unwrap()
-        .resolved()
-        .unwrap()
-        .name
-        .as_str();
-    assert_eq!(first_mgr_name, "ceo");
+    let first_author = by_title["first"].author().await.unwrap();
+    let first_mgr = first_author.manager().get_opt().await.unwrap().unwrap();
+    assert_eq!(first_mgr.name, "ceo");
 
-    let third_mgr_name = by_title["third"]
-        .author
-        .resolved()
-        .unwrap()
-        .manager
-        .as_ref()
-        .unwrap()
-        .resolved()
-        .unwrap()
-        .name
-        .as_str();
-    assert_eq!(third_mgr_name, "alice");
+    let third_author = by_title["third"].author().await.unwrap();
+    let third_mgr = third_author.manager().get_opt().await.unwrap().unwrap();
+    assert_eq!(third_mgr.name, "alice");
 }
 
 #[tokio::test]
@@ -206,7 +188,7 @@ async fn nested_path_with_null_middle_hop_does_not_panic() {
         .await
         .expect("fetch must not panic on null middle hop");
     assert_eq!(posts.len(), 1);
-    let ceo = posts[0].author.resolved().expect("author hydrated");
+    let ceo = posts[0].author().await.expect("author hydrated");
     assert_eq!(ceo.name, "ceo");
     // ceo.manager column is NULL → field is None.
     assert!(ceo.manager.is_none());

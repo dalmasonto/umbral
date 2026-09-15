@@ -1934,7 +1934,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                             decoded.push(c);
                         }
                     }
-                    self.#field_ident.set_resolved(decoded);
+                    self.#field_ident.__set_resolved(decoded);
                 }
             });
             reverse_set_field_accessors.push((field_ident.clone(), inner.clone(), fk_col.clone()));
@@ -1977,11 +1977,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                             ::umbral::_serde_json::from_value::<#inner>(v).ok(),
                         ::core::option::Option::None => ::core::option::Option::None,
                     };
-                    // Parent-side OneToOne: `set_resolved_opt` accepts
+                    // Parent-side OneToOne: `__set_resolved_opt` accepts
                     // None to mean "loaded, no matching row". The
-                    // `set_resolved(C)` variant (used by child-side
+                    // `__set_resolved(C)` variant (used by child-side
                     // FK-style hydration) would lose that bit.
-                    self.#field_ident.set_resolved_opt(decoded);
+                    self.#field_ident.__set_resolved_opt(decoded);
                 }
             });
             continue;
@@ -2555,7 +2555,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 hydrate_arms.push(quote! {
                     #field_name_str => {
                         if let Ok(resolved) = ::umbral::_serde_json::from_value::<#inner_ty>(row.clone()) {
-                            self.#field_name.set_resolved(resolved);
+                            self.#field_name.__set_resolved(resolved);
                         }
                     }
                 });
@@ -2573,7 +2573,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     #field_name_str => {
                         if let ::core::option::Option::Some(ref mut fk_mut) = self.#field_name {
                             if let Ok(resolved) = ::umbral::_serde_json::from_value::<#inner_ty>(row.clone()) {
-                                fk_mut.set_resolved(resolved);
+                                fk_mut.__set_resolved(resolved);
                             }
                         }
                     }
@@ -2758,7 +2758,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // prefer the typed helpers and never touch the string.
     // Gap 19: per-M2M-field arm for `set_m2m_resolved_json`. For
     // `pub tags: M2M<Tag>` on this model, emit
-    // `"tags" => { ... self.tags.set_resolved(...) }`.
+    // `"tags" => { ... self.tags.__set_resolved(...) }`.
     let m2m_resolved_arms: Vec<TokenStream2> = m2m_field_idents
         .iter()
         .zip(m2m_field_children.iter())
@@ -2770,7 +2770,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                         .into_iter()
                         .filter_map(|r| ::umbral::_serde_json::from_value::<#child_ty>(r).ok())
                         .collect();
-                    self.#ident.set_resolved(parsed);
+                    self.#ident.__set_resolved(parsed);
                 }
             }
         })

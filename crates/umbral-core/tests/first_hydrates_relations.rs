@@ -71,9 +71,10 @@ async fn first_hydrates_prefetch_related() {
         .expect("first")
         .expect("an author");
     let books = ada
-        .books
-        .resolved()
-        .expect("prefetch_related hydrated by first() (was None)");
+        .books()
+        .fetch()
+        .await
+        .expect("prefetch_related hydrated by first() (was empty)");
     assert_eq!(books.len(), 2, "Ada has 2 books");
 }
 
@@ -86,7 +87,7 @@ async fn first_hydrates_select_related() {
         .await
         .expect("first")
         .expect("a book");
-    assert_eq!(book.author.resolved().expect("select_related").name, "Ada");
+    assert_eq!(book.author().await.expect("select_related").name, "Ada");
 }
 
 #[tokio::test]
@@ -99,8 +100,8 @@ async fn first_hydrates_join_related() {
         .expect("first")
         .expect("a book");
     assert_eq!(
-        book.author
-            .resolved()
+        book.author()
+            .await
             .expect("join_related hydrated by first() (was unresolved)")
             .name,
         "Ada"

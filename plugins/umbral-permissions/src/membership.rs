@@ -30,8 +30,8 @@
 //! actually existed; just routed through the visible junction tables.
 
 use crate::models::{
-    Group, ObjectPermission, Permission, UserGroup, UserPermission, object_permission, user_group,
-    user_permission,
+    Group, ObjectPermission, Permission, UserGroup, UserGroupRelations, UserPermission,
+    UserPermissionRelations, object_permission, user_group, user_permission,
 };
 use crate::perm::PermError;
 
@@ -116,10 +116,16 @@ pub async fn groups_for_user(user_id: &str) -> Result<Vec<Group>, PermError> {
         .select_related("group_id")
         .fetch()
         .await?;
-    Ok(memberships
-        .into_iter()
-        .filter_map(|ug| ug.group_id.resolved().cloned())
-        .collect())
+    let mut groups = Vec::with_capacity(memberships.len());
+    for ug in memberships {
+        // `select_related("group_id")` hydrated the cache above, so this
+        // is served with zero further queries; `get_opt()` mirrors the
+        // old `.resolved()` skip-if-missing behavior for a dangling FK.
+        if let Some(group) = ug.group_id().get_opt().await? {
+            groups.push(group);
+        }
+    }
+    Ok(groups)
 }
 
 /// Lightweight check: is `user_id` a member of the group with the
@@ -184,10 +190,16 @@ pub async fn direct_permissions_for_user(user_id: &str) -> Result<Vec<Permission
         .select_related("permission_id")
         .fetch()
         .await?;
-    Ok(grants
-        .into_iter()
-        .filter_map(|up| up.permission_id.resolved().cloned())
-        .collect())
+    let mut perms = Vec::with_capacity(grants.len());
+    for up in grants {
+        // `select_related("permission_id")` hydrated the cache above, so
+        // this is served with zero further queries; `get_opt()` mirrors
+        // the old `.resolved()` skip-if-missing behavior for a dangling FK.
+        if let Some(perm) = up.permission_id().get_opt().await? {
+            perms.push(perm);
+        }
+    }
+    Ok(perms)
 }
 
 /// Lightweight check: does `user_id` hold `codename` as a direct

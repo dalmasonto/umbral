@@ -215,8 +215,8 @@ async fn select_related_dedups_shared_fk_target_across_parents() {
     let by = by_title(&posts);
     let alpha = by.get("alpha").expect("alpha");
     let beta = by.get("beta").expect("beta");
-    let alpha_author = alpha.author.resolved().expect("alpha.author hydrated");
-    let beta_author = beta.author.resolved().expect("beta.author hydrated");
+    let alpha_author = alpha.author().await.expect("alpha.author hydrated");
+    let beta_author = beta.author().await.expect("beta.author hydrated");
     assert_eq!(alpha_author.id, beta_author.id, "same author id");
     assert_eq!(alpha_author.name, beta_author.name, "same author name");
     assert_eq!(alpha_author.name, "alice");
@@ -243,15 +243,15 @@ async fn nested_select_related_hydrates_full_chain_for_each_parent() {
     let by = by_title(&posts);
     for (label, p) in &[("alpha", by["alpha"]), ("beta", by["beta"])] {
         let alice = p
-            .author
-            .resolved()
-            .unwrap_or_else(|| panic!("{label}.author not hydrated"));
+            .author()
+            .await
+            .unwrap_or_else(|_| panic!("{label}.author not hydrated"));
         assert_eq!(alice.name, "alice");
         let mgr = alice
-            .manager
-            .as_ref()
-            .unwrap_or_else(|| panic!("{label}.author.manager wrapper missing"))
-            .resolved()
+            .manager()
+            .get_opt()
+            .await
+            .unwrap_or_else(|_| panic!("{label}.author.manager query failed"))
             .unwrap_or_else(|| panic!("{label}.author.manager.resolved missing"));
         assert_eq!(
             mgr.name, "ceo",
@@ -276,27 +276,24 @@ async fn reverse_set_no_cross_parent_contamination() {
         .expect("fetch");
     let by = by_title(&posts);
 
-    let alpha_bodies: Vec<&str> = by["alpha"]
-        .comment_set
-        .resolved()
-        .expect("alpha hydrated")
-        .iter()
-        .map(|c| c.body.as_str())
-        .collect();
-    let beta_bodies: Vec<&str> = by["beta"]
-        .comment_set
-        .resolved()
-        .expect("beta hydrated")
-        .iter()
-        .map(|c| c.body.as_str())
-        .collect();
-    let gamma_bodies: Vec<&str> = by["gamma"]
-        .comment_set
-        .resolved()
-        .expect("gamma hydrated (empty)")
-        .iter()
-        .map(|c| c.body.as_str())
-        .collect();
+    let alpha_comments = by["alpha"]
+        .comment_set()
+        .fetch()
+        .await
+        .expect("alpha hydrated");
+    let alpha_bodies: Vec<&str> = alpha_comments.iter().map(|c| c.body.as_str()).collect();
+    let beta_comments = by["beta"]
+        .comment_set()
+        .fetch()
+        .await
+        .expect("beta hydrated");
+    let beta_bodies: Vec<&str> = beta_comments.iter().map(|c| c.body.as_str()).collect();
+    let gamma_comments = by["gamma"]
+        .comment_set()
+        .fetch()
+        .await
+        .expect("gamma hydrated (empty)");
+    let gamma_bodies: Vec<&str> = gamma_comments.iter().map(|c| c.body.as_str()).collect();
 
     // Each post gets its expected count.
     assert_eq!(alpha_bodies.len(), 2, "alpha got 2 comments");
@@ -337,8 +334,16 @@ async fn multiple_reverse_set_fields_populate_independently() {
     let by = by_title(&posts);
     let alpha = by["alpha"];
 
-    let comments = alpha.comment_set.resolved().expect("comment_set hydrated");
-    let reviews = alpha.review_set.resolved().expect("review_set hydrated");
+    let comments = alpha
+        .comment_set()
+        .fetch()
+        .await
+        .expect("comment_set hydrated");
+    let reviews = alpha
+        .review_set()
+        .fetch()
+        .await
+        .expect("review_set hydrated");
 
     assert_eq!(comments.len(), 2, "comments on alpha");
     assert_eq!(reviews.len(), 2, "reviews on alpha");
@@ -375,13 +380,8 @@ async fn mixed_m2m_and_reverse_set_prefetch_in_one_query() {
     let by = by_title(&posts);
     let alpha = by["alpha"];
 
-    let tag_names: Vec<&str> = alpha
-        .tags
-        .resolved()
-        .expect("tags hydrated")
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
+    let alpha_tags = alpha.tags().fetch().await.expect("tags hydrated");
+    let tag_names: Vec<&str> = alpha_tags.iter().map(|t| t.name.as_str()).collect();
     assert!(
         tag_names.contains(&"rust"),
         "alpha tagged rust: {tag_names:?}"
@@ -393,8 +393,9 @@ async fn mixed_m2m_and_reverse_set_prefetch_in_one_query() {
     assert_eq!(tag_names.len(), 2);
 
     let comment_count = alpha
-        .comment_set
-        .resolved()
+        .comment_set()
+        .fetch()
+        .await
         .expect("comment_set hydrated")
         .len();
     assert_eq!(comment_count, 2);
@@ -562,10 +563,22 @@ async fn manager_select_related_actually_hydrates() {
         .collect();
     assert!(!our_posts.is_empty(), "should see our seeded posts");
     for p in our_posts {
-        assert!(
-            p.author.resolved().is_some(),
-            "Manager forwarder should hydrate just like QuerySet: {} unresolved",
-            p.title
+        // The zero-query cache-hit proof for `select_related` lives in
+        // `select_related.rs` / `select_related_deep.rs` / `query_counts.rs`
+        // (they hold the query-lock this shared-boot file's concurrent
+        // tests don't, so a counter here would be flaky). This test's own
+        // point — "the Manager forwarder didn't forget to forward" — is
+        // proven by the accessor actually returning the RIGHT author, not
+        // merely succeeding (a broken forwarder that silently fell back to
+        // a real per-row query would also "succeed" here).
+        let author = p
+            .author()
+            .await
+            .unwrap_or_else(|_| panic!("Manager forwarder should hydrate: {} unresolved", p.title));
+        assert_eq!(
+            author.id,
+            p.author.id(),
+            "hydrated author must match the post's FK id"
         );
     }
 }

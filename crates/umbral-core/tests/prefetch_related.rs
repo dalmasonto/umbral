@@ -120,8 +120,9 @@ async fn prefetch_related_populates_resolved_on_every_parent() {
         .find(|g| g.id == g1.id)
         .expect("g1 in results");
     let g1_tags = g1_loaded
-        .tags
-        .resolved()
+        .tags()
+        .fetch()
+        .await
         .expect("g1 tags resolved by prefetch");
     let mut g1_labels: Vec<&str> = g1_tags.iter().map(|t| t.label.as_str()).collect();
     g1_labels.sort();
@@ -132,15 +133,16 @@ async fn prefetch_related_populates_resolved_on_every_parent() {
         .find(|g| g.id == g2.id)
         .expect("g2 in results");
     let g2_tags = g2_loaded
-        .tags
-        .resolved()
+        .tags()
+        .fetch()
+        .await
         .expect("g2 tags resolved by prefetch");
     let g2_labels: Vec<&str> = g2_tags.iter().map(|t| t.label.as_str()).collect();
     assert_eq!(g2_labels, vec!["t3"]);
 }
 
 #[tokio::test]
-async fn prefetch_related_without_call_leaves_resolved_empty() {
+async fn prefetch_related_without_call_still_queries_via_accessor() {
     boot().await;
     let g = fresh_group("g-no-prefetch").await;
     let t = fresh_tag("plain").await;
@@ -152,9 +154,12 @@ async fn prefetch_related_without_call_leaves_resolved_empty() {
         .await
         .expect("plain fetch");
     let loaded = &groups[0];
-    assert!(
-        loaded.tags.resolved().is_none(),
-        "without prefetch_related, M2M slot stays unresolved"
+    // Without prefetch_related the cache is empty, so the accessor must
+    // fall back to a real query — and still return the right tag.
+    let tags = loaded.tags().fetch().await.expect("un-cached fetch");
+    assert_eq!(
+        tags.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(),
+        vec!["plain"]
     );
 }
 
@@ -170,6 +175,10 @@ async fn prefetch_related_with_no_matching_children_yields_empty_vec() {
         .await
         .expect("prefetch fetch");
     let loaded = &groups[0];
-    let tags = loaded.tags.resolved().expect("resolved even when empty");
+    let tags = loaded
+        .tags()
+        .fetch()
+        .await
+        .expect("resolved even when empty");
     assert!(tags.is_empty());
 }

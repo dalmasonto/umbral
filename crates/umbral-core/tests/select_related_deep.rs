@@ -217,10 +217,6 @@ async fn accessor_without_select_related_still_resolves_via_query() {
         .get()
         .await
         .expect("get without select_related");
-    assert!(
-        post.author.resolved().is_none(),
-        "sanity: cache is empty without select_related"
-    );
 
     reset();
     let author = post

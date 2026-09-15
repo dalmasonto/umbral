@@ -84,8 +84,8 @@ async fn join_related_resolves_string_pk_fk() {
         .expect("join_related fetch");
     assert_eq!(posts.len(), 1);
     let author = posts[0]
-        .author
-        .resolved()
+        .author()
+        .await
         .expect("join_related resolved the String-PK FK (not a left-join miss)");
     assert_eq!(author.name, "Ada");
     assert_eq!(author.handle, "ada");

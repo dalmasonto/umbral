@@ -123,29 +123,30 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         }
     }
 
-    /// Read the cached set when `prefetch_related` populated it.
-    pub fn resolved(&self) -> Option<&[T]> {
-        self.resolved.as_deref()
-    }
-
-    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
-    /// does. `#[derive(Model)]`'s generated forward-M2M accessor
-    /// (`blog.categories()`) calls THIS, not [`Self::resolved`]: the accessor
-    /// expands in the CONSUMER crate, and a later task (heavy-relations Plan
-    /// C, Task 4) demotes the ergonomic `resolved()` to `pub(crate)` once
-    /// it's no longer the public read path. `__resolved_many` stays `pub`
-    /// (kept out of docs and autocomplete via `#[doc(hidden)]` only) so the
-    /// generated call site keeps compiling across that removal. Named
-    /// `__resolved_many` (not `__resolved`) to mirror the to-many shape —
-    /// see `ReverseSet::__resolved_many` for the reverse-FK sibling.
+    /// Codegen-facing cache reader — the cached set when `prefetch_related`
+    /// populated it. `#[derive(Model)]`'s generated forward-M2M accessor
+    /// (`blog.categories()`) calls THIS to short-circuit to the cache before
+    /// issuing a query. Not a human-facing API — the awaited `.fetch()` on
+    /// the generated accessor is the single public read path
+    /// (heavy-relations Plan C, Task 4 removed the ergonomic `resolved()`
+    /// getter this used to be). `pub` (kept out of docs and autocomplete
+    /// via `#[doc(hidden)]` only) because the accessor expands in the
+    /// CONSUMER crate. Named `__resolved_many` (not `__resolved`) to mirror
+    /// the to-many shape — see `ReverseSet::__resolved_many` for the
+    /// reverse-FK sibling.
     #[doc(hidden)]
     pub fn __resolved_many(&self) -> Option<&[T]> {
         self.resolved.as_deref()
     }
 
-    /// Attach eagerly-loaded rows. Called internally by the
-    /// `prefetch_related` machinery.
-    pub fn set_resolved(&mut self, rows: Vec<T>) {
+    /// Codegen-facing cache writer. Called by `#[derive(Model)]`'s
+    /// generated `HydrateRelated` impl (`set_m2m_resolved_json`) after
+    /// `prefetch_related` groups the batched child rows — that impl expands
+    /// in the CONSUMER crate, so this needs a public (doc-hidden) entry
+    /// point the same way [`Self::__resolved_many`] does for reads. Not a
+    /// human-facing API.
+    #[doc(hidden)]
+    pub fn __set_resolved(&mut self, rows: Vec<T>) {
         self.resolved = Some(rows);
     }
 

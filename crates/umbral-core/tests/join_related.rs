@@ -136,7 +136,7 @@ async fn join_related_hydrates_foreign_key_resolved_slot() {
     assert_eq!(products.len(), 1);
     let p = &products[0];
     // alpha.category points at Coffee(id=1).
-    let cat = p.category.resolved().expect("category hydrated");
+    let cat = p.category().await.expect("category hydrated");
     assert_eq!(cat.id, 1);
     assert_eq!(cat.name, "Coffee");
 }
@@ -178,12 +178,12 @@ async fn join_related_many_hydrates_two_fks_in_one_query() {
     // gamma → category=Coffee(1), brand=Coffee(1) (same id, both FKs
     // join the same row of the related table — confirms each
     // aliased prefix decodes independently).
-    assert_eq!(p.category.resolved().expect("cat").name, "Coffee");
+    assert_eq!(p.category().await.expect("cat").name, "Coffee");
     let brand_inner = p
-        .brand
-        .as_ref()
-        .expect("brand wrapper")
-        .resolved()
+        .brand()
+        .get_opt()
+        .await
+        .expect("brand query ok")
         .expect("brand resolved");
     assert_eq!(brand_inner.name, "Coffee");
 }
@@ -310,7 +310,7 @@ async fn join_related_composes_with_filter_and_order_by() {
     assert_eq!(products[1].name, "gamma");
     // Both should have category hydrated.
     for p in &products {
-        let cat = p.category.resolved().expect("hydrated");
+        let cat = p.category().await.expect("hydrated");
         assert_eq!(cat.name, "Coffee");
     }
 }

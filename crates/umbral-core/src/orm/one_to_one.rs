@@ -4,10 +4,10 @@
 //! reverse cardinality is "at most one" (the child's FK column
 //! carries a `UNIQUE` constraint — the
 //! `#[umbral(unique)] pub user: ForeignKey<User>` idiom that
-//! `migrate.rs:3263` emits as `UNIQUE` inline). Returns
-//! `Option<&C>` from `resolved()` rather than `Option<&[C]>`, so
-//! callers (and templates) can write `user.profile.avatar`
-//! directly without `.first()` gymnastics.
+//! `migrate.rs:3263` emits as `UNIQUE` inline). The generated
+//! accessor returns `Option<C>` (via `.get_opt().await?`) rather
+//! than `Option<&[C]>`, so callers (and templates) can write
+//! `user.profile.avatar` directly without `.first()` gymnastics.
 //!
 //! Zero-config — no `#[umbral(one_to_one = "...")]` attribute is
 //! needed. The framework discovers the back-link at runtime by
@@ -42,7 +42,7 @@
 //!     .prefetch_related("profile")
 //!     .get(user::ID.eq(1))
 //!     .await?;
-//! if let Some(profile) = user.profile.resolved() {
+//! if let Some(profile) = user.profile().get_opt().await? {
 //!     println!("{}", profile.avatar);
 //! }
 //! ```
@@ -171,21 +171,16 @@ impl<C: Model> OneToOne<C> {
             .expect("OneToOne::id called on an unset slot — construct with OneToOne::new(id)")
     }
 
-    /// Borrow the resolved child. `None` means either prefetch
-    /// wasn't called OR the prefetch found no matching child. Use
-    /// [`Self::is_loaded`] to distinguish the two cases.
-    pub fn resolved(&self) -> Option<&C> {
-        self.resolved.as_deref()
-    }
-
-    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
-    /// does. `#[derive(Model)]`'s generated to-one accessor (the O2O
-    /// child-side `developer.user()`) calls THIS, not [`Self::resolved`]:
-    /// the accessor expands in the CONSUMER crate, and a later task
-    /// (heavy-relations Plan C, Task 4) demotes the ergonomic `resolved()`
-    /// to `pub(crate)` once it's no longer the public read path. `__resolved`
-    /// stays `pub` (kept out of docs/autocomplete via `#[doc(hidden)]` only)
-    /// so the generated call site keeps compiling across that removal.
+    /// Codegen-facing cache reader. `None` means either prefetch wasn't
+    /// called OR the prefetch found no matching child; use
+    /// [`Self::is_loaded`] to distinguish the two cases. `#[derive(Model)]`'s
+    /// generated to-one accessor (the O2O child-side `developer.user()`)
+    /// calls THIS to short-circuit to the cache before issuing a query. Not
+    /// a human-facing API — the awaited accessor is the single public read
+    /// path (heavy-relations Plan C, Task 4 removed the ergonomic
+    /// `resolved()` getter this used to be). `pub` (kept out of
+    /// docs/autocomplete via `#[doc(hidden)]` only) because the accessor
+    /// expands in the CONSUMER crate and needs a public entry point to call.
     #[doc(hidden)]
     pub fn __resolved(&self) -> Option<&C> {
         self.resolved.as_deref()
@@ -193,9 +188,9 @@ impl<C: Model> OneToOne<C> {
 
     /// Returns `true` if `.prefetch_related(...)` populated this
     /// slot (regardless of whether a matching child was found).
-    /// `false` means the slot was never loaded and `resolved()`
-    /// returning `None` does not imply "no row exists" — it could
-    /// just mean "we never asked."
+    /// `false` means the slot was never loaded and the cache reading
+    /// `None` does not imply "no row exists" — it could just mean
+    /// "we never asked."
     pub fn is_loaded(&self) -> bool {
         self.loaded
     }
@@ -215,21 +210,26 @@ impl<C: Model> OneToOne<C> {
         self.parent_pk = Some(id);
     }
 
-    /// Populate the resolved bucket from a definitely-present child
-    /// row. Mirrors [`super::ForeignKey::set_resolved`] so the
-    /// child-side `OneToOne<T>` sugar can share the same
-    /// macro-emitted hydration arm. Setting marks the slot as
-    /// loaded.
-    pub fn set_resolved(&mut self, row: C) {
+    /// Codegen-facing cache writer for the definitely-present-child case.
+    /// Mirrors [`super::ForeignKey::__set_resolved`] so a child-side
+    /// `OneToOne<T>` sugar field can share the same macro-emitted hydration
+    /// arm if it hydrates directly instead of via the FK-rewrite path.
+    /// Setting marks the slot as loaded. Doc-hidden `pub` for the same
+    /// cross-crate-codegen reason as [`Self::__resolved`].
+    #[doc(hidden)]
+    pub fn __set_resolved(&mut self, row: C) {
         self.resolved = Some(Box::new(row));
         self.loaded = true;
     }
 
-    /// Populate (or clear) the resolved bucket. Called by the
-    /// parent-side prefetch loader after running the batched IN
-    /// query. Setting `None` here is legitimate ("loaded but no
-    /// matching row"); `is_loaded()` flips to true either way.
-    pub fn set_resolved_opt(&mut self, row: Option<C>) {
+    /// Codegen-facing cache writer (or clear). Called by the parent-side
+    /// prefetch loader's macro-emitted `HydrateRelated` arm after running
+    /// the batched IN query. Setting `None` here is legitimate ("loaded but
+    /// no matching row"); `is_loaded()` flips to true either way.
+    /// Doc-hidden `pub` for the same cross-crate-codegen reason as
+    /// [`Self::__resolved`].
+    #[doc(hidden)]
+    pub fn __set_resolved_opt(&mut self, row: Option<C>) {
         self.resolved = row.map(Box::new);
         self.loaded = true;
     }

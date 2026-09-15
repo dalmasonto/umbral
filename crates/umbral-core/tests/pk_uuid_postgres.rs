@@ -92,8 +92,9 @@ async fn uuid_pk_relations_round_trip_on_postgres() {
     assert_eq!(members.len(), 2);
     for m in &members {
         let org = m
-            .org
-            .resolved()
+            .org()
+            .on_pg(&pool)
+            .await
             .expect("uuid FK resolved via select_related on Postgres");
         assert_eq!(org.name, "Acme");
         assert_eq!(org.id, org_id);
@@ -108,13 +109,13 @@ async fn uuid_pk_relations_round_trip_on_postgres() {
         .await
         .expect("reverse-FK prefetch on a uuid-PK parent");
     let acme = orgs.iter().find(|o| o.id == org_id).expect("org present");
-    let mut names: Vec<&str> = acme
-        .members
-        .resolved()
-        .expect("ReverseSet hydrated for a uuid-PK parent on Postgres")
-        .iter()
-        .map(|m| m.name.as_str())
-        .collect();
+    let acme_members = acme
+        .members()
+        .on_pg(&pool)
+        .fetch()
+        .await
+        .expect("ReverseSet hydrated for a uuid-PK parent on Postgres");
+    let mut names: Vec<&str> = acme_members.iter().map(|m| m.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["alice", "bob"]);
 

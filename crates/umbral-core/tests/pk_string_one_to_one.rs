@@ -110,15 +110,17 @@ async fn parent_side_one_to_one_hydrates_on_a_string_pk_parent() {
 
     let ada = by_handle.get("ada").expect("ada present");
     let profile = ada
-        .profile
-        .resolved()
+        .profile()
+        .get_opt()
+        .await
+        .expect("query ok")
         .expect("OneToOne hydrated for a String-PK parent");
     assert_eq!(profile.bio, "first programmer");
 
     let grace = by_handle.get("grace").expect("grace present");
     assert!(
-        grace.profile.resolved().is_none(),
-        "grace has no profile → resolved() is None"
+        grace.profile().get_opt().await.expect("query ok").is_none(),
+        "grace has no profile → accessor resolves to None"
     );
     assert!(
         grace.profile.is_loaded(),

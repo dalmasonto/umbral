@@ -4,10 +4,11 @@
 //! child's UNIQUE FK).
 //!
 //! These tests pin:
-//!   - The happy path: `.prefetch_related("profile")` populates
-//!     `user.profile.resolved()` to `Some(&Profile)`.
-//!   - The "loaded but no match" path: parent without a profile
-//!     gets `resolved() == None` AND `is_loaded() == true`.
+//!   - The happy path: `.prefetch_related("profile")` makes
+//!     `user.profile().await?` zero-query and `Ok(Profile)`.
+//!   - The "loaded but no match" path: parent without a profile makes
+//!     `user.profile().get_opt().await?` `None` AND `is_loaded() ==
+//!     true`.
 //!   - Auto FK discovery: no `#[umbral(reverse_one = "...")]` etc.
 //!     was used; the macro found the back-link via runtime
 //!     introspection of Profile's FIELDS.
@@ -110,8 +111,10 @@ async fn prefetch_related_populates_one_to_one_for_matching_parent() {
     let by = by_username(&users);
     let alice = by.get("alice").expect("alice");
     let profile = alice
-        .profile
-        .resolved()
+        .profile()
+        .get_opt()
+        .await
+        .expect("query ok")
         .expect("alice has a profile, should be resolved");
     assert_eq!(profile.avatar, "alice.png");
     assert_eq!(profile.bio, "hello from alice");
@@ -129,8 +132,8 @@ async fn one_to_one_no_match_is_loaded_but_resolved_is_none() {
     let by = by_username(&users);
     let bob = by.get("bob").expect("bob");
     assert!(
-        bob.profile.resolved().is_none(),
-        "bob has no profile → resolved() = None"
+        bob.profile().get_opt().await.expect("query ok").is_none(),
+        "bob has no profile → accessor resolves to None"
     );
     assert!(
         bob.profile.is_loaded(),
@@ -144,7 +147,6 @@ async fn without_prefetch_one_to_one_resolved_is_none_and_not_loaded() {
     boot().await;
     let users = User::objects().fetch().await.expect("fetch");
     for u in &users {
-        assert!(u.profile.resolved().is_none());
         assert!(
             !u.profile.is_loaded(),
             "no prefetch → is_loaded() stays false (lets template-rendering \
@@ -164,13 +166,43 @@ async fn one_to_one_does_not_contaminate_across_parents() {
     let by = by_username(&users);
     // Strict membership: alice's profile must NOT show up on bob
     // or carol.
-    assert!(by["alice"].profile.resolved().is_some());
-    assert!(by["bob"].profile.resolved().is_none());
-    assert!(by["carol"].profile.resolved().is_none());
+    assert!(
+        by["alice"]
+            .profile()
+            .get_opt()
+            .await
+            .expect("query ok")
+            .is_some()
+    );
+    assert!(
+        by["bob"]
+            .profile()
+            .get_opt()
+            .await
+            .expect("query ok")
+            .is_none()
+    );
+    assert!(
+        by["carol"]
+            .profile()
+            .get_opt()
+            .await
+            .expect("query ok")
+            .is_none()
+    );
 
     // And alice's avatar value is hers alone — sanity check the
     // bucket-by-pk grouping picked the right row.
-    assert_eq!(by["alice"].profile.resolved().unwrap().avatar, "alice.png");
+    assert_eq!(
+        by["alice"]
+            .profile()
+            .get_opt()
+            .await
+            .expect("query ok")
+            .unwrap()
+            .avatar,
+        "alice.png"
+    );
 }
 
 #[tokio::test]
@@ -219,8 +251,8 @@ async fn select_related_through_forward_side_works_alongside_one_to_one() {
         .expect("fetch");
     assert_eq!(profiles.len(), 1, "only alice has a profile");
     let u = profiles[0]
-        .user
-        .resolved()
+        .user()
+        .await
         .expect("user hydrated via select_related");
     assert_eq!(u.username, "alice");
 }

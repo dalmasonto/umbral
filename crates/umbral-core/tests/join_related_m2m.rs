@@ -155,7 +155,7 @@ async fn parent_with_three_tags_dedups_to_one_instance_with_three_tags() {
         "M2M JOIN must dedup parents — alpha has 3 tags but should appear once, got {alpha_count}"
     );
 
-    let tags = alpha.tags.resolved().expect("M2M slot hydrated");
+    let tags = alpha.tags().fetch().await.expect("M2M slot hydrated");
     let names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(
         tags.len(),
@@ -182,12 +182,13 @@ async fn left_join_miss_yields_empty_m2m_slot() {
     // (we want gamma in the result set) but the M2M slot is an
     // empty Vec rather than None.
     let tags = gamma
-        .tags
-        .resolved()
+        .tags()
+        .fetch()
+        .await
         .expect("M2M slot must be initialised even on LEFT JOIN miss");
     assert!(
         tags.is_empty(),
-        "gamma has no tags → resolved() = Some(&[]), got {} tags",
+        "gamma has no tags → accessor resolves to [], got {} tags",
         tags.len()
     );
 }
@@ -213,10 +214,10 @@ async fn m2m_join_composes_with_fk_join() {
     let by = by_title(&posts);
     let alpha = by.get("alpha").expect("alpha");
     // FK join hydrated.
-    let cat = alpha.category.resolved().expect("FK hydrated");
+    let cat = alpha.category().await.expect("FK hydrated");
     assert_eq!(cat.name, "tech");
     // M2M slot populated.
-    assert_eq!(alpha.tags.resolved().expect("M2M hydrated").len(), 3);
+    assert_eq!(alpha.tags().fetch().await.expect("M2M hydrated").len(), 3);
 }
 
 #[tokio::test]
@@ -229,27 +230,12 @@ async fn each_parent_gets_only_its_own_tags() {
         .expect("fetch");
     let by = by_title(&posts);
 
-    let alpha_tags: Vec<&str> = by["alpha"]
-        .tags
-        .resolved()
-        .unwrap()
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
-    let beta_tags: Vec<&str> = by["beta"]
-        .tags
-        .resolved()
-        .unwrap()
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
-    let gamma_tags: Vec<&str> = by["gamma"]
-        .tags
-        .resolved()
-        .unwrap()
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
+    let alpha_tags_v = by["alpha"].tags().fetch().await.unwrap();
+    let alpha_tags: Vec<&str> = alpha_tags_v.iter().map(|t| t.name.as_str()).collect();
+    let beta_tags_v = by["beta"].tags().fetch().await.unwrap();
+    let beta_tags: Vec<&str> = beta_tags_v.iter().map(|t| t.name.as_str()).collect();
+    let gamma_tags_v = by["gamma"].tags().fetch().await.unwrap();
+    let gamma_tags: Vec<&str> = gamma_tags_v.iter().map(|t| t.name.as_str()).collect();
 
     assert_eq!(alpha_tags.len(), 3);
     assert_eq!(beta_tags, vec!["rust"]);
@@ -289,7 +275,12 @@ async fn inner_join_related_m2m_drops_a_tagless_parent() {
     let alpha_count = posts.iter().filter(|p| p.title == "alpha").count();
     assert_eq!(alpha_count, 1, "alpha still dedups to one row under INNER");
     assert_eq!(
-        by["alpha"].tags.resolved().expect("M2M hydrated").len(),
+        by["alpha"]
+            .tags()
+            .fetch()
+            .await
+            .expect("M2M hydrated")
+            .len(),
         3,
         "the surviving parent still carries all its tags"
     );
@@ -301,14 +292,15 @@ async fn empty_join_related_keeps_pre_fix_path_unchanged() {
     // Sanity: no join_related → no JOIN emitted, no dedup. Three
     // posts come back, one instance each. Verifies the new dedup
     // path doesn't affect the byte-for-byte unchanged FK-free path.
+    let sql = Post::objects().all().to_sql();
+    assert!(
+        !sql.contains("jrm2m_post_tags"),
+        "no join_related → no M2M junction JOIN emitted: {sql}"
+    );
     let posts = Post::objects().fetch().await.expect("fetch");
     let our: Vec<&Post> = posts
         .iter()
         .filter(|p| matches!(p.title.as_str(), "alpha" | "beta" | "gamma"))
         .collect();
     assert_eq!(our.len(), 3);
-    // M2M slots are None because nothing was hydrated.
-    for p in our {
-        assert!(p.tags.resolved().is_none(), "no prefetch → unhydrated");
-    }
 }

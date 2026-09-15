@@ -226,15 +226,15 @@ async fn nested_inner_join_hydrates_three_level_graph_in_one_query() {
         .expect("nested fetch");
     assert_eq!(comments.len(), 1, "exactly one matched comment");
     let plugin = comments[0]
-        .plugin
-        .as_ref()
-        .expect("plugin wrapper")
-        .resolved()
+        .plugin()
+        .get_opt()
+        .await
+        .expect("query ok")
         .expect("plugin hydrated");
     assert_eq!(plugin.name, "Cache");
     let author = plugin
-        .author
-        .resolved()
+        .author()
+        .await
         .expect("author hydrated from same query");
     assert_eq!(
         author.name, "Ada",
@@ -294,11 +294,11 @@ async fn m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents() {
     // Parent count stable: the junction join didn't drop or duplicate.
     assert_eq!(posts.len(), before, "parent count stable through M2M hop");
     let post = posts.iter().find(|p| p.title == "hello").expect("post");
-    let tags = post.tags.resolved().expect("tags hydrated");
+    let tags = post.tags().fetch().await.expect("tags hydrated");
     assert_eq!(tags.len(), 1, "one tag");
     let cat = tags[0]
-        .category
-        .resolved()
+        .category()
+        .await
         .expect("tag.category hydrated through the chain");
     assert_eq!(cat.name, "news");
 }

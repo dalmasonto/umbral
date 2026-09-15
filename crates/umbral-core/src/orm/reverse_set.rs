@@ -35,7 +35,7 @@
 //!     .fetch()
 //!     .await?;
 //! for post in &posts {
-//!     for comment in post.comment_set.resolved().unwrap() {
+//!     for comment in post.comment_set().fetch().await? {
 //!         println!("{}: {}", post.title, comment.body);
 //!     }
 //! }
@@ -97,25 +97,20 @@ impl<C: Model> ReverseSet<C> {
         }
     }
 
-    /// Borrow the resolved children as a slice. `None` means
-    /// prefetch wasn't called for this field; the framework never
-    /// silently loads children on first access (no lazy loading by
-    /// design — Rust has no property accessors to intercept and
-    /// hidden round-trips are surprising).
-    pub fn resolved(&self) -> Option<&[C]> {
-        self.resolved.as_deref()
-    }
-
-    /// Codegen-facing cache reader — returns the same thing [`Self::resolved`]
-    /// does. `#[derive(Model)]`'s generated reverse-FK accessor
-    /// (`post.comment_set()`) calls THIS, not [`Self::resolved`]: the
-    /// accessor expands in the CONSUMER crate, and a later task
-    /// (heavy-relations Plan C, Task 4) demotes the ergonomic `resolved()`
-    /// to `pub(crate)` once it's no longer the public read path.
-    /// `__resolved_many` stays `pub` (kept out of docs/autocomplete via
-    /// `#[doc(hidden)]` only) so the generated call site keeps compiling
-    /// across that removal. Named to mirror `M2M::__resolved_many` — the
-    /// forward-M2M sibling of this to-many cache read.
+    /// Codegen-facing cache reader — the resolved children as a slice.
+    /// `None` means prefetch wasn't called for this field; the framework
+    /// never silently loads children on first access (no lazy loading by
+    /// design — Rust has no property accessors to intercept and hidden
+    /// round-trips are surprising). `#[derive(Model)]`'s generated
+    /// reverse-FK accessor (`post.comment_set()`) calls THIS to
+    /// short-circuit to the cache before issuing a query. Not a
+    /// human-facing API — the awaited `.fetch()` on the generated accessor
+    /// is the single public read path (heavy-relations Plan C, Task 4
+    /// removed the ergonomic `resolved()` getter this used to be). `pub`
+    /// (kept out of docs/autocomplete via `#[doc(hidden)]` only) because
+    /// the accessor expands in the CONSUMER crate. Named to mirror
+    /// `M2M::__resolved_many` — the forward-M2M sibling of this to-many
+    /// cache read.
     #[doc(hidden)]
     pub fn __resolved_many(&self) -> Option<&[C]> {
         self.resolved.as_deref()
@@ -148,10 +143,13 @@ impl<C: Model> ReverseSet<C> {
         }
     }
 
-    /// Populate the resolved bucket. Called once by the prefetch
-    /// loader after grouping the batched child rows by `fk_column`
-    /// value.
-    pub fn set_resolved(&mut self, rows: Vec<C>) {
+    /// Codegen-facing cache writer. Called by `#[derive(Model)]`'s
+    /// generated `HydrateRelated` impl after grouping the batched child
+    /// rows by `fk_column` value — that impl expands in the CONSUMER
+    /// crate, so this needs a public (doc-hidden) entry point the same way
+    /// [`Self::__resolved_many`] does for reads. Not a human-facing API.
+    #[doc(hidden)]
+    pub fn __set_resolved(&mut self, rows: Vec<C>) {
         self.resolved = Some(rows);
     }
 }

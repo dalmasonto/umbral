@@ -396,9 +396,9 @@ pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
     // Parent PKs as JSON Values — i64 / String / Uuid all flow.
     let mut parent_pks: Vec<JsonValue> = rows.iter().filter_map(|r| r.pk_as_json()).collect();
     if parent_pks.is_empty() {
-        // Set empty resolved on every parent so `comment_set.resolved()`
-        // returns `Some(&[])` after prefetch (matches the "no children
-        // found" shape — distinct from "not loaded").
+        // Set empty resolved on every parent so `comment_set().fetch()`
+        // returns `[]` after prefetch (matches the "no children found"
+        // shape — distinct from "not loaded").
         for r in rows.iter_mut() {
             r.set_reverse_fk_resolved_json(spec.field_name, Vec::new());
         }
@@ -656,8 +656,8 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
         let mut parent_pks: Vec<JsonValue> = rows.iter().filter_map(|r| r.pk_as_json()).collect();
         if parent_pks.is_empty() {
             // Still need to set empty resolved on every parent so
-            // `tags.resolved()` returns `Some(&[])` after prefetch,
-            // matching the documented "empty Vec, not None" contract.
+            // `tags().fetch()` returns `[]` after prefetch, matching
+            // the documented "empty Vec, not None" contract.
             for r in rows.iter_mut() {
                 r.set_m2m_resolved_json(field_name.as_str(), Vec::new());
             }
@@ -792,8 +792,8 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
         }
 
         // Hand each parent its bucket. Parents without children
-        // still get an empty Vec so .resolved() returns Some(&[])
-        // consistently after prefetch.
+        // still get an empty Vec so the accessor's `.fetch()` returns
+        // `[]` consistently after prefetch.
         for row in rows.iter_mut() {
             let bucket = match row.pk_as_json() {
                 Some(pk) => buckets.remove(&crate::orm::pk_key(&pk)).unwrap_or_default(),

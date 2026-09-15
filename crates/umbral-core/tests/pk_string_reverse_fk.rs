@@ -93,8 +93,9 @@ async fn prefetch_hydrates_reverse_set_on_a_string_pk_parent() {
 
     let rust = by_slug.get("rust").expect("rust present");
     let rust_articles = rust
-        .articles
-        .resolved()
+        .articles()
+        .fetch()
+        .await
         .expect("ReverseSet hydrated for a String-PK parent");
     assert_eq!(rust_articles.len(), 2, "rust has 2 articles");
     let titles: Vec<&str> = rust_articles.iter().map(|a| a.title.as_str()).collect();
@@ -102,14 +103,15 @@ async fn prefetch_hydrates_reverse_set_on_a_string_pk_parent() {
     assert!(titles.contains(&"borrowing"));
 
     let go = by_slug.get("go").expect("go present");
-    assert_eq!(go.articles.resolved().expect("hydrated").len(), 1);
+    assert_eq!(go.articles().fetch().await.expect("hydrated").len(), 1);
 
     let zig = by_slug.get("zig").expect("zig present");
     assert!(
-        zig.articles
-            .resolved()
+        zig.articles()
+            .fetch()
+            .await
             .expect("hydrated (empty)")
             .is_empty(),
-        "zig has no children → resolved is Some(&[])"
+        "zig has no children → the accessor resolves to []"
     );
 }

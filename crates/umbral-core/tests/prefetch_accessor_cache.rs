@@ -281,11 +281,6 @@ async fn m2m_accessor_serves_prefetch_cache_zero_queries() {
         .get()
         .await
         .expect("get with prefetch_related");
-    assert_eq!(
-        blog.categories.resolved().map(|r| r.len()),
-        Some(3),
-        "sanity: prefetch populated the M2M cache with all 3 categories"
-    );
 
     reset().await;
     let fetched = blog.categories().fetch().await.expect("cache-served fetch");
@@ -374,11 +369,6 @@ async fn reverse_fk_set_serves_prefetch_cache() {
         .get()
         .await
         .expect("get with prefetch_related");
-    assert_eq!(
-        post.comment_set.resolved().map(|r| r.len()),
-        Some(2),
-        "sanity: prefetch populated the ReverseSet cache with both comments"
-    );
 
     reset().await;
     let fetched = post
@@ -416,10 +406,6 @@ async fn accessor_without_prefetch_still_queries() {
         .get()
         .await
         .expect("get without prefetch_related");
-    assert!(
-        blog.categories.resolved().is_none(),
-        "sanity: cache is empty without prefetch_related"
-    );
 
     reset().await;
     let fetched = blog.categories().fetch().await.expect("un-cached fetch");
@@ -434,7 +420,6 @@ async fn accessor_without_prefetch_still_queries() {
         .get()
         .await
         .expect("get without prefetch_related");
-    assert!(post.comment_set.resolved().is_none());
 
     reset().await;
     let fetched = post.comment_set().fetch().await.expect("un-cached fetch");
@@ -467,11 +452,6 @@ async fn ordered_target_never_serves_prefetch_cache() {
         .get()
         .await
         .expect("get with prefetch_related");
-    assert_eq!(
-        post.ordered_comment_set.resolved().map(|r| r.len()),
-        Some(2),
-        "sanity: prefetch populated the ordered ReverseSet cache with both rows"
-    );
 
     reset().await;
     let fetched = post

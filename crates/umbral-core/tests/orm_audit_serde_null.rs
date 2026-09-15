@@ -162,8 +162,12 @@ fn foreign_key_deserialize_from_scalar_pk_stays_unresolved() {
     let json = serde_json::json!(42);
     let fk: ForeignKey<Owner> = serde_json::from_value(json).expect("scalar PK must deserialize");
     assert_eq!(fk.id(), 42);
+    // Glass-box: this is a bare `ForeignKey<Owner>` with no parent model in
+    // scope, so there is no generated accessor to call — `__resolved()` is
+    // the doc-hidden codegen-facing cache reader, the only way to inspect
+    // the internal cache slot Deserialize just populated (or didn't).
     assert!(
-        fk.resolved().is_none(),
+        fk.__resolved().is_none(),
         "scalar input → unresolved (resolved slot empty)"
     );
 }
@@ -181,8 +185,10 @@ fn foreign_key_deserialize_from_object_populates_resolved() {
     });
     let fk: ForeignKey<Owner> = serde_json::from_value(json).expect("object must deserialize");
     assert_eq!(fk.id(), 7, "raw PK extracted from object");
+    // Glass-box: same reasoning as the scalar-PK test above — no parent
+    // model, so `__resolved()` is the only way to inspect the cache slot.
     let resolved = fk
-        .resolved()
+        .__resolved()
         .expect("resolved must be populated from object");
     assert_eq!(resolved.id, 7);
     assert_eq!(resolved.name, "alice");
@@ -229,11 +235,17 @@ async fn select_related_model_round_trips_through_serde_json() {
         .expect("with-owner present")
         .clone();
     // Confirm select_related actually hydrated before the round-trip.
+    // Glass-box: `__resolved()` reads the cache slot directly. Using the
+    // public accessor here would be self-defeating — if the round-trip
+    // silently LOST the cache, the accessor would just fall back to a
+    // real DB query and return the same correct `Owner`, masking exactly
+    // the regression this test exists to catch (the cache must survive
+    // the round-trip WITHOUT a query, not merely be re-derivable).
     let original_owner = original
         .owner
         .as_ref()
         .expect("owner wrapper")
-        .resolved()
+        .__resolved()
         .expect("owner resolved");
     assert_eq!(original_owner.name, "alice");
 
@@ -245,7 +257,7 @@ async fn select_related_model_round_trips_through_serde_json() {
         .owner
         .as_ref()
         .expect("owner wrapper round-tripped")
-        .resolved()
+        .__resolved()
         .expect(
             "REGRESSION: resolved relation must survive serde round-trip \
              (post-#42 ForeignKey<T>::Deserialize accepts both shapes)",
@@ -272,11 +284,15 @@ async fn unresolved_fk_serializes_as_bare_pk_not_object() {
         .find(|t| t.title == "with-owner")
         .expect("present");
     let fk = thing.owner.as_ref().expect("owner FK wrapper");
-    // Make sure we didn't accidentally hydrate.
+    // Make sure we didn't accidentally hydrate. Glass-box: `__resolved()`
+    // reads the cache directly rather than the public accessor — the
+    // accessor would fall back to a real query and still return the
+    // correct owner, which would hide an accidental-hydration regression
+    // rather than surface it.
     assert!(
-        fk.resolved().is_none(),
+        fk.__resolved().is_none(),
         "owner must be unresolved (no select_related): {:?}",
-        fk.resolved()
+        fk.__resolved()
     );
     let as_value = serde_json::to_value(fk).expect("serialize");
     assert!(
@@ -372,11 +388,17 @@ async fn select_related_decodes_null_nullable_int_on_related_as_none() {
         .iter()
         .find(|t| t.title == "with-owner")
         .expect("present");
+    // Glass-box: `__resolved()` reads the JSON-hydrated cache directly.
+    // The public accessor's fallback-to-a-real-query path decodes via
+    // plain `FromRow`, not the `sqlite_row_to_json` cascade this test
+    // guards — a fallback query would return the correct value even if
+    // the JSON-hydration bug recurred, masking the exact regression this
+    // test exists to catch.
     let owner = thing
         .owner
         .as_ref()
         .expect("owner wrapper present")
-        .resolved()
+        .__resolved()
         .expect("owner resolved by select_related");
     assert_eq!(owner.name, "alice");
     // The bug: pre-fix this came back as Some(0) because
