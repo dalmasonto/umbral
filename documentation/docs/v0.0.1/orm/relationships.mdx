@@ -8,6 +8,10 @@ tags: [orm, foreign-key, relationships, schema]
 
 A `ForeignKey<T>` field declares that one row in the current model references a row in model `T`. Umbral stores the referenced primary key as a `BIGINT` column and emits a `REFERENCES "<table>"("id")` constraint in the migration.
 
+<Callout type="warning">
+**Migration note:** the ergonomic `.resolved()` reader was removed from `ForeignKey<T>`, `OneToOne<T>`, `M2M<T>`, and `ReverseSet<T>` ahead of 1.0 (a breaking change). Read a related object through the awaited accessor instead: `post.author().await?` returns the row directly, or use `.get_opt().await?` when the relation may be absent (a nullable FK, a `OneToOne` that might have no row, a reverse-O2O). A to-many relation reads with `post.tags().fetch().await?`, returning `Vec<T>`. Both accessor shapes are served from the `select_related` / `prefetch_related` (or `join_related`) cache with zero further queries once that cache is populated, and fall back to a fresh query otherwise.
+</Callout>
+
 ## Declaring a foreign key
 
 ```rust
@@ -138,7 +142,7 @@ pub struct Profile {
 }
 ```
 
-The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbral(unique)] pub user: ForeignKey<AuthUser>`: same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().get_opt().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>`, symmetric with `ForeignKey<T>`.
+The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbral(unique)] pub user: ForeignKey<AuthUser>`: same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().get_opt().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) read the related row through the awaited accessor — `profile.user().await?` resolves to the `T` with zero further queries once populated — symmetric with `ForeignKey<T>`.
 
 ### Longhand spelling: `#[umbral(unique)] ForeignKey<T>`
 
@@ -174,7 +178,8 @@ let profile = Profile::objects()
     .select_related("user")
     .get(profile::USER.eq(user.id))
     .await?;
-// profile.user.resolved() is Some(&AuthUser)
+
+let user: AuthUser = profile.user().await?; // zero further queries: select_related populated it
 ```
 
 ### Reading from the parent side
@@ -209,8 +214,9 @@ let account = Account::objects()
     .get(account::ID.eq(1))
     .await?;
 
-// account.profile.resolved() is Option<&Profile>
-if let Some(profile) = account.profile.resolved() {
+// account.profile().get_opt().await? is Some(Profile) with zero further
+// queries: prefetch_related populated it.
+if let Some(profile) = account.profile().get_opt().await? {
     println!("{}", profile.avatar);
 }
 ```
@@ -225,13 +231,13 @@ serde_json::to_value(&account)["profile"]["avatar"]  // "alice.png"
 
 ### Loaded vs unloaded
 
-`OneToOne<C>::resolved()` returns `None` both when prefetch wasn't called *and* when prefetch ran but found no matching child. Use `is_loaded()` to distinguish the two:
+`account.profile().get_opt().await?` returning `None` doesn't by itself tell you *why*: prefetch might never have been called, or it ran and simply found no matching child. `OneToOne<C>::is_loaded()` still answers the "did prefetch run" question directly, read off the underlying field:
 
 ```rust
 if !account.profile.is_loaded() {
     // never called .prefetch_related("profile")
 }
-if account.profile.is_loaded() && account.profile.resolved().is_none() {
+if account.profile.is_loaded() && account.profile().get_opt().await?.is_none() {
     // prefetched, but this account has no profile row
 }
 ```
@@ -359,8 +365,9 @@ let post = Post::objects()
     .get()
     .await?;
 
-// Rust: resolved() is Some without a second query.
-let author = post.author.resolved().expect("populated by select_related");
+// Rust: the awaited accessor is served from the select_related cache,
+// zero further queries.
+let author = post.author().await?;
 println!("{}", author.username);
 
 // Template context: ctx["author"]["username"] is the username string.
@@ -379,8 +386,8 @@ let post = Post::objects()
     .get()
     .await?;
 
-println!("{}", post.author.resolved().unwrap().username);
-println!("{}", post.reviewer.resolved().unwrap().username);
+println!("{}", post.author().await?.username);
+println!("{}", post.reviewer().get_opt().await?.unwrap().username);
 ```
 
 Each named FK generates one batch query. Two FKs = two batch queries + the main query.
@@ -409,9 +416,11 @@ let posts = Post::objects()
     .fetch()
     .await?;
 
-let author  = posts[0].author.resolved().expect("hop 1");
-let manager = author.manager.as_ref().unwrap().resolved().expect("hop 2");
-let grandmgr = manager.manager.as_ref().unwrap().resolved().expect("hop 3");
+// Each accessor below is cache-served with zero further queries: the
+// chain was already populated by select_related.
+let author = posts[0].author().await?;                       // hop 1
+let manager = author.manager().get_opt().await?.expect("hop 2"); // manager is a nullable FK
+let grandmgr = manager.manager().get_opt().await?.expect("hop 3");
 ```
 
 A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simply don't load), no panic. An unknown hop name fails loudly, naming the bad field and the table it was looked up on.
@@ -469,7 +478,8 @@ let posts = Post::objects()
     .await?;
 
 for p in &posts {
-    for tag in p.tags.resolved().unwrap_or_default() {
+    // Cache-served with zero further queries: prefetch_related populated it.
+    for tag in p.tags().fetch().await? {
         println!("{}: {}", p.title, tag.name);
     }
 }
@@ -581,9 +591,9 @@ let parents = Parent::objects()
     .await?;
 
 for p in &parents {
-    // .resolved() is Some(&[Child]) after prefetch: an empty slice
-    // for a childless parent, never None.
-    for child in p.child_set.resolved().unwrap_or_default() {
+    // .child_set().fetch().await? is cache-served after prefetch: an
+    // empty vec for a childless parent, zero further queries either way.
+    for child in p.child_set().fetch().await? {
         println!("{}: {}", p.name, child.label);
     }
 }
@@ -677,15 +687,15 @@ let groups: Vec<Group> = Group::objects()
     .await?;
 
 for g in &groups {
-    // .resolved() returns Some(&[Tag]) after prefetch: even an empty
-    // slice for parents with no children, never None.
-    for tag in g.tags.resolved().unwrap_or_default() {
+    // .tags().fetch().await? is cache-served after prefetch: an empty
+    // vec for parents with no children, never a fresh query.
+    for tag in g.tags().fetch().await? {
         println!("{}: {}", g.name, tag.label);
     }
 }
 ```
 
-Without `.prefetch_related(...)`, `M2M.resolved()` stays `None` and accessing the relation would issue a per-parent fetch (the N+1 path).
+Without `.prefetch_related(...)`, `g.tags().fetch()` has no cache to serve from, so each call issues a per-parent query (the N+1 path); prefetch makes it cache-served instead.
 
 `.prefetch_related_many(&["tags", "categories"])` batches several relations at once.
 
@@ -703,8 +713,8 @@ let posts: Vec<Post> = Post::objects()
     .await?;
 
 for p in &posts {
-    // Same shape as prefetch_related: populated M2M slot.
-    for tag in p.tags.resolved().unwrap_or_default() {
+    // Same shape as prefetch_related: cache-served, zero further queries.
+    for tag in p.tags().fetch().await? {
         println!("{}: {}", p.title, tag.name);
     }
 }

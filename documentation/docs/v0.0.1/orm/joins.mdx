@@ -28,10 +28,11 @@ let comments = Comment::objects()
     .fetch()
     .await?;
 
-// comment.plugin.author.name round-trips from that single query;
-// the nested ForeignKey<T> slots are populated bottom-up.
-let plugin = comments[0].plugin.as_ref().unwrap().resolved().unwrap();
-let author = plugin.author.resolved().unwrap();
+// comment.plugin.author.name round-trips from that single query; the
+// nested hops are cache-served with zero further queries, since
+// join_related populates the same slots select_related does.
+let plugin = comments[0].plugin().get_opt().await?.unwrap(); // plugin is a nullable FK
+let author = plugin.author().await?;
 assert_eq!(author.name, "Ada");
 ```
 
@@ -57,8 +58,8 @@ let posts = Post::objects()
     .inner_join_related("tags__category")
     .fetch()
     .await?;
-let cat = posts[0].tags.resolved().unwrap()[0]
-    .category.resolved().unwrap();
+let tags = posts[0].tags().fetch().await?; // cache-served, zero further queries
+let cat = tags[0].category().await?;
 ```
 
 <Callout type="warning">
