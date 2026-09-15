@@ -60,6 +60,7 @@ use umbral::migrate::MigrateError;
 
 pub mod doctor;
 pub mod scaffold;
+pub mod scaffold_cli;
 
 /// Build the `cargo` argv for forwarding a `umbral <cmd> [args...]`
 /// invocation to the current project's binary (`cargo run -- <cmd> [args...]`).
@@ -447,6 +448,22 @@ pub async fn dispatch_with_argv(
         return Ok(());
     }
 
+    // Step 0.25: the scaffolding commands (`startproject` / `startapp` /
+    // `startplugin` / `startcommand`) are listed in the unified help (gap 66)
+    // and MUST run here too, so `cargo run -- startapp --help` renders the
+    // command's usage and `cargo run -- startapp foo` actually scaffolds —
+    // full parity with the global `umbral` binary, which shares this exact
+    // dispatch (`scaffold_cli::try_run_scaffold`). Intercepting BEFORE the
+    // `on_ready` decision below is deliberate: scaffolding writes files and
+    // must never fire plugin lifecycle hooks (which would seed rows into tables
+    // `migrate` has not created). Without this, argv fell through to the
+    // built-in clap parser, which has no scaffold subcommand, and answered
+    // `error: unknown command \`startapp\`` — the help promised a command the
+    // dispatch couldn't honour.
+    if let Some(result) = scaffold_cli::try_run_scaffold(&argv) {
+        return result;
+    }
+
     // Step 0.5: decide whether this command runs against a live application.
     // If it does, fire every plugin's `on_ready` before either dispatch layer
     // runs. If it doesn't — a schema command, an offline utility — the hooks
@@ -736,33 +753,17 @@ fn unknown_token(argv: &[std::ffi::OsString]) -> Option<String> {
 /// and the "Create a project or plugin" group `render_help` reserves for them
 /// (`umbral-core/src/cli.rs`) renders empty and its header vanishes (gap 66).
 ///
-/// This static supplies their `(name, about)` rows so the unified help lists
-/// them under that group, and so [`builtin_command_names`] reserves their names
-/// against an app/plugin command shadowing them. Dispatch stays out-of-band —
-/// this only makes help list them.
+/// This supplies their `(name, about)` rows so the unified help lists them
+/// under that group, and so [`builtin_command_names`] reserves their names
+/// against an app/plugin command shadowing them.
 ///
-/// The `about` for each is the first line of the matching `Command` variant's
-/// doc comment in `src/main.rs` (which is what clap would render as its
-/// `about`). Keep the two in sync.
+/// The rows are read off the shared [`scaffold_cli::ScaffoldCli`] parser (the
+/// one source of truth for the scaffold commands — the same parser both
+/// [`dispatch_with_argv`] and the global `umbral` binary dispatch through), so
+/// the listed `about` is always exactly the usage clap renders. No hand-kept
+/// copy to drift.
 pub fn scaffold_command_catalog() -> Vec<(String, Option<String>)> {
-    [
-        ("startproject", "Create a new umbral project in ./<name>/."),
-        (
-            "startapp",
-            "Deprecated alias of startplugin. Generates the same plugin crate.",
-        ),
-        (
-            "startplugin",
-            "Create a plugin crate in <project>/plugins/<name>/.",
-        ),
-        (
-            "startcommand",
-            "Create a management command (cargo run -- <name>).",
-        ),
-    ]
-    .into_iter()
-    .map(|(name, about)| (name.to_string(), Some(about.to_string())))
-    .collect()
+    scaffold_cli::command_catalog()
 }
 
 /// Build the merged `(name, about)` catalog: every built-in subcommand
