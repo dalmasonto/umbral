@@ -290,6 +290,88 @@ async fn inner_join_related_m2m_drops_a_tagless_parent() {
 }
 
 #[tokio::test]
+async fn right_join_related_m2m_keeps_far_rows_without_leaking_other_parents() {
+    boot().await;
+    // Regression for a CRITICAL bug introduced by the Task 445 refactor:
+    // `walk_joins`'s M2M hop emits TWO physical joins (parent→junction,
+    // junction→target) and, pre-fix, applied ONE join type to both. An
+    // explicit `.right_join_related("tags")` therefore made the JUNCTION
+    // join RIGHT too — which keeps junction rows for parents OUTSIDE the
+    // queried/filtered set, leaking their child rows in. The junction
+    // join must always keep the NEAR/parent side (never RIGHT); only the
+    // TARGET/far join honors an explicit RIGHT override — matching both
+    // the pre-refactor hand-rolled code and the documented contract
+    // (`documentation/docs/v0.0.1/orm/joins.mdx`: "right_join_related
+    // ... keeps every related row").
+    use sqlx::Row as _;
+
+    let qs = Post::objects()
+        .filter(post::TITLE.eq("beta"))
+        .right_join_related("tags");
+
+    // ---- SQL-shape: junction stays LEFT, target/far honors RIGHT ----
+    let sql = qs.to_sql();
+    assert!(
+        sql.contains("LEFT JOIN \"jrm2m_post_tags\""),
+        "the junction join must stay LEFT even under an explicit RIGHT \
+         override (a RIGHT junction would keep OTHER parents' junction \
+         rows): {sql}"
+    );
+    assert!(
+        sql.contains("RIGHT JOIN \"jrm2m_tag\""),
+        "the target/far join honors the caller's explicit RIGHT: {sql}"
+    );
+
+    // ---- Row-level: no leak of alpha's tags/rows into beta's query ----
+    // beta (id 2) has exactly one tag, `rust`; alpha (id 1, excluded by
+    // this query's filter) ALSO references `rust`, plus `web`/`db` which
+    // beta doesn't have. A buggy RIGHT junction join keeps every junction
+    // row regardless of parent match, so alpha's OWN junction rows leak
+    // in as extra rows with the parent side NULL — `rust` then shows up
+    // TWICE (once correctly attached to beta, once as an orphan leaked
+    // from alpha's junction row). The fix restricts the junction join to
+    // `__p` (LEFT, matching only beta), so only beta's own junction row
+    // ever participates; the RIGHT target join then adds any genuinely
+    // UNMATCHED tag (web, db) exactly once each, never a second, spurious
+    // `rust`, and never a row whose parent title is anything but `beta`.
+    let raw_rows = sqlx::query(&sql)
+        .bind("beta")
+        .fetch_all(&db::pool())
+        .await
+        .expect("raw RIGHT JOIN query executes");
+
+    let mut rust_rows = 0;
+    let mut leaked_other_parent_title: Option<String> = None;
+    let mut seen: Vec<(Option<String>, Option<String>)> = Vec::with_capacity(raw_rows.len());
+    for row in &raw_rows {
+        let title: Option<String> = row.try_get("title").expect("title column present");
+        let tag_name: Option<String> = row
+            .try_get("tags__name")
+            .expect("tags__name column present");
+        if tag_name.as_deref() == Some("rust") {
+            rust_rows += 1;
+        }
+        if let Some(t) = &title
+            && t != "beta"
+        {
+            leaked_other_parent_title = Some(t.clone());
+        }
+        seen.push((title, tag_name));
+    }
+    assert_eq!(
+        rust_rows, 1,
+        "`rust` (shared by beta AND alpha) must attach to beta exactly \
+         once — a second row means alpha's junction row leaked in via a \
+         wrongly-RIGHT junction join: {seen:?}"
+    );
+    assert!(
+        leaked_other_parent_title.is_none(),
+        "no row may carry a parent title other than the filtered `beta`, \
+         got {leaked_other_parent_title:?}: {seen:?}"
+    );
+}
+
+#[tokio::test]
 async fn empty_join_related_keeps_pre_fix_path_unchanged() {
     boot().await;
     // Sanity: no join_related → no JOIN emitted, no dedup. Three

@@ -150,8 +150,28 @@ pub(crate) fn walk_joins(
                     ))
                 })?;
                 let junction_alias = Alias::new(format!("{prefix}j{idx}"));
+                // The M2M hop is TWO physical joins, and they must NOT share
+                // one join type: the junction join keeps the NEAR (parent)
+                // side's rows — it must never be RIGHT, or the join would
+                // instead keep junction rows for parents OUTSIDE the
+                // queried/filtered set, pulling in unrelated parents' child
+                // rows (a real bug an explicit `.right_join_related` on an
+                // M2M path would otherwise hit, since a RIGHT `policy` only
+                // ever describes what the CALLER wants for the FAR/target
+                // side). `NullJoinPolicy::Inner` keeps the junction INNER (so
+                // the aggregate path's Task-3 `walk_joins(..., Inner, ...)`
+                // call stays INNER-INNER, unchanged); `LeftForNullable` and
+                // `Right` both keep the junction LEFT (a LEFT/RIGHT relation
+                // still shouldn't drop a parent for having zero junction
+                // rows — the FAR join is what decides drop-vs-keep). The
+                // FAR/target join honors `policy` (and `hop.required`) as
+                // computed in `jt` above, same as every other hop kind.
+                let junction_jt = match policy {
+                    NullJoinPolicy::Inner => JoinType::InnerJoin,
+                    NullJoinPolicy::LeftForNullable | NullJoinPolicy::Right => JoinType::LeftJoin,
+                };
                 select.join_as(
-                    jt,
+                    junction_jt,
                     crate::db::router::schema_qualified_table(junction.table),
                     junction_alias.clone(),
                     Expr::col((near_alias.clone(), Alias::new(near_pk)))
