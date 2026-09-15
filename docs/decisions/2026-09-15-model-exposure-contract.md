@@ -49,54 +49,44 @@ There is no runtime cost to centralizing facts: `FieldSpec` is `const`, and `Mod
 
 ## The v1 method surface
 
-Inherent methods on `ModelMeta`, in `orm/exposure.rs`. Raw per-field facts (`help`, `widget`, `choices`, `max_length`, …) are read directly off `Column` via `fields()`/`field(name)` and are NOT duplicated as accessors — the contract adds only *derived* views and lookups.
+Inherent methods on `ModelMeta`, in `orm/exposure.rs`. The contract adds ONLY methods that do real derivation. It deliberately does NOT wrap already-public data: `ModelMeta`'s fields are all `pub` (`name`, `table`, `display`, `str_template`, `ordering`, `search_fields`, `list_display`, `list_filter`, `readonly_fields`, `inline_edit_fields`, `m2m_relations`, `fields`), so callers read those directly (`meta.ordering`, `meta.search_fields`, …); raw per-field facts (`help`, `widget`, `choices`, `max_length`, `secret`, `private`, …) are read directly off each `Column`. Wrapping public fields in accessor methods would be redundant surface with two ways to get the same value, and `table_name()` already exists on `ModelMeta`.
 
 ```rust
 // crates/umbral-core/src/orm/exposure.rs
 impl ModelMeta {
-    // identity / display
-    pub fn model_name(&self) -> &str;             // self.name
-    pub fn table_name(&self) -> &str;             // self.table
-    pub fn display_name(&self) -> &str;           // self.display
-    pub fn str_template(&self) -> Option<&str>;   // self.str_template
-    pub fn display_field(&self) -> Option<&Column>; // first field with is_string_repr
-
-    // fields
-    pub fn fields(&self) -> &[Column];            // self.fields
+    /// Look up a field by name (linear scan over `self.fields`).
     pub fn field(&self, name: &str) -> Option<&Column>;
 
-    // read visibility — facts + one convenience; policy composes on top
-    pub fn is_secret(&self, f: &Column) -> bool;  // f.secret (absolute: never serialized)
-    pub fn is_private(&self, f: &Column) -> bool; // f.private (strip unless caller unlocks)
-    pub fn public_fields(&self) -> impl Iterator<Item = &Column>;          // !secret && !private
+    /// The display column — the first field flagged `is_string_repr`, if any.
+    pub fn display_field(&self) -> Option<&Column>;
+
+    /// Fields safe to serialize with no unlocks: not `secret` and not `private`.
+    pub fn public_fields(&self) -> impl Iterator<Item = &Column>;
+
+    /// Serializable set, optionally adding back `private` fields for a caller
+    /// that has authorized it: `!secret && (!private || allow_private)`.
+    /// `secret` is never included either way.
     pub fn serializable_fields(&self, allow_private: bool) -> impl Iterator<Item = &Column>;
-        // !secret && (!private || allow_private)
 
-    // write surface — facts + one convenience
-    pub fn is_privileged(&self, f: &Column) -> bool;   // f.privileged (mass-assignment guard)
-    pub fn is_server_managed(&self, f: &Column) -> bool; // pk || any auto_* (server sets it)
+    /// True when the server populates this field, never the client:
+    /// the primary key, or any `auto_*` (`auto_now`, `auto_now_add`,
+    /// `auto_user`, `auto_user_add`, `auto_uuid`).
+    pub fn is_server_managed(&self, f: &Column) -> bool;
+
+    /// The safe client-writable set on create/update:
+    /// not server-managed, not `noform`, not `privileged`.
     pub fn writable_fields(&self) -> impl Iterator<Item = &Column>;
-        // !server_managed && !noform && !privileged  (the safe client-writable set)
 
-    // relations
-    pub fn foreign_keys(&self) -> impl Iterator<Item = &Column>;  // f.fk_target.is_some()
-    pub fn m2m_relations(&self) -> &[M2MRelation];                // self.m2m_relations
-
-    // declared query / presentation intent (already stored; typed pass-through)
-    pub fn ordering(&self) -> &[(String, bool)];
-    pub fn search_fields(&self) -> &[String];
-    pub fn list_display(&self) -> &[String];
-    pub fn list_filter(&self) -> &[String];
-    pub fn readonly_fields(&self) -> &[String];
-    pub fn inline_edit_fields(&self) -> &[String];
+    /// Foreign-key columns (those with a `fk_target`).
+    pub fn foreign_keys(&self) -> impl Iterator<Item = &Column>;
 }
 ```
 
 Semantics are grounded in the existing flags:
 
 - `public_fields` = the set safe to serialize with no unlocks. `serializable_fields(true)` adds back `private` fields for a caller that has authorized it; `secret` is never in either.
-- `writable_fields` = the set an untrusted client may set on create/update: excludes the primary key and every `auto_*` (server-populated), `noform` (declared off the write surface), and `privileged` (mass-assignment guarded). `is_privileged`/`is_server_managed` let a caller that has more authority compute a wider set itself.
-- The presentation methods return the *declared* values verbatim. Fallback behaviour (e.g. "if `list_display` is empty, use the display field then all public scalars") is a plugin decision and stays in the plugin, so the contract adds no policy. If a fallback proves identical across plugins, an `effective_*` helper can be added later.
+- `writable_fields` = the set an untrusted client may set on create/update: excludes the primary key and every `auto_*` (server-populated), `noform` (declared off the write surface), and `privileged` (mass-assignment guarded). `is_server_managed` is exposed so a caller with more authority (e.g. one that has verified privilege) can compute a wider set itself; `privileged` is read directly off `Column`.
+- Declared query/presentation intent is NOT wrapped in methods — it is read directly off the public fields (`meta.list_display`, `meta.search_fields`, `meta.ordering`, `meta.readonly_fields`, `meta.list_filter`, `meta.inline_edit_fields`). Fallback behaviour (e.g. "if `list_display` is empty, use the display field then all public scalars") is a plugin decision and stays in the plugin. If a fallback proves identical across plugins, a derived `effective_list_display()`-style helper can be added later — that WOULD be real derivation and belong here.
 
 ## The composition contract (how a plugin overlays policy)
 
@@ -110,11 +100,11 @@ let visible = base
     .chain(cfg.unlocked_privates(caller));                   // REST policy: private unlocks
 
 // admin readonly = core noedit fact ∪ admin-declared readonly ∪ sensitive-column heuristic
-let readonly = meta.fields().iter()
-    .filter(|f| f.noedit)                                    // core fact
+let readonly = meta.fields.iter()
+    .filter(|f| f.noedit)                                    // core fact (Column.noedit)
     .map(|f| &f.name)
     .chain(admin_cfg.readonly_fields.iter())                 // admin policy
-    .chain(meta.fields().iter().filter(|f| is_sensitive(&f.name)).map(|f| &f.name));
+    .chain(meta.fields.iter().filter(|f| is_sensitive(&f.name)).map(|f| &f.name));
 ```
 
 The rule for reviewers and plugin authors: read the fact from `ModelMeta`; put only transport policy in the plugin config. A new fact that two plugins would compute identically is a signal it belongs on the model, not in each plugin.
