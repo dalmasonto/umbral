@@ -30,14 +30,14 @@ use tower::ServiceExt;
 use umbral::orm::ForeignKey;
 use umbral_rest::{AllowAny, ResourceConfig, RestPlugin};
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Blog {
     id: i64,
     #[umbral(email)]
     contact: String,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "nested_post")]
 struct NestedPost {
     id: i64,
@@ -47,7 +47,7 @@ struct NestedPost {
     slug: String,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "nested_comment")]
 struct NestedComment {
     id: i64,
