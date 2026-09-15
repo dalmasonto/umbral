@@ -512,23 +512,43 @@ impl<From: Model> RelationSource<From> for &QuerySet<From> {
 /// or future accessor that has only the two model types). The derive's own
 /// reverse-O2O accessor does NOT use it: it knows the child's FK field directly,
 /// which is exact even when a child has multiple FKs to the same parent.
-// TODO(orm-traversal): multi-FK-to-same-parent picks the first match — add
-// disambiguation (or take an explicit column) when a type-only caller needs it.
+///
+/// Panics (rather than silently picking the first match) when `Child` declares
+/// TWO OR MORE `ForeignKey<Parent>` fields: which one anchors the back-link is
+/// then a genuine ambiguity this type-only helper cannot resolve on its own,
+/// mirroring [`reverse_fk_lookup_by_table`]'s loud failure on an ambiguous
+/// string-keyed reverse relation. The caller must use the derive's
+/// disambiguated `<child>_via_<field>_set()` accessor instead.
 pub fn back_fk_column<Parent: Model, Child: Model>() -> &'static str {
-    Child::FIELDS
+    let mut candidates = Child::FIELDS
         .iter()
-        .find(|f| f.fk_target == Some(Parent::TABLE))
-        .map(|f| f.name)
-        .unwrap_or_else(|| {
-            panic!(
-                "reverse relation from `{}` to `{}` has no anchoring foreign key: \
-                 `{}` declares no `ForeignKey<{}>` for the back-link to resolve through",
-                Parent::NAME,
-                Child::NAME,
-                Child::NAME,
-                Parent::NAME,
-            )
-        })
+        .filter(|f| f.fk_target == Some(Parent::TABLE));
+    let Some(first) = candidates.next() else {
+        panic!(
+            "reverse relation from `{}` to `{}` has no anchoring foreign key: \
+             `{}` declares no `ForeignKey<{}>` for the back-link to resolve through",
+            Parent::NAME,
+            Child::NAME,
+            Child::NAME,
+            Parent::NAME,
+        )
+    };
+    let rest: Vec<&'static str> = candidates.map(|f| f.name).collect();
+    if rest.is_empty() {
+        return first.name;
+    }
+    let mut all = vec![first.name];
+    all.extend(rest);
+    panic!(
+        "umbral::orm::relation::back_fk_column: ambiguous reverse relation from `{}` to \
+         `{}` — `{}` declares multiple `ForeignKey<{}>` fields: [{}]; use the \
+         `<child>_via_<field>_set` accessor (or an explicit-column API) to disambiguate",
+        Parent::NAME,
+        Child::NAME,
+        Child::NAME,
+        Parent::NAME,
+        all.join(", "),
+    )
 }
 
 /// The primary-key column name of a model, from its `FIELDS` metadata.
