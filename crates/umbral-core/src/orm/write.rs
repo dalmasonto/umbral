@@ -306,6 +306,66 @@ impl WriteError {
         }
     }
 
+    /// Like [`field_errors`](Self::field_errors), but every key is prefixed
+    /// with `path` (dot-joined) so a NESTED write can report `posts[0].slug`
+    /// instead of a bare `slug`. `path` empty → identical to `field_errors`.
+    /// Additive (TaskFlow #436 nested drill-down): the un-prefixed methods and
+    /// `Multiple` semantics are unchanged.
+    pub fn field_errors_prefixed(
+        &self,
+        path: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        let base = self.field_errors();
+        if path.is_empty() {
+            return base;
+        }
+        base.into_iter()
+            .map(|(k, v)| (format!("{path}.{k}"), v))
+            .collect()
+    }
+
+    /// Re-key this validation error under a nested `path`, returning a flattened
+    /// error whose `field_errors()` are all `{path}.{field}` and whose
+    /// `non_field_errors()` are preserved (tagged with the path). Used by the
+    /// nested-tree writer so a child row's field errors drill down to
+    /// `posts[0].slug` while flowing through the SAME `WriteError::Multiple`
+    /// machinery and REST mapping unchanged.
+    ///
+    /// A NON-validation error (raw `Sqlx`, `NotAnObject`, `SerializeFailed`)
+    /// passes through UNCHANGED so a genuine 500 is never downgraded to a
+    /// path-keyed 400. `path` empty → a flattened equivalent of the original.
+    pub fn into_prefixed(self, path: &str) -> WriteError {
+        if !self.is_validation() {
+            return self;
+        }
+        let field_map = self.field_errors_prefixed(path);
+        let non_field = self.non_field_errors();
+        let mut errors: Vec<WriteError> = Vec::new();
+        for (field, msgs) in field_map {
+            for message in msgs {
+                errors.push(WriteError::Validator {
+                    field: field.clone(),
+                    message,
+                });
+            }
+        }
+        for message in non_field {
+            // An empty field name routes to the non-field bucket (see
+            // `collect_field_errors` / `collect_non_field_errors`); tag the
+            // message with the path so it stays locatable.
+            let message = if path.is_empty() {
+                message
+            } else {
+                format!("{path}: {message}")
+            };
+            errors.push(WriteError::Validator {
+                field: String::new(),
+                message,
+            });
+        }
+        WriteError::Multiple { errors }
+    }
+
     /// Stable machine-readable code for the boundary layer. REST
     /// puts this in the `code` field of the 400 body; admin uses
     /// it to pick an inline error style.

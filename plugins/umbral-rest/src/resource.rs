@@ -408,6 +408,15 @@ pub struct ResourceConfig {
     /// gaps3 #29 item 2 — `(parent_table, fk_column)`. The resource is mounted under
     /// its parent's URL and scoped to it.
     pub(crate) under: Option<(String, String)>,
+    /// Acknowledgement marker for the `security.object_scope` boot check
+    /// (IDOR design spec). `Some(reason)` declares that this write-enabled
+    /// resource is intentionally left without an object scope — because row
+    /// security is enforced elsewhere (a Postgres RLS policy the REST plugin
+    /// can't see across the crate boundary) or because the rows are genuinely
+    /// public. Set via [`Self::unscoped_ok`] / [`Self::rls_backed`]. The reason
+    /// is a declared, greppable record of the decision; it silences the warning
+    /// for exactly this resource without disabling the check.
+    pub(crate) unscoped_ok: Option<String>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -448,6 +457,7 @@ impl ResourceConfig {
             cache_control: None,
             owner_field: None,
             under: None,
+            unscoped_ok: None,
         }
     }
 
@@ -551,6 +561,41 @@ impl ResourceConfig {
             Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
             None => ScopeDecision::None,
         })
+    }
+
+    /// Acknowledge that this write-enabled resource is intentionally NOT
+    /// object-scoped, silencing the `security.object_scope` boot check for it
+    /// (IDOR design spec). `reason` is a short, greppable note explaining why
+    /// leaving every row reachable is safe here.
+    ///
+    /// The check exists because a write endpoint with no `scope` / `owned_by`
+    /// hook lets any authorized caller mutate any row by id — an IDOR hole. Two
+    /// cases are legitimately unscoped at the app layer: rows secured one layer
+    /// down by a Postgres RLS policy (use [`Self::rls_backed`]), and genuinely
+    /// public data. This marker declares the decision instead of leaving it to
+    /// omission; it does not disable the check for other resources.
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("changelog").unscoped_ok("public, append-only feed")
+    /// ```
+    pub fn unscoped_ok(mut self, reason: impl Into<String>) -> Self {
+        self.unscoped_ok = Some(reason.into());
+        self
+    }
+
+    /// Sugar for [`Self::unscoped_ok`] declaring that row security for this
+    /// table is enforced by a Postgres RLS policy (IDOR design spec).
+    ///
+    /// `umbral-rest` cannot depend on `umbral-rls` (the crate-dependency ban),
+    /// so the REST boot check cannot read RLS policies to confirm coverage — it
+    /// asks you to declare it. Pair this with an actual `umbral-rls` policy on
+    /// the table; the marker only silences the app-layer warning.
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("invoice").rls_backed()
+    /// ```
+    pub fn rls_backed(self) -> Self {
+        self.unscoped_ok("row security enforced by RLS")
     }
 
     /// gaps4 #79 — an `IsOwnerOrReadOnly`-shaped object scope: `list`/`retrieve`

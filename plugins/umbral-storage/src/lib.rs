@@ -157,6 +157,14 @@ pub struct StoragePlugin {
     /// via [`StoragePlugin::media_signed_urls`]; mint links with
     /// [`signed_media_url`].
     media_signed_urls: bool,
+    /// gaps5 #101 (IDOR design spec): explicit acknowledgement that this media
+    /// mount is intentionally PUBLIC — every uploaded file is world-readable to
+    /// anyone with its URL (avatars, public assets). Set via
+    /// [`StoragePlugin::media_public`]. Silences the `security.object_scope`
+    /// boot check that otherwise flags a media route mounted with no access
+    /// gate. Distinct from having a gate (`media_access*` / `media_signed_urls`)
+    /// — this declares "no gate, on purpose."
+    media_public: bool,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -214,6 +222,7 @@ impl StoragePlugin {
             media_access: None,
             media_access_wants_identity: false,
             media_signed_urls: false,
+            media_public: false,
         }
     }
 
@@ -327,6 +336,27 @@ impl StoragePlugin {
     /// one ALSO works through the non-FS proxy route (gaps4 #58).
     pub fn media_signed_urls(mut self) -> Self {
         self.media_signed_urls = true;
+        self
+    }
+
+    /// Declare that this media mount is intentionally PUBLIC (gaps5 #101, IDOR
+    /// design spec) — every uploaded file is world-readable to anyone with its
+    /// URL. This is the legitimate opt-out for public assets (avatars, cover
+    /// images, downloadable brochures): it silences the `security.object_scope`
+    /// boot check that otherwise flags a media route mounted with no access
+    /// gate.
+    ///
+    /// It changes NO serving behaviour — an ungated FS mount was already public;
+    /// this only records the decision so the warning distinguishes "public on
+    /// purpose" from "forgot to gate private uploads." For private files, do NOT
+    /// call this — gate them with [`Self::media_access_owner`] /
+    /// [`Self::media_access_identity`] / [`Self::media_signed_urls`] instead.
+    ///
+    /// ```ignore
+    /// StoragePlugin::new().media("/media", "./media").media_public()
+    /// ```
+    pub fn media_public(mut self) -> Self {
+        self.media_public = true;
         self
     }
 
@@ -778,6 +808,60 @@ impl Plugin for StoragePlugin {
         "storage"
     }
 
+    /// `security.object_scope` — flag a media route mounted with NO access gate
+    /// and NO explicit public opt-in (the IDOR design spec, gaps5 #101). An
+    /// ungated media mount serves every object key as a direct, unauthenticated
+    /// fetch: anyone who knows or guesses a key gets the file — the storage form
+    /// of IDOR (invoices, IDs, tenant documents). A gate is any of
+    /// `media_access` (`media_access_identity` / `media_access_owner`) or
+    /// `media_signed_urls`; the public opt-out is [`Self::media_public`].
+    ///
+    /// This subsumes and upgrades the older gaps4 #17 `on_ready` warning: it
+    /// now also counts signed URLs as a gate, distinguishes "public on purpose"
+    /// via the marker, and escalates to a boot-blocking Error under
+    /// `strict_object_scope`.
+    fn system_checks(&self) -> Vec<umbral::check::SystemCheck> {
+        // Snapshot the decision into the closure (the reason `SystemCheck.run`
+        // is an owned closure).
+        let gated = self.media_access.is_some() || self.media_signed_urls;
+        let flag = self
+            .media
+            .as_ref()
+            .filter(|_| !gated && !self.media_public)
+            .map(|m| m.mount.clone());
+
+        vec![umbral::check::SystemCheck {
+            id: "security.object_scope",
+            run: Box::new(move |ctx: &umbral::check::CheckContext<'_>| {
+                let Some(mount) = flag.clone() else {
+                    return Vec::new();
+                };
+                let severity = if ctx.strict_object_scope {
+                    umbral::check::Severity::Error
+                } else {
+                    umbral::check::Severity::Warning
+                };
+                vec![umbral::check::SystemCheckFinding {
+                    check_id: "security.object_scope",
+                    severity,
+                    location: umbral::check::CheckLocation::Route { path: mount.clone() },
+                    message: format!(
+                        "media mount `{mount}` is served with NO access gate — every uploaded file \
+                         is a direct, unauthenticated fetch, so anyone who knows or guesses a key \
+                         gets the file (the storage form of IDOR: invoices, IDs, tenant documents)."
+                    ),
+                    hint: Some(
+                        "gate it — `StoragePlugin::media_access_owner()` (serve a file only to its \
+                         recorded owner), `.media_access_identity(..)`, or `.media_signed_urls()`. \
+                         If the mount is intentionally public (avatars, public assets), declare it \
+                         with `.media_public()`."
+                            .to_string(),
+                    ),
+                }]
+            }),
+        }]
+    }
+
     fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
         // The MediaFile tracking model exists only when a media side is
         // configured.
@@ -957,21 +1041,12 @@ impl Plugin for StoragePlugin {
             media::set_processors(Arc::new(self.processors.clone()));
         }
 
-        // gaps4 #17: media served with NO access gate is public — anyone who
-        // knows or guesses a key gets the file (an IDOR for private uploads:
-        // invoices, IDs, tenant documents). Say so at boot, the same way REST
-        // warns about anonymous-readable resources, so the operator makes the
-        // public-vs-private call deliberately rather than by omission.
-        if self.media.is_some() && self.media_access.is_none() {
-            tracing::warn!(
-                target: "umbral::storage",
-                "umbral-storage: media is served with NO access policy — every uploaded \
-                 file is world-readable to anyone with its URL. If uploads are private \
-                 (user documents, invoices, tenant files), gate them with \
-                 `StoragePlugin::media_access(...)`. Ignore this if the media mount is \
-                 intentionally public (avatars, public assets)."
-            );
-        }
+        // gaps4 #17 → gaps5 #101: the "media served with NO access gate is
+        // public" warning now lives in `Plugin::system_checks` as the
+        // `security.object_scope` check (phase 4, before on_ready) — it counts
+        // signed URLs as a gate, honours the `media_public()` opt-out, and can
+        // escalate to a boot-blocking Error under `strict_object_scope`. Not
+        // duplicated here.
 
         // gaps4 #58: on a non-FS backend WITH a gate, the framework now
         // mounts a proxy route that streams gated bytes through the backend

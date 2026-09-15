@@ -1,0 +1,104 @@
+---
+title: Object-level authorization (IDOR)
+description: The defense-in-depth story for row ownership across REST, GraphQL, RLS, and storage - which layer scopes which surface, the boot check that flags an unscoped write endpoint, and how to silence it deliberately.
+sidebar_position: 1
+icon: shield-check
+tags: [security, rest, graphql, storage, idor]
+---
+
+An **Insecure Direct Object Reference** (IDOR) is the bug where a caller who is allowed to use an endpoint can reach *rows they don't own* by supplying someone else's id. Model-level permission answers "may this caller write orders?"; it does **not** answer "may this caller write *this* order?". Object-level authorization is the second question, and umbral answers it per surface.
+
+The framework already ships the scoping tools. What this page adds is one mental model for all of them, plus a boot check that tells you when a write surface has none.
+
+## Which layer scopes which surface
+
+<CardGrid>
+  <Card title="REST — ResourceConfig::owned_by / scope">Restricts every built-in CRUD action to the rows the caller owns. App-level, per resource.</Card>
+  <Card title="GraphQL — GraphqlPlugin::owned_by">Adds `WHERE owner = caller` to every mutation on a model. App-level, per model.</Card>
+  <Card title="RLS — umbral-rls">Postgres row-level security: the database itself refuses out-of-scope rows. Defense in depth, enforced below the app.</Card>
+  <Card title="Storage — media_access_owner">Gates the media GET route so a file is served only to its recorded owner. Otherwise any key is a direct, unauthenticated fetch.</Card>
+</CardGrid>
+
+Reach for the app-level scope (`owned_by`) as the baseline on every write surface. Add RLS when you want the database to enforce ownership even against a bug in the app or a second service hitting the same tables. Gate storage whenever uploads are private (invoices, IDs, tenant documents) rather than public assets.
+
+## One example per layer
+
+<Tabs>
+  <Tab title="REST">
+```rust
+use umbral_rest::{ResourceConfig, RestPlugin};
+
+RestPlugin::default()
+    // Every list/retrieve/update/delete is filtered to rows the
+    // caller owns; a superuser sees all, anonymous sees none.
+    .resource(ResourceConfig::new("order").owned_by("owner_id"))
+```
+  </Tab>
+  <Tab title="GraphQL">
+```rust
+use umbral_graphql::GraphqlPlugin;
+
+GraphqlPlugin::new()
+    .expose("post")
+    .mutable("post")
+    .owned_by("post", "author") // a caller edits only their own posts
+```
+  </Tab>
+  <Tab title="Storage">
+```rust
+use umbral_storage::StoragePlugin;
+
+StoragePlugin::new()
+    .media("/media", "./media")
+    .media_access_owner() // serve a file only to its recorded owner
+```
+  </Tab>
+</Tabs>
+
+## The boot check: `security.object_scope`
+
+Because forgetting a scope is silent, umbral runs a boot-time system check that walks your REST resources, GraphQL mutations, and media routes and flags every **write-enabled** surface that has **no object scope** and **no acknowledgement marker**. It shares the id `security.object_scope`, so you can grep the whole family out of the boot log.
+
+- **REST** — a resource that exposes create/update/delete (the default, or a `.views([...])` set containing a write) with no `scope` / `owned_by` / `owned_by_for_writes` / `owned_via`.
+- **GraphQL** — a `mutable` model with no `owned_by`. Read-only exposed models are never flagged.
+- **Storage** — a media route mounted with no `media_access*` gate and no `media_signed_urls`.
+
+<Callout type="info">The check cannot read your RLS policies: `umbral-rest` and `umbral-graphql` do not (and cannot) depend on `umbral-rls`. So "row security is handled by RLS" has to be *declared*, not inferred - that is what the acknowledgement markers below are for.</Callout>
+
+## Silencing it deliberately
+
+Two surfaces are legitimately left without an app-level scope: rows secured by an RLS policy one layer down, and genuinely public data. Declare the decision so the warning goes quiet for exactly that surface - and leaves a greppable record of why.
+
+<Tabs>
+  <Tab title="REST">
+```rust
+// Row security enforced by a Postgres RLS policy on this table:
+ResourceConfig::new("invoice").rls_backed()
+
+// Or a public, intentionally-unscoped resource:
+ResourceConfig::new("changelog").unscoped_ok("public append-only feed")
+```
+  </Tab>
+  <Tab title="GraphQL">
+```rust
+GraphqlPlugin::new().expose("invoice").mutable("invoice").rls_backed("invoice")
+GraphqlPlugin::new().expose("tag").mutable("tag").unscoped_ok("shared public vocabulary")
+```
+  </Tab>
+  <Tab title="Storage">
+```rust
+// Avatars / public assets - no gate, on purpose:
+StoragePlugin::new().media("/media", "./media").media_public()
+```
+  </Tab>
+</Tabs>
+
+## Strict mode
+
+By default a missing scope is a **Warning**: boot continues and the message lands in the log, matching umbral's other security nudges. Set `UMBRAL_STRICT_OBJECT_SCOPE=true` (or `strict_object_scope = true` in `umbral.toml`) to escalate every `security.object_scope` finding to a boot-blocking **Error** - `App::build()` then returns `BuildError::SystemCheckFailed` until every write surface is either scoped or acknowledged.
+
+<Callout type="warn">Strict mode is an explicit opt-in today. When the `EnterprisePreset` lands it will turn strict mode on for you.</Callout>
+
+## Design rationale
+
+The full design - the fn-to-closure change on `SystemCheck` that lets a plugin validate its own configuration, the three checks, and the deferred RLS-coverage auto-detection - is in [`docs/superpowers/specs/2026-08-10-idor-object-level-authorization-design.md`](https://github.com/) and the REST object-scope work in `arch.md`.

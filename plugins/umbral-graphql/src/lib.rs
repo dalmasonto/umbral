@@ -255,6 +255,13 @@ pub struct GraphqlPlugin {
     /// gaps4 #9: `(table, owner_column)` — row-level mutation scope. A mutation
     /// on a listed table also filters `WHERE owner_column = <caller's pk>`.
     owned_by: Vec<(String, String)>,
+    /// Acknowledgement markers for the `security.object_scope` boot check
+    /// (IDOR design spec): tables whose mutations are intentionally left
+    /// without an `owned_by` row scope — row security is enforced by a Postgres
+    /// RLS policy (which this crate can't read across the crate boundary) or
+    /// the rows are genuinely public. Set via [`Self::unscoped_ok`] /
+    /// [`Self::rls_backed`]. A table here is exempt from the warning.
+    unscoped_ok: Vec<String>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
     /// Query depth / complexity budget (gaps4 #10). `None` uses the
@@ -393,6 +400,37 @@ impl GraphqlPlugin {
     pub fn owned_by(mut self, table: impl Into<String>, owner_column: impl Into<String>) -> Self {
         self.owned_by.push((table.into(), owner_column.into()));
         self
+    }
+
+    /// Acknowledge that a `mutable` model is intentionally NOT row-scoped,
+    /// silencing the `security.object_scope` boot check for it (IDOR design
+    /// spec). A mutation with no `owned_by` scope lets any authorized caller
+    /// update or delete ANY row by id — an IDOR hole — so the check warns
+    /// unless you either scope it or mark it here.
+    ///
+    /// Use this when the rows are genuinely public, or when row security is
+    /// enforced one layer down by a Postgres RLS policy (this crate can't read
+    /// RLS policies across the crate boundary — [`Self::rls_backed`] is the
+    /// sugar for that case).
+    ///
+    /// ```rust,ignore
+    /// .expose("tag").mutable("tag").unscoped_ok("tags are shared, public vocabulary")
+    /// ```
+    pub fn unscoped_ok(mut self, table: impl Into<String>) -> Self {
+        self.unscoped_ok.push(table.into());
+        self
+    }
+
+    /// Sugar for [`Self::unscoped_ok`] declaring that row security for a
+    /// `mutable` model is enforced by a Postgres RLS policy (IDOR design spec).
+    /// Pair it with an actual `umbral-rls` policy on the table; the marker only
+    /// silences the app-layer warning.
+    ///
+    /// ```rust,ignore
+    /// .expose("invoice").mutable("invoice").rls_backed("invoice")
+    /// ```
+    pub fn rls_backed(self, table: impl Into<String>) -> Self {
+        self.unscoped_ok(table)
     }
 
     /// Stream live changes to this model over WebSocket or SSE.
@@ -589,6 +627,62 @@ impl GraphqlPlugin {
 impl Plugin for GraphqlPlugin {
     fn name(&self) -> &'static str {
         "graphql"
+    }
+
+    /// `security.object_scope` — flag every `mutable` model left without an
+    /// `owned_by` row scope and without an acknowledgement marker (the IDOR
+    /// design spec, gaps5 #101). A GraphQL mutation with no row scope lets any
+    /// authorized caller update/delete ANY row by id. Read-only exposed models
+    /// are unaffected — a mutation is the write surface, so the check keys off
+    /// `mutable`, not `expose`. Warns by default; errors under
+    /// `strict_object_scope`.
+    ///
+    /// Snapshots the plugin's `writable` / `owned_by` / ack lists into the
+    /// returned closure (the reason `SystemCheck.run` is an owned closure).
+    fn system_checks(&self) -> Vec<umbral::check::SystemCheck> {
+        let graphql_path = self.path.clone().unwrap_or_else(|| "/graphql".to_string());
+        let owned: std::collections::HashSet<String> =
+            self.owned_by.iter().map(|(t, _)| t.clone()).collect();
+        let acked: std::collections::HashSet<String> = self.unscoped_ok.iter().cloned().collect();
+        // A model can be `.mutable(...)` more than once; dedupe.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let unscoped: Vec<String> = self
+            .writable
+            .iter()
+            .map(|(t, _)| t.clone())
+            .filter(|t| seen.insert(t.clone()))
+            .filter(|t| !owned.contains(t) && !acked.contains(t))
+            .collect();
+
+        vec![umbral::check::SystemCheck {
+            id: "security.object_scope",
+            run: Box::new(move |ctx: &umbral::check::CheckContext<'_>| {
+                let severity = if ctx.strict_object_scope {
+                    umbral::check::Severity::Error
+                } else {
+                    umbral::check::Severity::Warning
+                };
+                unscoped
+                    .iter()
+                    .map(|table| umbral::check::SystemCheckFinding {
+                        check_id: "security.object_scope",
+                        severity,
+                        location: umbral::check::CheckLocation::Route {
+                            path: format!("{graphql_path} (mutation {table})"),
+                        },
+                        message: format!(
+                            "GraphQL model `{table}` is `mutable` but has no row-level scope — any \
+                             authorized caller can update or delete ANY row by id (IDOR)."
+                        ),
+                        hint: Some(format!(
+                            "scope it: `.owned_by(\"{table}\", \"owner_column\")`. If row security \
+                             lives in a Postgres RLS policy, `.rls_backed(\"{table}\")`; if the rows \
+                             are intentionally public, `.unscoped_ok(\"{table}\")`."
+                        )),
+                    })
+                    .collect()
+            }),
+        }]
     }
 
     /// Subscribe to the ORM's write signals for every subscribable model.

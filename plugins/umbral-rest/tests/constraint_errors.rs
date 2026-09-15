@@ -53,6 +53,30 @@ struct Comment {
     body: String,
 }
 
+// TaskFlow #436 — a model with TWO bounded numeric fields, so a single
+// payload can violate both bounds at once and prove every out-of-range
+// field surfaces (not just the first the coercion loop hit).
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+struct Product {
+    id: i64,
+    #[umbral(min = 0, max = 100)]
+    quantity: i64,
+    #[umbral(min = 1, max = 5)]
+    rating: i64,
+}
+
+// TaskFlow #436 — TWO text-format fields (email + url) so a single payload
+// can fail both format checks at once, and a required-missing (Phase 0)
+// paired with a bad-format (Phase 1) proves Phase 0 no longer masks Phase 1.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+struct Contact {
+    id: i64,
+    #[umbral(email)]
+    email: String,
+    #[umbral(url)]
+    website: String,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -77,6 +101,8 @@ async fn boot() -> &'static axum::Router {
             .database("default", pool)
             .model::<Author>()
             .model::<Comment>()
+            .model::<Product>()
+            .model::<Contact>()
             .plugin(RestPlugin::default().default_permission(AllowAny))
             .build()
             .expect("App::build");
@@ -109,6 +135,20 @@ async fn boot() -> &'static axum::Router {
 async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = router.oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
+    (status, parsed)
+}
+
+async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("PATCH")
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
@@ -449,5 +489,121 @@ async fn blank_string_and_bad_fk_surface_together() {
     assert!(
         msg.contains("not found") && msg.contains("id=0"),
         "got {msg:?}",
+    );
+}
+
+// =========================================================================
+// TaskFlow #436 — the REST API must return EVERY field-level validation
+// error in one 400 response, not stop at the first. Before the fix the
+// per-column coercion loop bailed on the first bad field, and any Phase-0
+// error early-returned and masked every Phase-1 error entirely.
+// =========================================================================
+
+/// Two numeric-bound violations in one payload → BOTH fields surface.
+#[tokio::test]
+async fn two_numeric_bound_violations_surface_together() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/product/",
+        // quantity=500 (> max 100) AND rating=99 (> max 5). Both out of
+        // range — before the fix only the first field the loop reached
+        // came back.
+        json!({ "quantity": 500, "rating": 99 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "validation_error", "got {body}");
+    assert!(
+        body["quantity"].is_array(),
+        "`quantity` bound error must be present; got {body}",
+    );
+    assert!(
+        body["rating"].is_array(),
+        "`rating` bound error must ALSO be present; got {body}",
+    );
+}
+
+/// Two text-format violations in one payload → BOTH fields surface.
+#[tokio::test]
+async fn two_text_format_violations_surface_together() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/contact/",
+        // Neither is a valid email/url. Before the fix the loop returned
+        // the first `Validator` error and never reached the second field.
+        json!({ "email": "not-an-email", "website": "not-a-url" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "validation_error", "got {body}");
+    assert!(
+        body["email"].is_array(),
+        "`email` format error must be present; got {body}",
+    );
+    assert!(
+        body["website"].is_array(),
+        "`website` format error must ALSO be present; got {body}",
+    );
+}
+
+/// A Phase-0 error (required-missing) and a Phase-1 error (bad format) in
+/// the SAME payload → BOTH surface. This is the core regression: Phase 0
+/// used to early-return and mask every Phase-1 error.
+#[tokio::test]
+async fn required_missing_and_bad_format_surface_together() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/contact/",
+        // `website` omitted entirely → Phase-0 required-missing.
+        // `email` present but malformed → Phase-1 format validator.
+        json!({ "email": "not-an-email" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "validation_error", "got {body}");
+    assert!(
+        body["website"].is_array(),
+        "`website` required-field (Phase 0) error must be present; got {body}",
+    );
+    assert!(
+        body["email"].is_array(),
+        "`email` format (Phase 1) error must ALSO be present — Phase 0 must \
+         not mask Phase 1; got {body}",
+    );
+}
+
+/// The update (PATCH) path must ALSO collect every error at once.
+#[tokio::test]
+async fn update_returns_all_numeric_bound_violations_at_once() {
+    let router = boot().await.clone();
+    // Create a valid product first.
+    let (status, created) = post_json(
+        router.clone(),
+        "/api/product/",
+        json!({ "quantity": 10, "rating": 3 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "seed create failed: {created}");
+    let id = created["id"].as_i64().expect("created id");
+
+    // Now PATCH both fields out of range at once.
+    let (status, body) = patch_json(
+        router,
+        &format!("/api/product/{id}"),
+        json!({ "quantity": 999, "rating": 42 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "validation_error", "got {body}");
+    assert!(
+        body["quantity"].is_array(),
+        "`quantity` bound error must be present on update; got {body}",
+    );
+    assert!(
+        body["rating"].is_array(),
+        "`rating` bound error must ALSO be present on update; got {body}",
     );
 }

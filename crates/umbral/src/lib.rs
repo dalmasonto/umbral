@@ -531,8 +531,19 @@ pub mod middleware {
     //! plugin via `Plugin::middleware`. The trait is also re-exported
     //! from the prelude. [`MiddlewareStack`] is the collected, ordered
     //! set `App::build` installs as one axum layer.
+    //!
+    //! [`MiddlewareRegistry`] is the introspection snapshot (task #323):
+    //! which typed middleware is active, grouped by the plugin that
+    //! contributed it and replayable in effective chain order via
+    //! [`MiddlewareRegistry::effective_order`]. Read it with [`get`] after
+    //! `App::build`. It is the middleware analog of [`crate::routes`]; like
+    //! that registry, raw `wrap_router` layers are opaque and not enumerable.
+    //! Power-user surface — not re-exported from the prelude.
 
-    pub use umbral_core::middleware::{Middleware, MiddlewareStack};
+    pub use umbral_core::middleware::{
+        Middleware, MiddlewareRegistry, MiddlewareSource, MiddlewareSpec, MiddlewareStack, get,
+        init,
+    };
 }
 
 pub mod static_files {

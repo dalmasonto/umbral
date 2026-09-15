@@ -44,6 +44,7 @@ fn make_settings(environment: Environment, secret_key: &str) -> Settings {
         db_idle_timeout_secs: Some(600),
         db_max_lifetime_secs: Some(1800),
         db_test_before_acquire: true,
+        strict_object_scope: false,
         bind_addr: "127.0.0.1:8000".to_string(),
         trusted_proxy_hops: 0,
         time_zone: None,
@@ -110,6 +111,7 @@ fn settings_required_passes_when_dev_environment() {
         settings: &settings,
         provides_storage: true,
         registered_plugin_names: &[],
+        strict_object_scope: false,
     };
     let findings = run_all(&ctx, &framework_checks());
     assert!(
@@ -134,6 +136,7 @@ fn settings_required_passes_when_secret_key_overridden_in_prod() {
         settings: &settings,
         provides_storage: true,
         registered_plugin_names: &[],
+        strict_object_scope: false,
     };
     let findings = run_all(&ctx, &framework_checks());
     let errors: Vec<_> = findings
@@ -158,6 +161,7 @@ fn settings_required_errors_when_default_secret_in_prod() {
         settings: &settings,
         provides_storage: true,
         registered_plugin_names: &[],
+        strict_object_scope: false,
     };
     let findings = run_all(&ctx, &framework_checks());
 
@@ -181,6 +185,7 @@ fn run_all_handles_empty_checks() {
         settings: &settings,
         provides_storage: true,
         registered_plugin_names: &[],
+        strict_object_scope: false,
     };
     let findings = run_all(&ctx, &[]);
     assert!(
