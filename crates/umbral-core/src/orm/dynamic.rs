@@ -276,13 +276,47 @@ pub fn typed_eq_expr(meta_col: &Column, value: &str) -> Option<sea_query::Simple
     }
 }
 
-/// Which way a [`typed_cmp_condition`] points.
+/// A portable scalar comparison operator.
+///
+/// Originally just the two directions [`typed_cmp_condition`] needs for
+/// keyset pagination (`Gt`/`Lt`); extended to the full six-member set
+/// (heavy-relations epic Task 3 review) so
+/// [`crate::orm::queryset::QuerySet::filter_annotation`] — which compares an
+/// ANNOTATION ALIAS (not a typed model column, so it can't go through
+/// `column`'s typed combinators) against a value — has one comparison enum
+/// to reuse instead of a second, near-duplicate one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmp {
+    /// `col = value`
+    Eq,
+    /// `col <> value`
+    Ne,
     /// `col > value`
     Gt,
+    /// `col >= value`
+    Gte,
     /// `col < value`
     Lt,
+    /// `col <= value`
+    Lte,
+}
+
+impl Cmp {
+    /// Apply this operator to a plain (already-qualified) expression and a
+    /// sea-query value: `lhs <op> rhs`. Used by `filter_annotation`, which
+    /// compares an annotation alias — not a model column `typed_cmp_condition`
+    /// can validate against `ModelMeta` — so it builds the `Expr` itself and
+    /// only needs the operator dispatch this method provides.
+    pub(crate) fn apply(self, lhs: Expr, rhs: SeaValue) -> sea_query::SimpleExpr {
+        match self {
+            Cmp::Eq => lhs.eq(rhs),
+            Cmp::Ne => lhs.ne(rhs),
+            Cmp::Gt => lhs.gt(rhs),
+            Cmp::Gte => lhs.gte(rhs),
+            Cmp::Lt => lhs.lt(rhs),
+            Cmp::Lte => lhs.lte(rhs),
+        }
+    }
 }
 
 /// Build a typed `col > value` / `col < value` predicate from a **string** value.
@@ -309,8 +343,12 @@ pub fn typed_cmp_condition(
     macro_rules! go {
         ($v:expr) => {
             match cmp {
+                Cmp::Eq => expr.eq($v),
+                Cmp::Ne => expr.ne($v),
                 Cmp::Gt => expr.gt($v),
+                Cmp::Gte => expr.gte($v),
                 Cmp::Lt => expr.lt($v),
+                Cmp::Lte => expr.lte($v),
             }
         };
     }

@@ -109,6 +109,21 @@ pub(crate) fn build_aggregate_subquery<T: Model>(
         .expect("checked non-empty above")
         .to_table
         .to_string();
+    let leaf_meta = registered.iter().find(|m| m.table == leaf_table);
+
+    // Soft-delete scoping (Task 3 review, IMPORTANT #2): the single-hop
+    // `annotate_related`/`annotate_count` path folds `AND
+    // <child>.deleted_at IS NULL` into its correlated subquery when the
+    // child model is `#[umbral(soft_delete)]` (`child_soft_delete` in
+    // `queryset/mod.rs`'s `build_query_for`) — a trashed child must not
+    // silently inflate the count/sum/etc. A deep relation-path aggregate
+    // must not regress that: exclude a soft-deleted LEAF row here the same
+    // way. (Scoped to the leaf only, not every intermediate hop along the
+    // path — see this module's `annotate_relation_path.rs` test file /
+    // the Task 3 report for the narrower-than-ideal remaining gap.)
+    if leaf_meta.is_some_and(|m| m.soft_delete) {
+        q.and_where(Expr::col((leaf_alias.clone(), Alias::new("deleted_at"))).is_null());
+    }
 
     let expr: SimpleExpr = match agg {
         AggregateKind::Count => {
@@ -132,7 +147,6 @@ pub(crate) fn build_aggregate_subquery<T: Model>(
             // plaintext leak out through SUM/MIN/MAX — check the LEAF
             // model's own column metadata, the same secrecy gate the read
             // path (`values`/serialization) already enforces elsewhere.
-            let leaf_meta = registered.iter().find(|m| m.table == leaf_table);
             if let Some(leaf_col) = leaf_meta.and_then(|m| m.fields.iter().find(|c| c.name == col))
             {
                 if crate::orm::secrets::is_secret_column(leaf_col) {

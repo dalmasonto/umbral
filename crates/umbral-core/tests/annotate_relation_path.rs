@@ -29,7 +29,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::OnceCell;
-use umbral::orm::{ForeignKey, M2M, Op, ReverseSet};
+use umbral::orm::{Cmp, ForeignKey, M2M, ReverseSet};
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "arp_category")]
@@ -46,11 +46,14 @@ pub struct Category {
 // const exists for an intermediate table reached mid-path — see
 // `relation.rs`'s `reverse_fk_lookup_by_table`).
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
-#[umbral(table = "comments")]
+#[umbral(table = "comments", soft_delete)]
 pub struct Comment {
     #[umbral(primary_key)]
     pub id: i64,
     pub post: ForeignKey<Post>,
+    #[sqlx(default)]
+    #[umbral(index)]
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
@@ -60,6 +63,13 @@ pub struct Post {
     pub id: i64,
     pub author: ForeignKey<User>,
     pub price: i64,
+    // Named to match `HARD_DENIED_FIELDS` (`orm::secrets`) — the name-based
+    // secrecy backstop, no `Masked<T>`/mask keyring needed to prove the
+    // aggregate-path guard. Nullable so the existing raw-SQL `INSERT INTO
+    // arp_post (price, author) VALUES (...)` seeds above (which don't name
+    // this column) keep working unchanged.
+    #[sqlx(default)]
+    pub password_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
@@ -161,6 +171,55 @@ async fn boot() {
                 .await
                 .expect("seed category link");
         }
+
+        // carol (id 3), dave (id 4), erin (id 5): each one post with one
+        // comment — all three PASS a `posts__comments_count > 0` filter.
+        // Combined with bob (id 2, 0 comments, FAILS the same filter) this
+        // gives `filter_annotation_composes_with_limit_after_the_filter`
+        // (below) a PK-first-fails-then-several-pass subset
+        // (`WHERE id >= 2`) to prove `.limit()` paginates the FILTERED set.
+        for name in ["carol", "dave", "erin"] {
+            sqlx::query("INSERT INTO arp_user (name) VALUES (?)")
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed user");
+        }
+        for (post_id, author) in [(3_i64, 3_i64), (4_i64, 4_i64), (5_i64, 5_i64)] {
+            sqlx::query("INSERT INTO arp_post (price, author) VALUES (0, ?)")
+                .bind(author)
+                .execute(&pool)
+                .await
+                .expect("seed post");
+            sqlx::query("INSERT INTO comments (post) VALUES (?)")
+                .bind(post_id)
+                .execute(&pool)
+                .await
+                .expect("seed comment");
+        }
+
+        // frank (id 6): one post (id 6) with TWO comments — one active, one
+        // SOFT-DELETED. `annotate_count("posts__comments")` must count only
+        // the active one, matching the single-hop `annotate_count`'s
+        // existing soft-delete exclusion (`annotate_count.rs`'s
+        // `annotate_count_excludes_soft_deleted_children`).
+        sqlx::query("INSERT INTO arp_user (name) VALUES ('frank')")
+            .execute(&pool)
+            .await
+            .expect("seed frank");
+        sqlx::query("INSERT INTO arp_post (price, author) VALUES (0, 6)")
+            .execute(&pool)
+            .await
+            .expect("seed frank's post");
+        sqlx::query("INSERT INTO comments (post, deleted_at) VALUES (6, NULL)")
+            .execute(&pool)
+            .await
+            .expect("seed frank's active comment");
+        sqlx::query("INSERT INTO comments (post, deleted_at) VALUES (6, ?)")
+            .bind(chrono::Utc::now())
+            .execute(&pool)
+            .await
+            .expect("seed frank's soft-deleted comment");
     })
     .await;
 }
@@ -221,6 +280,26 @@ async fn annotate_count_over_m2m_path() {
 }
 
 #[tokio::test]
+async fn annotate_count_over_deep_path_excludes_soft_deleted_leaf_rows() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    // frank has 2 comments seeded, one of them soft-deleted; the deep-path
+    // `annotate_count("posts__comments")` must count only the 1 active one
+    // — the same soft-delete scoping the single-hop `annotate_count`
+    // already enforces for a directly-declared `ReverseSet` relation.
+    let rows = User::objects()
+        .annotate_count("posts__comments")
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated");
+    assert_eq!(
+        by_name(&rows, "frank")["posts__comments_count"].as_i64(),
+        Some(1),
+        "the soft-deleted comment must not inflate the deep-path count"
+    );
+}
+
+#[tokio::test]
 async fn annotate_sum_over_path_and_no_cross_inflation() {
     let _g = query_count_harness::query_lock().await;
     boot().await;
@@ -254,9 +333,16 @@ async fn annotate_sum_over_path_and_no_cross_inflation() {
 async fn filter_annotation_cuts_rows_by_aggregate() {
     let _g = query_count_harness::query_lock().await;
     boot().await;
+    // Scoped to alice/bob only (`id < 3`) — carol/dave/erin (ids 3-5, added
+    // for the limit-composition test below) also pass this filter, so this
+    // assertion would otherwise need to grow every time the shared seed
+    // does. The `annotate_count("posts__comments")`+ `filter_annotation`
+    // wrap works identically whether it or the parent `.filter()` narrows
+    // the row set first (both fold into the same one built `SelectStatement`).
     let ids = User::objects()
+        .filter(user::ID.lt(3))
         .annotate_count("posts__comments")
-        .filter_annotation("posts__comments_count", Op::Gt, 0.into())
+        .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
         .order_by_annotation("posts__comments_count", true)
         .values(&["id"])
         .await
@@ -268,6 +354,46 @@ async fn filter_annotation_cuts_rows_by_aggregate() {
         vec![json!({"id": 1})],
         "filter_annotation must cut bob's zero-comment row"
     );
+}
+
+#[tokio::test]
+async fn filter_annotation_composes_with_limit_after_the_filter() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    // Subset `2 <= id <= 5` (excludes frank, id 6, added later for the
+    // soft-delete test — scoped explicitly so this test stays correct
+    // regardless of what the shared seed grows to next): bob (id 2,
+    // PK-FIRST in this subset) FAILS the filter (0 comments); carol/dave/
+    // erin (ids 3-5) all PASS it (1 comment each). A buggy implementation
+    // that applies `.limit(n)` to the PRE-filter statement would truncate
+    // this subset to its first 2 PK rows — [bob (fail), carol (pass)] —
+    // THEN filter, leaving only ONE row (carol) instead of two. The correct
+    // behavior filters FIRST (dropping bob) and only THEN takes 2 of the 3
+    // remaining passing rows.
+    let rows = User::objects()
+        .filter(user::ID.ge(2))
+        .filter(user::ID.lt(6))
+        .annotate_count("posts__comments")
+        .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
+        .limit(2)
+        .values(&["id"])
+        .await
+        .expect("filter_annotation composed with limit");
+    assert_eq!(
+        rows.len(),
+        2,
+        "limit(2) must return 2 rows from the FILTERED set, not fewer \
+         (saw {rows:?})"
+    );
+    let passing_ids = [3_i64, 4_i64, 5_i64];
+    for row in &rows {
+        let id = row["id"].as_i64().expect("id");
+        assert!(
+            passing_ids.contains(&id),
+            "row {id} must come from the passing set {passing_ids:?} — bob (id 2, 0 \
+             comments) must never survive the filter just because LIMIT ran first"
+        );
+    }
 }
 
 #[tokio::test]
@@ -305,6 +431,30 @@ async fn sum_over_a_relation_path_missing_the_column_segment_fails_loudly() {
     assert!(
         err.to_string().contains("posts") && err.to_string().contains("column"),
         "error names the bad path and explains the missing column: {err}"
+    );
+}
+
+#[tokio::test]
+async fn annotate_sum_over_a_secret_leaf_column_is_refused() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    // `posts__password_hash` names a real column (`Post::password_hash`,
+    // seeded as NULL on every post) that matches `HARD_DENIED_FIELDS` by
+    // name alone — the same secrecy gate that keeps a hashed password out
+    // of any serialized response. Security & Performance
+    // (docs/specs/orm-heavy-relations-epic.md): a SUM/AVG/MIN/MAX must
+    // never let a masked/secret column's plaintext leak out through the
+    // aggregate, so this must be refused loudly — never silently emit
+    // `SUM("password_hash")`.
+    let err = User::objects()
+        .annotate_sum("leak", "posts__password_hash")
+        .fetch_annotated()
+        .await
+        .expect_err("aggregating a hard-denied/secret column must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("password_hash") && (msg.contains("secret") || msg.contains("masked")),
+        "error names the offending column and explains why it's refused: {msg}"
     );
 }
 

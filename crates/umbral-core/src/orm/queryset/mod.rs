@@ -238,7 +238,7 @@ pub struct QuerySet<T> {
     /// `WHERE`). Applied by wrapping the whole built statement as a derived
     /// table ONCE, at the end of `build_query_for` — never re-emitted per
     /// row. Multiple calls AND together, mirroring `.filter()`'s semantics.
-    pub(crate) annotation_filters: Vec<(String, crate::orm::Op, sea_query::Value)>,
+    pub(crate) annotation_filters: Vec<(String, crate::orm::Cmp, sea_query::Value)>,
     /// audit_2 plugin-storage-tasks #6 — when `true`, a read terminal appends
     /// `FOR UPDATE SKIP LOCKED` (Postgres only). Lets N contending workers each
     /// claim a DIFFERENT row instead of all piling onto the same head row and
@@ -947,15 +947,32 @@ impl<T> QuerySet<T> {
         // reader (`fetch`/`fetch_annotated`/`values`/`explain`/`to_sql`)
         // shares this one `build_query_for`, so the wrap can never be
         // re-emitted per row or per terminal.
+        //
+        // CRITICAL: LIMIT/OFFSET must apply AFTER the filter, not before.
+        // `.limit(n)`/`.offset(n)` mutate `self.query` eagerly at call time
+        // (see those methods below), so by the time we get here `q` already
+        // carries them — if left on `q`, the INNER select would truncate
+        // the UNFILTERED row set and the outer WHERE would then filter that
+        // truncated (and possibly wrong) set, silently returning fewer (or
+        // the wrong) rows. Strip them off `q` and re-apply to the OUTER
+        // query instead, using `user_limit`/`user_offset` (tracked
+        // separately from `self.query` for exactly this kind of
+        // reconstruction — see that field's doc comment).
         if !self.annotation_filters.is_empty() {
+            q.reset_limit();
+            q.reset_offset();
             let mut outer = Query::select();
             outer
                 .column(sea_query::Asterisk)
                 .from_subquery(q, Alias::new("__anno"));
-            for (alias, op, value) in &self.annotation_filters {
-                outer.and_where(
-                    op.apply(Expr::col(Alias::new(alias.as_str())).into(), value.clone()),
-                );
+            for (alias, cmp, value) in &self.annotation_filters {
+                outer.and_where(cmp.apply(Expr::col(Alias::new(alias.as_str())), value.clone()));
+            }
+            if let Some(n) = self.user_limit {
+                outer.limit(n);
+            }
+            if let Some(n) = self.user_offset {
+                outer.offset(n);
             }
             return outer;
         }
@@ -3566,9 +3583,11 @@ impl<T: Model> QuerySet<T> {
     /// `.filter()`.
     ///
     /// ```rust,ignore
+    /// use umbral::orm::Cmp;
+    ///
     /// let active_authors = User::objects()
     ///     .annotate_count("posts__comments")
-    ///     .filter_annotation("posts__comments_count", Op::Gt, 0.into())
+    ///     .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
     ///     .order_by_annotation("posts__comments_count", true)
     ///     .values(&["id"])
     ///     .await?;
@@ -3578,17 +3597,20 @@ impl<T: Model> QuerySet<T> {
     /// see [`Self::check_annotations`] — the same "poison now, fail at the
     /// terminal" contract [`Self::order_by_annotation`] already uses.
     ///
-    /// Precedence note: this wraps the statement AS ALREADY BUILT, which
-    /// includes any `.limit()`/`.offset()` called BEFORE this in the chain.
-    /// Call `.limit()`/`.offset()` AFTER `.filter_annotation(...)` so
-    /// pagination applies to the FILTERED set, not the pre-filter one.
+    /// `.limit()`/`.offset()` may be called BEFORE OR AFTER
+    /// `filter_annotation` in the chain — either way, pagination applies to
+    /// the FILTERED set, never the pre-filter one. `build_query_for` moves
+    /// any `.limit()`/`.offset()` from the pre-filter statement onto the
+    /// wrapped (post-filter) one specifically so this holds regardless of
+    /// call order.
     pub fn filter_annotation(
         mut self,
         alias: &str,
-        op: crate::orm::Op,
+        cmp: crate::orm::Cmp,
         value: sea_query::Value,
     ) -> Self {
-        self.annotation_filters.push((alias.to_string(), op, value));
+        self.annotation_filters
+            .push((alias.to_string(), cmp, value));
         self.prefetched = None;
         self
     }
@@ -4685,10 +4707,10 @@ impl<T: Model> Manager<T> {
     pub fn filter_annotation(
         &self,
         alias: &str,
-        op: crate::orm::Op,
+        cmp: crate::orm::Cmp,
         value: sea_query::Value,
     ) -> QuerySet<T> {
-        self.queryset().filter_annotation(alias, op, value)
+        self.queryset().filter_annotation(alias, cmp, value)
     }
 
     /// See [`QuerySet::annotate_as`] — the typed GROUP BY rollup.
