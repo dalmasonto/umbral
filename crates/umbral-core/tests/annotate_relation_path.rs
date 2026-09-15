@@ -220,6 +220,37 @@ async fn boot() {
             .execute(&pool)
             .await
             .expect("seed frank's soft-deleted comment");
+
+        // gina (id 7, post 7, 5 comments), hank (id 8, post 8, 4 comments),
+        // iris (id 9, post 9, 2 comments) — three more passing users with
+        // DISTINCT `posts__comments_count` values (5, 4, 2), used by
+        // `filter_annotation_plus_order_by_annotation_plus_limit_returns_the_correct_top_rows`
+        // (below) to pin the CORRECT top-2 by count (gina, hank) — every
+        // OTHER passing user in the shared seed has count 1 or 3, so
+        // neither can tie for the top 2.
+        for (name, post_id, author, n_comments) in [
+            ("gina", 7_i64, 7_i64, 5_i64),
+            ("hank", 8, 8, 4),
+            ("iris", 9, 9, 2),
+        ] {
+            sqlx::query("INSERT INTO arp_user (name) VALUES (?)")
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed user");
+            sqlx::query("INSERT INTO arp_post (price, author) VALUES (0, ?)")
+                .bind(author)
+                .execute(&pool)
+                .await
+                .expect("seed post");
+            for _ in 0..n_comments {
+                sqlx::query("INSERT INTO comments (post) VALUES (?)")
+                    .bind(post_id)
+                    .execute(&pool)
+                    .await
+                    .expect("seed comment");
+            }
+        }
     })
     .await;
 }
@@ -394,6 +425,72 @@ async fn filter_annotation_composes_with_limit_after_the_filter() {
              comments) must never survive the filter just because LIMIT ran first"
         );
     }
+}
+
+/// Merge-gating review fix — `filter_annotation` traps the built statement's
+/// ORDER BY inside a derived-table wrap unless it is re-applied to the
+/// OUTER (post-filter) query. On Postgres a subquery's `ORDER BY` is not
+/// guaranteed to survive into the enclosing query — SQLite happens to
+/// preserve it, which is why a row-count/value assertion alone would not
+/// catch a regression here (that's what the `to_sql_pg()` assertion below
+/// is for: it inspects the OUTER wrapped statement directly, so it fails
+/// the same way on either backend).
+#[tokio::test]
+async fn filter_annotation_plus_order_by_annotation_plus_limit_returns_the_correct_top_rows() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    // gina (5 comments), hank (4), iris (2) all pass `> 0`; every other
+    // passing user in the shared seed has count 1 or 3 — strictly less
+    // than hank's 4 — so the top 2 by count DESC is unambiguously
+    // [gina, hank], never a coincidental pair.
+    let rows = User::objects()
+        .annotate_count("posts__comments")
+        .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
+        .order_by_annotation("posts__comments_count", true)
+        .limit(2)
+        .values(&["id", "name"])
+        .await
+        .expect("filter_annotation + order_by_annotation + limit");
+    let names: Vec<&str> = rows
+        .iter()
+        .map(|r| r["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["gina", "hank"],
+        "top 2 by posts__comments_count DESC must be [gina (5), hank (4)], \
+         not an arbitrary 2 rows — saw {names:?}"
+    );
+
+    // Prove this is a genuine Postgres-path fix, not just a SQLite
+    // coincidence: the ORDER BY must sit on the OUTER wrapped statement
+    // (`SELECT * FROM (...) __anno ORDER BY ... LIMIT ...`), not trapped
+    // inside the derived table. `to_sql_pg()` renders the same
+    // `build_query_for` output through the Postgres dialect — the wrap
+    // itself is not backend-conditional, only `FOR UPDATE SKIP LOCKED` is,
+    // so this assertion is exactly as meaningful against either builder.
+    let sql = User::objects()
+        .annotate_count("posts__comments")
+        .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
+        .order_by_annotation("posts__comments_count", true)
+        .limit(2)
+        .to_sql_pg();
+    let anno_pos = sql
+        .find("__anno")
+        .expect("the filter_annotation wrap must produce a __anno derived table");
+    let order_pos = sql
+        .find("ORDER BY")
+        .expect("the wrapped statement must carry an ORDER BY (outer, not lost)");
+    assert!(
+        order_pos > anno_pos,
+        "ORDER BY must appear AFTER the __anno wrap (i.e. on the OUTER \
+         statement), not trapped inside the derived table's subquery: {sql}"
+    );
+    assert_eq!(
+        sql.matches("ORDER BY").count(),
+        1,
+        "exactly one ORDER BY — the inner's is cleared, not duplicated: {sql}"
+    );
 }
 
 #[tokio::test]

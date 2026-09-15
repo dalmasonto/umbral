@@ -168,6 +168,17 @@ pub struct QuerySet<T> {
     /// Set to `true` the first time `.order_by(...)` is called; when
     /// `false`, `build_query_for` applies `default_ordering`.
     pub(crate) explicit_order: bool,
+    /// Heavy-relations epic Task 3 review (merge-gating fix) — the SAME
+    /// `(column, desc)` pairs `.order_by(...)` already bakes eagerly into
+    /// `self.query` (so ordinary reads are unaffected), retained here TOO
+    /// so `build_query_for`'s `filter_annotation` wrap can re-apply them to
+    /// the OUTER (post-filter) statement. Without this, an explicit
+    /// `.order_by(...)` combined with `filter_annotation` would be trapped
+    /// inside the derived table — a subquery's `ORDER BY` is not
+    /// guaranteed by Postgres to be honored by the enclosing query, so the
+    /// final result could come back in the wrong order (or, combined with
+    /// an outer `LIMIT`, the wrong ROWS entirely).
+    pub(crate) explicit_order_cols: Vec<(&'static str, bool)>,
     /// Per-QuerySet override for the `atomic_transactions` builder
     /// default. `None` = inherit the global default via
     /// [`crate::db::atomic_default`]; `Some(true)` = wrap this
@@ -339,6 +350,7 @@ impl<T> Clone for QuerySet<T> {
             prefetch_related: self.prefetch_related.clone(),
             default_ordering: self.default_ordering.clone(),
             explicit_order: self.explicit_order,
+            explicit_order_cols: self.explicit_order_cols.clone(),
             atomic: self.atomic,
             soft_delete_active: self.soft_delete_active,
             with_deleted: self.with_deleted,
@@ -556,6 +568,7 @@ impl<T> QuerySet<T> {
             query,
             default_ordering: Vec::new(),
             explicit_order: false,
+            explicit_order_cols: Vec::new(),
             predicates: Vec::new(),
             explicit_pool: None,
             select_related: Vec::new(),
@@ -890,21 +903,35 @@ impl<T> QuerySet<T> {
                 );
             }
         }
-        // gaps3 #29: ORDER BY an annotation alias — "top scorers by goal count".
-        // Both backends allow ordering by a SELECT-list alias, which is what the
-        // annotation is. Applied before the model-default ordering so an explicit
-        // annotation sort wins, exactly like `order_by` does.
-        for (alias, desc) in &self.annotation_order {
-            let order = if *desc { Order::Desc } else { Order::Asc };
-            q.order_by(Alias::new(alias.as_str()), order);
-        }
-        // BUG-8: default ORDER BY applies only when the caller didn't
-        // supply an explicit `.order_by(...)`: the model-default
-        // ordering semantics.
-        if !self.explicit_order {
-            for (col, desc) in &self.default_ordering {
+        // Heavy-relations epic Task 3 review (merge-gating fix): a
+        // `filter_annotation` wrap traps whatever ORDER BY sits on the
+        // INNER statement inside a derived table — Postgres does NOT
+        // guarantee a subquery's `ORDER BY` survives into the enclosing
+        // query (SQLite happens to preserve it, which is why this needs a
+        // Postgres-first test, not just a SQLite one). So when a wrap is
+        // coming, ordering is applied to the OUTER statement instead,
+        // further down, and skipped here.
+        let will_wrap_for_filter_annotation = !self.annotation_filters.is_empty();
+        if !will_wrap_for_filter_annotation {
+            // gaps3 #29: ORDER BY an annotation alias — "top scorers by goal
+            // count". Both backends allow ordering by a SELECT-list alias,
+            // which is what the annotation is. Applied before the
+            // model-default ordering so an explicit annotation sort wins,
+            // exactly like `order_by` does.
+            for (alias, desc) in &self.annotation_order {
                 let order = if *desc { Order::Desc } else { Order::Asc };
-                q.order_by(Alias::new(*col), order);
+                q.order_by(Alias::new(alias.as_str()), order);
+            }
+            // BUG-8: default ORDER BY applies only when the caller didn't
+            // supply an explicit `.order_by(...)`: the model-default
+            // ordering semantics. (An explicit `.order_by(...)` is already
+            // baked into `q` via the `self.query.clone()` at the top of
+            // this function — nothing extra to do for it here.)
+            if !self.explicit_order {
+                for (col, desc) in &self.default_ordering {
+                    let order = if *desc { Order::Desc } else { Order::Asc };
+                    q.order_by(Alias::new(*col), order);
+                }
             }
         }
         // audit_2 plugin-storage-tasks #6 — `FOR UPDATE SKIP LOCKED`, Postgres
@@ -947,15 +974,42 @@ impl<T> QuerySet<T> {
         // query instead, using `user_limit`/`user_offset` (tracked
         // separately from `self.query` for exactly this kind of
         // reconstruction — see that field's doc comment).
-        if !self.annotation_filters.is_empty() {
+        if will_wrap_for_filter_annotation {
             q.reset_limit();
             q.reset_offset();
+            // Strip whatever `.order_by(...)` eagerly baked into `self.query`
+            // (cloned into `q` at the top of this function) — it would
+            // otherwise sit uselessly (and, on Postgres, unreliably) on the
+            // now-inner subquery. The SAME ordering is re-applied to `outer`
+            // below from the retained data (`annotation_order`,
+            // `explicit_order_cols`/`default_ordering`), never from `q`
+            // itself.
+            q.clear_order_by();
             let mut outer = Query::select();
             outer
                 .column(sea_query::Asterisk)
                 .from_subquery(q, Alias::new("__anno"));
             for (alias, cmp, value) in &self.annotation_filters {
                 outer.and_where(cmp.apply(Expr::col(Alias::new(alias.as_str())), value.clone()));
+            }
+            // The fix: re-apply the FULL ordering to the OUTER (post-filter)
+            // statement — every order column is a plain SELECT-list alias
+            // of the derived table, so `SELECT * FROM (...) __anno ORDER BY
+            // ...` always resolves regardless of backend.
+            for (alias, desc) in &self.annotation_order {
+                let order = if *desc { Order::Desc } else { Order::Asc };
+                outer.order_by(Alias::new(alias.as_str()), order);
+            }
+            if self.explicit_order {
+                for (col, desc) in &self.explicit_order_cols {
+                    let order = if *desc { Order::Desc } else { Order::Asc };
+                    outer.order_by(Alias::new(*col), order);
+                }
+            } else {
+                for (col, desc) in &self.default_ordering {
+                    let order = if *desc { Order::Desc } else { Order::Asc };
+                    outer.order_by(Alias::new(*col), order);
+                }
             }
             if let Some(n) = self.user_limit {
                 outer.limit(n);
@@ -1006,6 +1060,10 @@ impl<T> QuerySet<T> {
             Order::Asc
         };
         self.query.order_by(Alias::new(o.column), order);
+        // Retained as data too (not just baked into `self.query`) so a
+        // `filter_annotation` wrap can re-apply it to the outer statement
+        // — see the field's doc comment.
+        self.explicit_order_cols.push((o.column, o.descending));
         self.explicit_order = true;
         self.prefetched = None;
         self
