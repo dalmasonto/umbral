@@ -120,14 +120,17 @@ async fn to_sql_emits_double_left_join_through_junction() {
         join_count, 2,
         "M2M JOIN must emit exactly TWO LEFT JOINs (junction + child): {sql}"
     );
-    // Junction alias + child alias both present.
+    // Junction table name appears. The internal join-table ALIASES
+    // (formerly the hand-picked `__jm_<field>` / `__j_<field>`) are an
+    // implementation detail of whichever JOIN builder emits them —
+    // heavy-relations epic Task 445 routed this through the shared
+    // `walk_joins` builder, which picks its own internal aliases — so
+    // this test asserts the row-level contract (junction table present,
+    // exactly two JOINs, child columns aliased for hydration) rather than
+    // a literal alias string.
     assert!(
         sql.contains("\"jrm2m_post_tags\""),
         "junction table name must appear: {sql}"
-    );
-    assert!(
-        sql.contains("\"__jm_tags\"") && sql.contains("\"__j_tags\""),
-        "both junction (__jm_) and child (__j_) aliases must appear: {sql}"
     );
     // Aliased child cols project under the same `<field>__<col>`
     // shape the FK branch uses (so the decode helper reuses).

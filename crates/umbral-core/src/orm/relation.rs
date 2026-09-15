@@ -138,6 +138,10 @@ pub enum PathBase {
 pub enum NullJoinPolicy {
     Inner,
     LeftForNullable,
+    /// Unconditional `RIGHT JOIN`, ignoring `HopSpec::required` — the
+    /// explicit `.right_join_related(...)` override `apply_join_related`
+    /// (`queryset/mod.rs`) applies to a single caller-chosen hop.
+    Right,
 }
 
 /// An ordered relation path: a base node plus the hops taken from it.

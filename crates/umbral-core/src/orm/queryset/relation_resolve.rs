@@ -30,24 +30,17 @@
 //!
 //! See `docs/specs/orm-relation-traversal.md`.
 
-// TODO(orm-traversal, deferred): unify hop->JOIN SQL with resolve_join_hops /
-// apply_join_related — the CROSS-MODULE walker in `queryset/mod.rs` stays a
-// separate builder; see docs/specs/orm-relation-traversal.md "Risks and open
-// questions".
-// (The `pk_of` registry lookup below duplicates the inline PK lookup inside
-// `resolve_join_hops`; a shared helper was NOT extracted because that walker
-// clones owned `String` names from a fresh registry snapshot while this module
-// borrows `&str` from a snapshot it owns — the lifetimes differ, and the lookup
-// is fused into the walker's loop, so extraction is non-trivial and would touch
-// the tested select_related/join_related paths. Folded into the unification.)
-//
-// WITHIN this module the JOIN walk is now unified across every hop kind
-// (forward FK/O2O, reverse O2O, reverse-FK, M2M — see `walk_joins` below):
-// `build_to_one_select` (deep to-one) and `build_prefix_pivot_subquery` (the
-// to-one prefix of a crossing-to-many chain) both call the single
-// `walk_joins` helper — no local duplication remains. `apply_join_related`
-// (`queryset/mod.rs`) is not yet rebuilt on it — that is the still-deferred
-// cross-module unification the TODO above names.
+// The JOIN walk is unified across every hop kind (forward FK/O2O, reverse
+// O2O, reverse-FK, M2M — see `walk_joins` below) AND across every consumer:
+// `build_to_one_select` (deep to-one), `build_prefix_pivot_subquery` (the
+// to-one prefix of a crossing-to-many chain), and — as of the
+// heavy-relations epic's Task 445 — `apply_join_related`
+// (`queryset/mod.rs`, the `join_related`/`select_related` JOIN path) all
+// call this single `walk_joins` helper. No JOIN-builder duplication
+// remains; `resolve_join_hops`/`resolve_m2m_chain` (`queryset/mod.rs`)
+// still exist, but only to resolve a path's hop TABLES for
+// `backend_sqlite`/`backend_pg`'s post-fetch column decode — a job
+// unrelated to how the JOIN SQL itself is built.
 
 use sea_query::{
     Alias, Expr, JoinType, PostgresQueryBuilder, Query, SelectStatement, SimpleExpr,
@@ -102,7 +95,10 @@ pub(crate) fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a 
 /// `policy` decides the JOIN TYPE per hop: [`NullJoinPolicy::Inner`] always
 /// INNER JOINs (a NULL/absent link drops the row — traversal's shape);
 /// [`NullJoinPolicy::LeftForNullable`] LEFT JOINs when `!hop.required` (keep
-/// the parent row even when the link is absent — hydration's shape).
+/// the parent row even when the link is absent — hydration's shape);
+/// [`NullJoinPolicy::Right`] unconditionally RIGHT JOINs, ignoring
+/// `hop.required` — `apply_join_related`'s `.right_join_related(...)`
+/// override, applied one hop at a time (never the whole chain at once).
 ///
 /// EVERY joined table (intermediate targets AND the M2M junction) is routed
 /// through [`crate::db::router::schema_qualified_table`], so the intent is
@@ -133,6 +129,7 @@ pub(crate) fn walk_joins(
         let far_alias = Alias::new(format!("{prefix}{}", idx + 1));
         let jt = match policy {
             NullJoinPolicy::LeftForNullable if !hop.required => JoinType::LeftJoin,
+            NullJoinPolicy::Right => JoinType::RightJoin,
             _ => JoinType::InnerJoin,
         };
         match hop.kind {

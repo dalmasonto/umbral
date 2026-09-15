@@ -120,17 +120,6 @@ pub enum JoinKind {
     Right,
 }
 
-impl JoinKind {
-    /// Lower to sea-query's join type.
-    pub(crate) fn sea(self) -> sea_query::JoinType {
-        match self {
-            JoinKind::Inner => sea_query::JoinType::InnerJoin,
-            JoinKind::Left => sea_query::JoinType::LeftJoin,
-            JoinKind::Right => sea_query::JoinType::RightJoin,
-        }
-    }
-}
-
 /// One requested eager-join: a dotted relation path (`"plugin__author"`)
 /// plus the join type to apply to the LAST hop. `kind: None` means
 /// auto-infer per-hop from FK nullability (INNER for NOT NULL, LEFT for
@@ -1507,17 +1496,25 @@ fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx:
     Ok(())
 }
 
-/// One resolved hop of a `join_related` FK chain.
+/// One resolved hop of a `join_related` FK chain — the child TABLE a hop
+/// targets.
+///
+/// Pre-Task-445 this also carried the FK column name, the target's PK
+/// column, and its nullability, because `apply_join_related` hand-built
+/// its own JOIN `ON` clauses and LEFT/INNER inference straight off this
+/// struct. That JOIN emission now goes through `RelPath::from_path` +
+/// `relation_resolve::walk_joins` instead (heavy-relations epic, Task
+/// 445), so `JoinHop` shrank to just what its ONE remaining consumer
+/// needs: `backend_sqlite`/`backend_pg`'s post-fetch decode helpers
+/// (`hydrate_joined_rels`, `extract_m2m_child_json`) resolve a path's hop
+/// tables to look up each level's registered `ModelMeta` (and, from it,
+/// the PK column) to decode the `<dotted-path>__<col>` aliased columns
+/// `apply_join_related` projected — a job unrelated to how the JOIN SQL
+/// itself was built.
 #[derive(Debug, Clone)]
 pub(crate) struct JoinHop {
-    /// FK column name on the *previous* level's table.
-    pub(crate) fk_col: String,
     /// Table this hop targets.
     pub(crate) child_table: String,
-    /// PK column on `child_table`.
-    pub(crate) child_pk: String,
-    /// Was the FK column nullable? (drives auto-inference)
-    pub(crate) nullable: bool,
 }
 
 /// Resolve a dotted FK path (`"plugin__author"`) into ordered hops.
@@ -1536,16 +1533,16 @@ pub(crate) fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
         return None;
     }
     let mut hops = Vec::with_capacity(segs.len());
-    // Hop 0 off the typed parent.
+    // Hop 0 off the typed parent. The PK lookup isn't stored (see
+    // `JoinHop`'s doc comment) but stays part of the resolvability check:
+    // a target with no declared PK makes the whole path unresolvable,
+    // same as before this hop stopped needing the PK's name.
     let f0 = T::FIELDS.iter().find(|f| f.name == segs[0])?;
     let t0 = f0.fk_target?;
     let m0 = registered.iter().find(|m| m.table == t0)?;
-    let pk0 = m0.fields.iter().find(|c| c.primary_key)?;
+    m0.fields.iter().find(|c| c.primary_key)?;
     hops.push(JoinHop {
-        fk_col: segs[0].to_string(),
         child_table: t0.to_string(),
-        child_pk: pk0.name.clone(),
-        nullable: f0.nullable,
     });
     let mut current = t0;
     for seg in &segs[1..] {
@@ -1553,12 +1550,9 @@ pub(crate) fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
         let col = meta.fields.iter().find(|c| c.name == *seg)?;
         let tgt = col.fk_target.as_deref()?;
         let tmeta = registered.iter().find(|m| m.table == tgt)?;
-        let pk = tmeta.fields.iter().find(|c| c.primary_key)?;
+        tmeta.fields.iter().find(|c| c.primary_key)?;
         hops.push(JoinHop {
-            fk_col: (*seg).to_string(),
             child_table: tgt.to_string(),
-            child_pk: pk.name.clone(),
-            nullable: col.nullable,
         });
         current = tgt;
     }
@@ -1590,12 +1584,9 @@ pub(crate) fn resolve_m2m_chain<T: Model>(path: &str) -> Option<(String, String,
         let col = meta.fields.iter().find(|c| c.name == *seg)?;
         let tgt = col.fk_target.as_deref()?;
         let tmeta = registered.iter().find(|m| m.table == tgt)?;
-        let pk = tmeta.fields.iter().find(|c| c.primary_key)?;
+        tmeta.fields.iter().find(|c| c.primary_key)?;
         onward.push(JoinHop {
-            fk_col: (*seg).to_string(),
             child_table: tgt.to_string(),
-            child_pk: pk.name.clone(),
-            nullable: col.nullable,
         });
         current = tgt;
     }
@@ -1910,168 +1901,124 @@ impl<T: Model> QuerySet<T> {
         // Set when any emitted hop is a RIGHT JOIN — drives the
         // once-per-process old-SQLite advisory after the emit loop.
         let mut emitted_right = false;
+
+        // Heavy-relations epic Task 445: every `join_related` path — a
+        // forward-FK chain, an M2M-first chain with an onward FK tail, or a
+        // reverse-FK hop — now resolves through the SAME
+        // `RelPath::from_path` + `walk_joins` machinery `select_related` /
+        // traversal / the aggregate path use, instead of this helper
+        // hand-rolling its own FK-chain branch and M2M branch. ONE JOIN
+        // builder for every hop kind; only the JOIN EMISSION changed here —
+        // the per-hop column projection (`<dotted-path>__<col>` aliases,
+        // built below) is byte-identical to what shipped before, because
+        // `backend_sqlite`/`backend_pg`'s `hydrate_joined_rels` and
+        // `extract_m2m_child_json` decode purely off THOSE output column
+        // aliases, never off the internal join-table alias `walk_joins`
+        // picks for its own `ON` clauses (which is why that internal
+        // alias is free to change here without touching hydration).
         for jr in &self.join_related {
             let field_name = &jr.path;
-            // FK chain branch first. A (possibly nested) FK path splits
-            // on `__` into ordered hops; each hop joins onto the prior
-            // level's alias, and the DEEPEST hop's child columns are
-            // aliased by the full dotted path so hydration can rebuild
-            // the nested relation graph. The single-hop case is
-            // byte-identical in child-column aliases to the pre-nesting
-            // path (`<field>__<col>`); only the internal join alias
-            // gains an `_h{idx}` suffix, which no test asserts.
-            if let Some(hops) = resolve_join_hops::<T>(field_name) {
-                let mut prev_alias = parent_alias.clone();
-                let last = hops.len() - 1;
-                // Cumulative dotted prefix per hop so EVERY level's own
-                // columns ride along, aliased by its path-so-far. Hop 0
-                // of `plugin__author` is `plugin`, hop 1 is
-                // `plugin__author`. Selecting every level (not just the
-                // leaf) is what lets hydration rebuild a FULL nested
-                // object — the intermediate `plugin` row needs its own
-                // `id`/`name` to deserialise into `ForeignKey<Plugin>`
-                // before `author` nests inside it.
-                let segs: Vec<&str> = field_name.split("__").collect();
-                for (idx, hop) in hops.iter().enumerate() {
-                    let hop_alias = Alias::new(format!("__j_{field_name}_h{idx}"));
-                    // Last hop: explicit request, else infer from THIS
-                    // hop's nullability. Intermediate hops always infer
-                    // per-hop (an INNER can nest inside an outer
-                    // LEFT etc.); an explicit kind only pins the leaf.
-                    let kind = if idx == last {
-                        jr.kind.unwrap_or(if hop.nullable {
-                            JoinKind::Left
-                        } else {
-                            JoinKind::Inner
-                        })
-                    } else if hop.nullable {
-                        JoinKind::Left
-                    } else {
-                        JoinKind::Inner
-                    };
-                    emitted_right |= kind == JoinKind::Right;
-                    outer.join_as(
-                        kind.sea(),
-                        crate::db::router::schema_qualified_table(hop.child_table.as_str()),
-                        hop_alias.clone(),
-                        Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
-                            .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
-                    );
-                    if let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) {
-                        // Cumulative dotted prefix for this hop's columns.
-                        let prefix = segs[..=idx].join("__");
-                        for col in &meta.fields {
-                            let alias = format!("{}__{}", prefix, col.name);
-                            outer.expr_as(
-                                Expr::col((hop_alias.clone(), Alias::new(col.name.as_str()))),
-                                Alias::new(alias),
-                            );
-                        }
-                    }
-                    prev_alias = hop_alias;
-                }
+            let segs: Vec<&str> = field_name.split("__").collect();
+
+            // Resolve the whole path in one shot. An unresolvable path
+            // (typo, unregistered model, or a shape `from_path` doesn't
+            // support — e.g. an M2M hop deeper than the root) is silently
+            // skipped: the same forgiving posture this helper has always
+            // had. `validate_join_related_fields` already gates the typed
+            // `fetch()` terminal with a loud error before this ever runs;
+            // `to_sql`/`to_sql_pg` call this directly with no upfront
+            // validation and expect a missing JOIN, not a panic, on a bad
+            // field name.
+            let Ok(path) = crate::orm::relation::RelPath::from_path::<T>(field_name) else {
+                continue;
+            };
+            if path.hops.is_empty() {
                 continue;
             }
 
-            // M2M branch (post-#113). Emit the double LEFT JOIN
-            // through the junction table:
-            //   LEFT JOIN <junction> AS __jm_<field>
-            //     ON __p.<parent_pk> = __jm_<field>.parent_id
-            //   LEFT JOIN <child_table> AS __j_<field>
-            //     ON __jm_<field>.child_id = __j_<field>.<child_pk>
-            // Aliased child cols use the same `<field>__<col>` shape
-            // as the FK branch so the decode helper can be reused.
-            // The M2M field is the FIRST segment of the path; a nested
-            // path like `"tags__category"` passes THROUGH the M2M hop
-            // and continues with an onward FK chain off the child.
-            let m2m_seg = field_name.split("__").next().unwrap_or(field_name.as_str());
-            if let Some(m2m_rel) = T::M2M_RELATIONS.iter().find(|r| r.field_name == m2m_seg)
-                && let Some(parent_pk) = T::FIELDS.iter().find(|f| f.primary_key)
-                && let Some(child_meta) =
-                    registered.iter().find(|m| m.table == m2m_rel.target_table)
-                && let Some(child_pk) = child_meta.fields.iter().find(|c| c.primary_key)
-            {
-                // Junction table + aliases key off the M2M field name
-                // (segs[0]), NOT the full dotted path.
-                let junction_table = format!("{}_{}", T::TABLE, m2m_seg);
-                let junction_alias = Alias::new(format!("__jm_{m2m_seg}"));
-                let child_alias = Alias::new(format!("__j_{m2m_seg}"));
-                // The junction hop stays LEFT so a parent with zero
-                // junction rows isn't dropped by the join to the
-                // junction table itself — the CHILD hop's kind is what
-                // decides drop/keep. Plain `join_related` (kind None)
-                // leaves the child LEFT too, preserving the shipped
-                // double-LEFT-JOIN M2M behavior (a tag-less parent
-                // survives with an empty M2M slot). An explicit
-                // inner_join_related drops parents whose relation is
-                // absent: the junction-LEFT miss yields a NULL child_id,
-                // then the child INNER on NULL has no match -> the parent
-                // is dropped, which is the INNER contract.
-                let child_kind = jr.kind.unwrap_or(JoinKind::Left);
-                emitted_right |= child_kind == JoinKind::Right;
-                outer.join_as(
-                    sea_query::JoinType::LeftJoin,
-                    crate::db::router::schema_qualified_table(&junction_table),
-                    junction_alias.clone(),
-                    Expr::col((parent_alias.clone(), Alias::new(parent_pk.name)))
-                        .equals((junction_alias.clone(), Alias::new("parent_id"))),
-                );
-                outer.join_as(
-                    child_kind.sea(),
-                    crate::db::router::schema_qualified_table(m2m_rel.target_table),
-                    child_alias.clone(),
-                    Expr::col((junction_alias.clone(), Alias::new("child_id")))
-                        .equals((child_alias.clone(), Alias::new(child_pk.name.as_str()))),
-                );
-                // Child columns aliased by the M2M field name so the
-                // M2M decode path (`<m2m_field>__<col>`) reads them.
-                for col in &child_meta.fields {
-                    let alias = format!("{}__{}", m2m_seg, col.name);
-                    outer.expr_as(
-                        Expr::col((child_alias.clone(), Alias::new(col.name.as_str()))),
-                        Alias::new(alias),
-                    );
-                }
-                // Onward FK chain off the child (segs[1..]). Each hop
-                // joins onto the prior level's alias and aliases its
-                // columns by the cumulative dotted path
-                // (`tags__category__name`) so the M2M decode path can
-                // nest the onward object into each child row.
-                if let Some((_child_table, _child_pk, onward)) = resolve_m2m_chain::<T>(field_name)
-                {
-                    let segs: Vec<&str> = field_name.split("__").collect();
-                    let mut prev_alias = child_alias.clone();
-                    for (i, hop) in onward.iter().enumerate() {
-                        // segs index for this hop: segs[0] is the M2M
-                        // field, segs[1] is onward[0], etc.
-                        let seg_idx = i + 1;
-                        let hop_alias = Alias::new(format!("__j_{m2m_seg}_o{i}"));
-                        let kind = if hop.nullable {
-                            JoinKind::Left
-                        } else {
-                            JoinKind::Inner
-                        };
-                        outer.join_as(
-                            kind.sea(),
-                            crate::db::router::schema_qualified_table(hop.child_table.as_str()),
-                            hop_alias.clone(),
-                            Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
-                                .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
+            // Which hop does an explicit `jr.kind` (an
+            // inner_/left_/right_join_related override) pin? Mirrors the
+            // pre-refactor rule exactly: for a plain FK chain it's the
+            // DEEPEST hop (`"plugin__author"` pins `author`); for an
+            // M2M-first chain it's the M2M hop ITSELF, never its onward FK
+            // tail (`"tags__category"`'s `inner_join_related` pins the
+            // JOIN to `tags`, not to `category` — the onward chain always
+            // auto-infers from its own nullability, same as an
+            // untouched intermediate FK hop).
+            let last = path.hops.len() - 1;
+            let explicit_target_idx = if path.hops[0].kind == crate::orm::relation::HopKind::M2M {
+                0
+            } else {
+                last
+            };
+
+            let mut prev_alias = parent_alias.clone();
+            for (idx, hop) in path.hops.iter().enumerate() {
+                let explicit = if idx == explicit_target_idx {
+                    jr.kind
+                } else {
+                    None
+                };
+                let mut hop_for_walk = *hop;
+                let policy = if explicit == Some(JoinKind::Right) {
+                    emitted_right = true;
+                    crate::orm::relation::NullJoinPolicy::Right
+                } else {
+                    // Encode the desired LEFT/INNER choice through
+                    // `HopSpec::required` — `walk_joins`'
+                    // `LeftForNullable` policy LEFT-joins exactly when
+                    // `!hop.required`, so pinning `required` here (rather
+                    // than trusting the hop's OWN nullability) is what
+                    // lets an explicit `left_`/`inner_join_related`
+                    // override the auto-inferred choice on the target hop.
+                    let want_left = match explicit {
+                        Some(JoinKind::Left) => true,
+                        Some(JoinKind::Inner) => false,
+                        Some(JoinKind::Right) => unreachable!("handled above"),
+                        None => !hop.required,
+                    };
+                    hop_for_walk.required = !want_left;
+                    crate::orm::relation::NullJoinPolicy::LeftForNullable
+                };
+                // A prefix unique per (field, hop) so several
+                // `.join_related(...)` calls in one query — or a nested
+                // chain's several hops — never collide on an internal
+                // join-table alias. That alias is load-bearing ONLY for
+                // this hop's own `ON` clause; every consumer of the
+                // rendered SQL (hydration, tests) reads the OUTPUT column
+                // aliases projected below instead.
+                let prefix = format!("__j_{field_name}_h{idx}_");
+                let far_alias = match relation_resolve::walk_joins(
+                    &mut outer,
+                    prev_alias.clone(),
+                    std::slice::from_ref(&hop_for_walk),
+                    policy,
+                    &prefix,
+                    &registered,
+                ) {
+                    Ok(alias) => alias,
+                    // Same forgiving posture as the unresolved-path case
+                    // above: stop emitting further hops for this field
+                    // rather than risk a wrong query.
+                    Err(_) => break,
+                };
+                // Project this hop's own columns aliased by the
+                // cumulative dotted path so hydration can rebuild the
+                // nested object bottom-up — unchanged from before this
+                // refactor. Hop 0 of `plugin__author` is `plugin`, hop 1
+                // is `plugin__author`; the M2M hop of `tags__category` is
+                // `tags`, its onward hop is `tags__category`.
+                if let Some(meta) = registered.iter().find(|m| m.table == hop.to_table) {
+                    let col_prefix = segs[..=idx].join("__");
+                    for col in &meta.fields {
+                        let alias = format!("{col_prefix}__{}", col.name);
+                        outer.expr_as(
+                            Expr::col((far_alias.clone(), Alias::new(col.name.as_str()))),
+                            Alias::new(alias),
                         );
-                        if let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) {
-                            let prefix = segs[..=seg_idx].join("__");
-                            for col in &meta.fields {
-                                let alias = format!("{}__{}", prefix, col.name);
-                                outer.expr_as(
-                                    Expr::col((hop_alias.clone(), Alias::new(col.name.as_str()))),
-                                    Alias::new(alias),
-                                );
-                            }
-                        }
-                        prev_alias = hop_alias;
                     }
                 }
-                continue;
+                prev_alias = far_alias;
             }
         }
         // A RIGHT JOIN against SQLite needs >= 3.39; warn once per
