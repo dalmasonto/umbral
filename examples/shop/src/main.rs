@@ -318,7 +318,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // re-running tops up missing rows without re-inserting.
         .auto_migrate_on_serve()
         .seed_on_serve(seed::all)
-        .build()?;
+        // `build_deferred()` (not `build()`) because `umbral_cli::dispatch`
+        // decides when `on_ready` fires: a schema or scaffold command
+        // (`migrate`, `startplugin`, …) must not fire plugin lifecycle hooks
+        // that seed rows before the command has even run (gaps3 #41).
+        .build_deferred()?;
 
     umbral_cli::dispatch(app).await
 }
