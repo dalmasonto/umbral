@@ -149,7 +149,7 @@ Behavioural, against real models (per the repo's testing convention — real row
 - Assert the same `ModelMeta` (from the registry, by table) yields identical derivations as the static `ModelMeta::for_::<T>()` — proving one impl serves both paths.
 - After the REST/admin migration steps, assert existing REST and admin behaviour is unchanged (the contract is a refactor of derivation, not a behaviour change).
 
-## Open questions
+## Resolved decisions
 
-1. Naming: `serializable_fields(allow_private: bool)` vs. splitting into `public_fields()` (have it) + `private_fields()` and letting callers chain. Current lean: keep the convenience; it is what nearly every caller wants.
-2. Whether `writable_fields` should also exclude `readonly_fields` (a presentation-intent list) or leave that to the plugin. Current lean: leave it — `readonly_fields` is a form/UI concern (admin), not a "the server rejects this on write" fact; REST write-blocking is `noform`/`privileged`.
+1. Keep the `serializable_fields(allow_private: bool)` convenience alongside `public_fields()`; it is what nearly every caller wants, so callers should not have to chain `public_fields()` with a private set by hand. (Resolved 2026-09-15.)
+2. `writable_fields()` does NOT exclude `readonly_fields`. `readonly_fields` is a form/UI concern (admin); server-side write-blocking is expressed by `noform`/`privileged`, which `writable_fields()` already honours. A plugin that wants to also drop `readonly_fields` from a form does so in its own overlay. (Resolved 2026-09-15.)
