@@ -394,6 +394,81 @@ impl StoragePlugin {
         })
     }
 
+    /// Cache-first form of a `Decision`-returning access gate. The closure
+    /// receives the resolved [`MediaCaller`] and the requested key and
+    /// returns a [`Decision`]; the wrapper checks the ambient
+    /// [`umbral::cache::TaggedCache`] BEFORE running the closure, so a
+    /// repeated request for the same (caller, key) is served from cache
+    /// without re-running any DB lookups the closure does.
+    ///
+    /// No ambient tagged cache installed (no `umbral-cache` plugin, or
+    /// installed too late) → every request recomputes; the failure mode is
+    /// "recompute," never "silently allow."
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .plugin(CachePlugin::new()) // installs the ambient TaggedCache
+    ///     .plugin(
+    ///         StoragePlugin::new().media("/media", "./media").media_access_cached(
+    ///             |caller: MediaCaller, key: &str| async move {
+    ///                 Decision::of(owns(&caller, key).await).depends_on(["media".into()])
+    ///             },
+    ///         ),
+    ///     );
+    /// ```
+    pub fn media_access_cached<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(MediaCaller, &str) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Decision> + Send + 'static,
+    {
+        let f = Arc::new(f);
+        self.media_access = Some(Arc::new(move |headers: &http::HeaderMap, key: &str| {
+            let f = f.clone();
+            let headers = headers.clone();
+            let key = key.to_string();
+            Box::pin(async move {
+                let caller = MediaCaller::resolve(&headers).await;
+                let caller_id = caller
+                    .user_id()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "anon".to_string());
+                let cache_key = format!("mediaacc:{key}:{caller_id}");
+                match umbral::cache::ambient_tagged_cache() {
+                    Some(cache) => {
+                        if let Some(hit) = cache.get_bool(&cache_key).await {
+                            return hit; // cache hit → no closure work
+                        }
+                        let decision = f(caller, &key).await; // miss → run the closure
+                        if decision.is_cacheable() {
+                            cache
+                                .set_tagged_bool(
+                                    &cache_key,
+                                    decision.is_allow(),
+                                    Some(decision.ttl_or_default()),
+                                    decision.tags(),
+                                )
+                                .await;
+                        }
+                        decision.is_allow()
+                    }
+                    // No cache configured → always compute. Failure mode is
+                    // "recompute," never "allow."
+                    None => f(caller, &key).await.is_allow(),
+                }
+            })
+        }));
+        self.media_access_wants_identity = true;
+        self
+    }
+
+    /// Test-only accessor for the configured [`MediaAccessFn`] gate, used by
+    /// behavioral tests that exercise a gate directly without booting the
+    /// full media GET route.
+    #[doc(hidden)]
+    pub fn resolve_access(&self) -> Option<MediaAccessFn> {
+        self.media_access.clone()
+    }
+
     /// Register a **background upload processor** — an async fn run over each
     /// saved [`MediaFile`] after its bytes land in storage (thumbnailing,
     /// transcoding, virus scan, …). Multiple are allowed; they run in

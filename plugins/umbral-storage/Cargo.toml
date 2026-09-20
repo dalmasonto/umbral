@@ -83,3 +83,8 @@ include_dir = "0.7"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Test-only: installs a real ambient TaggedCache for the media_access_cached
+# behavioral test. This is a dev-dependency, so it does NOT create a runtime
+# plugin→plugin dependency (umbral-storage never depends on umbral-cache at
+# runtime; both talk to the ambient contract in umbral::cache).
+umbral-cache = { path = "../umbral-cache", version = "0.0.12" }
