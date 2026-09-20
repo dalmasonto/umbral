@@ -414,6 +414,16 @@ impl SqliteBackend {
         .execute(&pool)
         .await
         .map_err(CacheError::Sqlx)?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS umbral_cache_tag (
+                tag TEXT NOT NULL,
+                key TEXT NOT NULL,
+                PRIMARY KEY (tag, key)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(CacheError::Sqlx)?;
         Ok(Self { pool })
     }
 
@@ -491,6 +501,32 @@ impl CacheBackend for SqliteBackend {
         {
             tracing::warn!(error = %e, "umbral-cache: SQLite cache clear failed (swallowed)");
         }
+    }
+
+    async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
+        self.set(key, value, ttl).await;
+        for t in tags {
+            let _ = sqlx::query(
+                "INSERT INTO umbral_cache_tag (tag, key) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind(t)
+            .bind(key)
+            .execute(&self.pool)
+            .await;
+        }
+    }
+
+    async fn bust_tag(&self, tag: &str) {
+        let _ = sqlx::query(
+            "DELETE FROM umbral_cache WHERE key IN (SELECT key FROM umbral_cache_tag WHERE tag = ?)",
+        )
+        .bind(tag)
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query("DELETE FROM umbral_cache_tag WHERE tag = ?")
+            .bind(tag)
+            .execute(&self.pool)
+            .await;
     }
 }
 
