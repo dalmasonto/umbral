@@ -715,6 +715,7 @@ pub(crate) async fn rows_fragment(
     headers: HeaderMap,
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let path = format!("{}/{table}/rows", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
@@ -722,7 +723,7 @@ pub(crate) async fn rows_fragment(
         Err(r) => return r,
     };
     if !is_htmx(&headers) {
-        let qs = serde_urlencoded::to_string(&params).unwrap_or_default();
+        let qs = raw_query.clone().unwrap_or_default();
         let target = if qs.is_empty() {
             format!("{}/{table}/", crate::branding::current().base_path)
         } else {
@@ -862,7 +863,7 @@ pub(crate) async fn rows_fragment(
             } else {
                 "HX-Push-Url"
             };
-            let query = serde_urlencoded::to_string(&params).unwrap_or_default();
+            let query = raw_query.unwrap_or_default();
             let nav_url = format!("{}/{table}/?{query}", crate::branding::current().base_path);
             if let Ok(v) = axum::http::HeaderValue::from_str(&nav_url) {
                 response.headers_mut().insert(header_name, v);
