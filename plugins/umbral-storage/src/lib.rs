@@ -461,6 +461,32 @@ impl StoragePlugin {
         self
     }
 
+    /// Sugar over [`Self::media_access_cached`]: allow staff and superusers,
+    /// deny everyone else.
+    pub fn media_access_staff(self) -> Self {
+        self.media_access_cached(|caller: MediaCaller, _key: &str| async move {
+            Decision::of(caller.is_staff || caller.is_superuser)
+        })
+    }
+
+    /// Sugar over [`Self::media_access_cached`]: allow a superuser or a
+    /// caller whose `extras["roles"]` (see [`MediaCaller`]) contains any of
+    /// `roles`; deny everyone else.
+    pub fn media_access_roles<I, S>(self, roles: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let allow: Vec<String> = roles.into_iter().map(Into::into).collect();
+        self.media_access_cached(move |caller: MediaCaller, _key: &str| {
+            let allow = allow.clone();
+            async move {
+                let ok = caller.is_superuser || allow.iter().any(|r| caller.has_role(r));
+                Decision::of(ok)
+            }
+        })
+    }
+
     /// Test-only accessor for the configured [`MediaAccessFn`] gate, used by
     /// behavioral tests that exercise a gate directly without booting the
     /// full media GET route.
