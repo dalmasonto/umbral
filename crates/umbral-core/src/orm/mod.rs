@@ -25,6 +25,7 @@ pub mod choices;
 pub mod cleaners;
 pub mod column;
 pub mod dynamic;
+pub mod exposure;
 pub mod expr;
 pub mod file_field;
 pub mod foreign_key;
