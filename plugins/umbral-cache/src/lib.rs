@@ -279,10 +279,30 @@ struct MemoryEntry {
     expires_at: Option<DateTime<Utc>>,
 }
 
+fn expiry(ttl: Option<Duration>) -> Option<DateTime<Utc>> {
+    ttl.and_then(|d| {
+        chrono::Duration::from_std(d)
+            .ok()
+            .and_then(|cd| Utc::now().checked_add_signed(cd))
+    })
+}
+
 #[derive(Default)]
 struct MemoryState {
     values: HashMap<String, MemoryEntry>,
     tags: HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl MemoryState {
+    /// Remove `key` from every tag set that references it, dropping any
+    /// tag entry left empty. Keeps `bust_tag` accurate after a delete,
+    /// clear, or re-tag.
+    fn untag(&mut self, key: &str) {
+        self.tags.retain(|_, keys| {
+            keys.remove(key);
+            !keys.is_empty()
+        });
+    }
 }
 
 #[derive(Default)]
@@ -307,11 +327,7 @@ impl CacheBackend for MemoryBackend {
     }
 
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) {
-        let expires_at = ttl.and_then(|d| {
-            chrono::Duration::from_std(d)
-                .ok()
-                .and_then(|cd| Utc::now().checked_add_signed(cd))
-        });
+        let expires_at = expiry(ttl);
         self.inner
             .lock()
             .await
@@ -320,22 +336,23 @@ impl CacheBackend for MemoryBackend {
     }
 
     async fn delete(&self, key: &str) {
-        self.inner.lock().await.values.remove(key);
+        let mut st = self.inner.lock().await;
+        st.values.remove(key);
+        st.untag(key);
     }
 
     async fn clear(&self) {
-        self.inner.lock().await.values.clear();
+        let mut st = self.inner.lock().await;
+        st.values.clear();
+        st.tags.clear();
     }
 
     async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
-        let expires_at = ttl.and_then(|d| {
-            chrono::Duration::from_std(d)
-                .ok()
-                .and_then(|cd| Utc::now().checked_add_signed(cd))
-        });
+        let expires_at = expiry(ttl);
         let mut st = self.inner.lock().await;
         st.values
             .insert(key.to_string(), MemoryEntry { value, expires_at });
+        st.untag(key);
         for t in tags {
             st.tags
                 .entry(t.clone())
