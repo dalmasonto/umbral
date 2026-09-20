@@ -1,4 +1,4 @@
-//! The scaffolding subcommands (`startproject` / `startapp` / `startplugin` /
+//! The scaffolding subcommands (`startproject` / `startplugin` /
 //! `startcommand`), defined **once** and shared by both CLI entry points.
 //!
 //! Two binaries reach these commands:
@@ -9,10 +9,10 @@
 //!
 //! Before this module existed, only `main.rs` knew how to dispatch them, so the
 //! app-embedded surface *listed* the scaffolders in its unified help (gap 66)
-//! but answered `error: unknown command \`startapp\`` when you actually ran one
-//! — the help promised a command the dispatch couldn't honour. Both entry
-//! points now call [`try_run_scaffold`], so `cargo run -- startapp --help`
-//! renders the command's usage and `cargo run -- startapp foo` scaffolds, in
+//! but answered `error: unknown command \`startplugin\`` when you actually ran
+//! one — the help promised a command the dispatch couldn't honour. Both entry
+//! points now call [`try_run_scaffold`], so `cargo run -- startplugin --help`
+//! renders the command's usage and `cargo run -- startplugin foo` scaffolds, in
 //! full parity with the global binary.
 //!
 //! Scaffolding needs **no built `App`** — `startproject` runs where no project
@@ -63,28 +63,13 @@ pub enum ScaffoldCommand {
         #[arg(long, value_name = "PATH")]
         local: Option<PathBuf>,
     },
-    /// Deprecated alias of `startplugin`. Generates the same plugin crate.
-    ///
-    /// There is no separate "app" contract — everything under `plugins/`
-    /// is a plugin — so `startapp` folds into `startplugin`. Prefer
-    /// `startplugin`; this alias prints a deprecation note and forwards.
-    Startapp {
-        /// Plugin name. ASCII alphanumeric, underscore, hyphen.
-        name: String,
-        /// Project root. Defaults to the current directory.
-        #[arg(long, default_value = ".")]
-        path: PathBuf,
-        /// Path to a local umbral repo checkout. See `startproject --local`.
-        #[arg(long, value_name = "PATH")]
-        local: Option<PathBuf>,
-    },
     /// Create a plugin crate in `<project>/plugins/<name>/`.
     ///
     /// Writes a complete starter: an example `Model` showing common field
     /// attributes (`max_length`, `choices`, nullable timestamp, `noedit`),
     /// an example axum handler that reads query params and returns JSON,
     /// and a README walking through the layout. This is the one plugin
-    /// scaffolder; `startapp` is a deprecated alias.
+    /// scaffolder.
     Startplugin {
         /// Plugin name. ASCII alphanumeric, underscore, hyphen.
         name: String,
@@ -163,15 +148,18 @@ pub fn command_catalog() -> Vec<(String, Option<String>)> {
 /// subcommand parser uses, so command-specific help exits cleanly at both entry
 /// points rather than falling through to the top-level catalog.
 pub fn try_run_scaffold(argv: &[OsString]) -> Option<Result<(), BoxError>> {
-    let sub = argv
+    let sub_index = argv
         .iter()
+        .enumerate()
         .skip(1)
-        .find(|a| !a.to_string_lossy().starts_with('-'))
-        .map(|a| a.to_string_lossy().into_owned())?;
+        .find(|(_, a)| !a.to_string_lossy().starts_with('-'))
+        .map(|(i, _)| i)?;
+    let sub = argv[sub_index].to_string_lossy().into_owned();
     if !is_scaffold_command(&sub) {
         return None;
     }
-    match ScaffoldCli::try_parse_from(argv) {
+    let argv = normalize_scaffold_help(argv, sub_index);
+    match ScaffoldCli::try_parse_from(&argv) {
         Ok(cli) => Some(run_scaffold(cli.command)),
         Err(e) => {
             // `--help`, `--version`, or a usage error (missing NAME, bad flag).
@@ -183,6 +171,40 @@ pub fn try_run_scaffold(argv: &[OsString]) -> Option<Result<(), BoxError>> {
     }
 }
 
+/// Normalise a help request that landed in a scaffold command's NAME slot.
+///
+/// `startplugin help` and the `-help` single-dash typo must mean "show this
+/// command's usage" — NOT "scaffold a plugin literally named `help`". Without
+/// this, clap takes `help` as `<NAME>` and generates a broken `help` crate
+/// (exactly how a stray `plugins/help/` gets created when a user was only asking
+/// for help). clap already treats `--help`/`-h` as help; this rewrites the other
+/// two to `--help` so every form renders the same usage. `sub_index` is the
+/// index of the scaffold subcommand token in `argv`.
+fn normalize_scaffold_help(argv: &[OsString], sub_index: usize) -> Vec<OsString> {
+    // The first non-flag token after the subcommand is the NAME slot.
+    let name_index = argv
+        .iter()
+        .enumerate()
+        .skip(sub_index + 1)
+        .find(|(_, a)| !a.to_string_lossy().starts_with('-'))
+        .map(|(i, _)| i);
+    argv.iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let s = a.to_string_lossy();
+            if i > sub_index && s == "-help" {
+                // single-dash typo for --help, anywhere after the subcommand
+                OsString::from("--help")
+            } else if Some(i) == name_index && s == "help" {
+                // a bare `help` sitting where the NAME goes is a help request
+                OsString::from("--help")
+            } else {
+                a.clone()
+            }
+        })
+        .collect()
+}
+
 /// Run a parsed scaffolding command: write the files and print the report. This
 /// is the single implementation both the global `umbral` binary and the
 /// app-embedded dispatcher call.
@@ -191,18 +213,6 @@ pub fn run_scaffold(cmd: ScaffoldCommand) -> Result<(), BoxError> {
         ScaffoldCommand::Startproject { name, path, local } => {
             let r = scaffold_project(&name, &path, local.as_deref())?;
             print_report(&r, &name, false);
-            Ok(())
-        }
-        ScaffoldCommand::Startapp { name, path, local } => {
-            // `startapp` is a deprecated alias of `startplugin` — everything
-            // generated under plugins/ is a plugin; there is no separate
-            // "app" contract. Same output either way.
-            eprintln!(
-                "note: `startapp` is deprecated — use `startplugin` (there's no separate \
-                 \"app\" contract; everything under plugins/ is a plugin)."
-            );
-            let r = scaffold_plugin(&name, &path, local.as_deref())?;
-            print_report(&r, &name, true);
             Ok(())
         }
         ScaffoldCommand::Startplugin { name, path, local } => {
@@ -325,11 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_the_four_scaffolders_and_nothing_else() {
-        for name in ["startproject", "startapp", "startplugin", "startcommand"] {
+    fn recognizes_the_three_scaffolders_and_nothing_else() {
+        for name in ["startproject", "startplugin", "startcommand"] {
             assert!(is_scaffold_command(name), "`{name}` should be a scaffolder");
         }
-        for name in ["migrate", "serve", "plugin", "frobnicate", ""] {
+        for name in ["startapp", "migrate", "serve", "plugin", "frobnicate", ""] {
             assert!(
                 !is_scaffold_command(name),
                 "`{name}` must NOT be a scaffolder"
@@ -339,20 +349,36 @@ mod tests {
 
     #[test]
     fn scaffold_help_renders_the_command_usage_not_unknown_command() {
-        // The bug: `startapp --help` used to fall through to `error: unknown
+        // The bug: `startplugin --help` used to fall through to `error: unknown
         // command`. clap must instead surface DisplayHelp with the command's
         // args (NAME, --path, --local) so the user sees the real usage.
-        let err = ScaffoldCli::try_parse_from(os(&["umbral", "startapp", "--help"]))
+        let err = ScaffoldCli::try_parse_from(os(&["umbral", "startplugin", "--help"]))
             .expect_err("--help returns a clap Err carrying the help text");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
         let help = err.to_string();
         assert!(help.contains("--path"), "usage missing --path:\n{help}");
         assert!(help.contains("--local"), "usage missing --local:\n{help}");
-        // Deprecation is documented right in the about line clap renders.
-        assert!(
-            help.contains("Deprecated alias") || help.contains("startplugin"),
-            "startapp help should point at startplugin:\n{help}"
-        );
+    }
+
+    #[test]
+    fn bare_help_in_name_slot_is_a_help_request_not_a_plugin_named_help() {
+        // `startplugin help` must show usage, NOT scaffold a `plugins/help/` crate.
+        let norm = normalize_scaffold_help(&os(&["umbral", "startplugin", "help"]), 1);
+        assert_eq!(norm, os(&["umbral", "startplugin", "--help"]));
+        let err = ScaffoldCli::try_parse_from(&norm).expect_err("help renders, not a parse");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn dash_help_typo_is_rewritten_to_help() {
+        let norm = normalize_scaffold_help(&os(&["umbral", "startcommand", "-help"]), 1);
+        assert!(norm.iter().any(|a| a.to_string_lossy() == "--help"));
+    }
+
+    #[test]
+    fn a_real_name_is_left_untouched() {
+        let argv = os(&["umbral", "startplugin", "billing"]);
+        assert_eq!(normalize_scaffold_help(&argv, 1), argv);
     }
 
     #[test]

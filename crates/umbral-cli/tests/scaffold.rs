@@ -1,7 +1,7 @@
 //! End-to-end scaffolding tests.
 //!
 //! The unit tests in `scaffold.rs` cover validation helpers. These
-//! tests drive the real `scaffold_project` / `scaffold_app` writers
+//! tests drive the real `scaffold_project` / `scaffold_plugin` writers
 //! against a `tempfile::TempDir`, assert the expected files land,
 //! and pin a few key invariants in the generated content.
 
@@ -9,7 +9,7 @@ use std::fs;
 
 use tempfile::TempDir;
 use umbral_cli::scaffold::{
-    ScaffoldError, register_dep_in_cargo_toml, scaffold_app, scaffold_plugin, scaffold_project,
+    ScaffoldError, register_dep_in_cargo_toml, scaffold_plugin, scaffold_project,
 };
 
 #[test]
@@ -482,13 +482,13 @@ fn scaffold_project_rejects_invalid_names() {
 }
 
 #[test]
-fn scaffold_app_writes_plugin_under_plugins_dir() {
+fn scaffold_plugin_writes_plugin_under_plugins_dir() {
     let tmp = TempDir::new().unwrap();
     // First scaffold a project so plugins/ has a sensible parent.
     scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    let report = scaffold_app("posts", &project_root, None).unwrap();
+    let report = scaffold_plugin("posts", &project_root, None).unwrap();
     assert_eq!(report.root, project_root.join("plugins").join("posts"));
 
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
@@ -510,12 +510,12 @@ fn scaffold_app_writes_plugin_under_plugins_dir() {
 }
 
 #[test]
-fn scaffold_app_pascal_cases_multi_word_names() {
+fn scaffold_plugin_pascal_cases_multi_word_names() {
     let tmp = TempDir::new().unwrap();
     scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    let report = scaffold_app("blog-engine", &project_root, None).unwrap();
+    let report = scaffold_plugin("blog-engine", &project_root, None).unwrap();
     let lib = fs::read_to_string(report.root.join("src/lib.rs")).unwrap();
     assert!(
         lib.contains("pub struct BlogEnginePlugin"),
@@ -528,13 +528,13 @@ fn scaffold_app_pascal_cases_multi_word_names() {
 }
 
 #[test]
-fn scaffold_app_refuses_to_overwrite_existing_plugin() {
+fn scaffold_plugin_refuses_to_overwrite_existing_plugin() {
     let tmp = TempDir::new().unwrap();
     scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    scaffold_app("posts", &project_root, None).unwrap();
-    let err = scaffold_app("posts", &project_root, None).unwrap_err();
+    scaffold_plugin("posts", &project_root, None).unwrap();
+    let err = scaffold_plugin("posts", &project_root, None).unwrap_err();
     matches!(err, ScaffoldError::AlreadyExists(_));
 }
 
@@ -572,90 +572,20 @@ fn scaffold_project_local_flag_emits_path_deps() {
     );
 }
 
-/// `startapp` is now a deprecated ALIAS of `startplugin` — it produces the
-/// exact same plugin crate (there is no separate "app" contract). This
-/// pins the equivalence: scaffold_app writes the identical file set with
-/// identical contents that scaffold_plugin does.
-#[test]
-fn scaffold_app_is_an_alias_of_scaffold_plugin() {
-    // Two sibling projects so the two writers don't collide on paths.
-    let tmp = TempDir::new().unwrap();
-    scaffold_project("viaapp", tmp.path(), None).unwrap();
-    scaffold_project("viaplugin", tmp.path(), None).unwrap();
-
-    let via_app = scaffold_app("posts", &tmp.path().join("viaapp"), None).unwrap();
-    let via_plugin = scaffold_plugin("posts", &tmp.path().join("viaplugin"), None).unwrap();
-
-    // Same relative file set (of files written UNDER the plugin root —
-    // `files` also lists the project Cargo.toml the dep-registration edits).
-    let rel = |root: &std::path::Path, files: &[std::path::PathBuf]| {
-        let mut v: Vec<String> = files
-            .iter()
-            .filter_map(|f| {
-                f.strip_prefix(root)
-                    .ok()
-                    .map(|r| r.to_string_lossy().into_owned())
-            })
-            .collect();
-        v.sort();
-        v
-    };
-    assert_eq!(
-        rel(&via_app.root, &via_app.files),
-        rel(&via_plugin.root, &via_plugin.files),
-        "the alias must write the same file set as startplugin"
-    );
-
-    // And identical contents for the plugin's own source files.
-    for name in ["src/lib.rs", "src/models.rs", "src/handlers.rs"] {
-        let a = std::fs::read_to_string(via_app.root.join(name)).unwrap();
-        let p = std::fs::read_to_string(via_plugin.root.join(name)).unwrap();
-        assert_eq!(
-            a, p,
-            "{name} must be identical between startapp and startplugin"
-        );
-    }
-}
-
 // =========================================================================
-// gaps2 #67: startapp auto-registers plugin in project Cargo.toml
+// gaps2 #67: startplugin auto-registers plugin in project Cargo.toml
 // =========================================================================
 
-/// After `startapp`, the project's Cargo.toml must contain a path dep
-/// for the new plugin. `cargo_toml_registered` must be `Some(true)`.
-#[test]
-fn scaffold_app_registers_path_dep_in_project_cargo_toml() {
-    let tmp = TempDir::new().unwrap();
-    scaffold_project("blog", tmp.path(), None).unwrap();
-    let project_root = tmp.path().join("blog");
-
-    let report = scaffold_app("posts", &project_root, None).unwrap();
-
-    // The function must report that it added the dep.
-    assert_eq!(
-        report.cargo_toml_registered,
-        Some(true),
-        "cargo_toml_registered should be Some(true) when the dep was freshly added"
-    );
-
-    // The project's Cargo.toml must contain the path dep line.
-    let cargo = fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
-    assert!(
-        cargo.contains("posts = { path = \"plugins/posts\" }"),
-        "project Cargo.toml must list the new plugin as a path dep; got:\n{cargo}"
-    );
-}
-
-/// Running `startapp` a second time on a *different* name must not
+/// Running `startplugin` a second time on a *different* name must not
 /// duplicate the first dep, and must still register the second.
 #[test]
-fn scaffold_app_second_plugin_gets_registered_independently() {
+fn scaffold_plugin_second_plugin_gets_registered_independently() {
     let tmp = TempDir::new().unwrap();
     scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    scaffold_app("posts", &project_root, None).unwrap();
-    let report2 = scaffold_app("comments", &project_root, None).unwrap();
+    scaffold_plugin("posts", &project_root, None).unwrap();
+    let report2 = scaffold_plugin("comments", &project_root, None).unwrap();
 
     assert_eq!(report2.cargo_toml_registered, Some(true));
 
@@ -708,14 +638,14 @@ fn register_dep_idempotent_no_duplicate() {
     assert_eq!(count, 1, "dep line must appear exactly once; got:\n{cargo}");
 }
 
-/// When `scaffold_app` is called without a project `Cargo.toml` present
+/// When `scaffold_plugin` is called without a project `Cargo.toml` present
 /// (bare temp dir), `cargo_toml_registered` must be `None` (soft failure)
 /// and the scaffold files must still be written.
 #[test]
-fn scaffold_app_succeeds_without_project_cargo_toml() {
+fn scaffold_plugin_succeeds_without_project_cargo_toml() {
     let tmp = TempDir::new().unwrap();
     // No scaffold_project call — project_root has no Cargo.toml.
-    let report = scaffold_app("widgets", tmp.path(), None).unwrap();
+    let report = scaffold_plugin("widgets", tmp.path(), None).unwrap();
 
     assert_eq!(
         report.cargo_toml_registered, None,
@@ -733,8 +663,7 @@ fn scaffold_app_succeeds_without_project_cargo_toml() {
     );
 }
 
-/// `startplugin` (the richer scaffold) must also auto-register the
-/// path dep — same contract as startapp.
+/// `startplugin` must auto-register the path dep in the project Cargo.toml.
 #[test]
 fn scaffold_plugin_registers_path_dep_in_project_cargo_toml() {
     let tmp = TempDir::new().unwrap();
@@ -847,15 +776,15 @@ fn scaffold_plugin_standalone_pins_explicit_versions() {
     );
 }
 
-/// The next_steps for startapp must NOT include the manual
+/// The next_steps for startplugin must NOT include the manual
 /// "add to Cargo.toml" instruction — we do it automatically now.
 #[test]
-fn scaffold_app_next_steps_no_longer_mention_manual_cargo_toml_edit() {
+fn scaffold_plugin_next_steps_no_longer_mention_manual_cargo_toml_edit() {
     let tmp = TempDir::new().unwrap();
     scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    let report = scaffold_app("posts", &project_root, None).unwrap();
+    let report = scaffold_plugin("posts", &project_root, None).unwrap();
 
     // None of the next_steps lines should tell the user to manually edit
     // Cargo.toml — that step is done automatically.

@@ -6,11 +6,10 @@
 //! - `umbral startproject <name>` — create a new umbral project
 //!   directory with `Cargo.toml`, `src/main.rs`, `umbral.toml`,
 //!   templates, and a default `404` / `500` page.
-//! - `umbral startapp <name>` — create a new plugin crate at
-//!   `plugins/<name>/` with a minimal `{Name}Plugin` skeleton.
-//! - `umbral startplugin <name>` — like `startapp` but writes a
-//!   richer template (example Model with field-type attributes,
-//!   example handler, README) aimed at distributable plugins.
+//! - `umbral startplugin <name>` — create a new plugin crate at
+//!   `plugins/<name>/` with a richer template (example Model with
+//!   field-type attributes, example handler, README) aimed at
+//!   distributable plugins.
 //! - `umbral startcommand [name] [--in root|<plugin>]` — create a
 //!   management command (`cargo run -- <name>`), interactively asking
 //!   where it should live, and register it there.
@@ -38,7 +37,7 @@ use clap::{Parser, Subcommand};
     name = "umbral",
     version = env!("CARGO_PKG_VERSION"),
     about = "umbral CLI. Scaffolds projects, plugins and commands \
-             (startproject/startapp/startplugin/startcommand), adds plugins \
+             (startproject/startplugin/startcommand), adds plugins \
              (plugin add) and runs project-free utilities (maskkeygen) directly; \
              every other command (serve, migrate, makemigrations, worker, \
              seed_data, …) is forwarded to `cargo run -- <command>` in the \
@@ -50,7 +49,7 @@ struct Cli {
     command: Command,
 }
 
-/// The scaffolding commands (`startproject` / `startapp` / `startplugin` /
+/// The scaffolding commands (`startproject` / `startplugin` /
 /// `startcommand`) are NOT variants here. They're defined once in
 /// [`umbral_cli::scaffold_cli`] and intercepted in `main` (and in the
 /// app-embedded [`umbral_cli::dispatch`]) via
@@ -263,7 +262,7 @@ fn main() -> ExitCode {
         return run_global_help();
     }
 
-    // Scaffolding (`startproject` / `startapp` / `startplugin` / `startcommand`)
+    // Scaffolding (`startproject` / `startplugin` / `startcommand`)
     // runs here, standalone — no project, no build. It shares its definition and
     // dispatch with the app-embedded `cargo run -- <cmd>` path
     // (`umbral_cli::dispatch`) through `try_run_scaffold`, so both surfaces stay

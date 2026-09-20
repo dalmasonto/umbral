@@ -6,7 +6,7 @@
 //! `serve` / `migrate` / `makemigrations` / `inspectdb` /
 //! `dumpdata` / `loaddata` subcommands. The binary (`umbral`) ships as
 //! the global scaffolding tool installed via `cargo install
-//! umbral-cli`, and handles `startproject` / `startapp` from outside
+//! umbral-cli`, and handles `startproject` / `startplugin` from outside
 //! any project.
 //!
 //! ## Quickstart
@@ -448,17 +448,17 @@ pub async fn dispatch_with_argv(
         return Ok(());
     }
 
-    // Step 0.25: the scaffolding commands (`startproject` / `startapp` /
-    // `startplugin` / `startcommand`) are listed in the unified help (gap 66)
-    // and MUST run here too, so `cargo run -- startapp --help` renders the
-    // command's usage and `cargo run -- startapp foo` actually scaffolds —
+    // Step 0.25: the scaffolding commands (`startproject` / `startplugin` /
+    // `startcommand`) are listed in the unified help (gap 66)
+    // and MUST run here too, so `cargo run -- startplugin --help` renders the
+    // command's usage and `cargo run -- startplugin foo` actually scaffolds —
     // full parity with the global `umbral` binary, which shares this exact
     // dispatch (`scaffold_cli::try_run_scaffold`). Intercepting BEFORE the
     // `on_ready` decision below is deliberate: scaffolding writes files and
     // must never fire plugin lifecycle hooks (which would seed rows into tables
     // `migrate` has not created). Without this, argv fell through to the
     // built-in clap parser, which has no scaffold subcommand, and answered
-    // `error: unknown command \`startapp\`` — the help promised a command the
+    // `error: unknown command \`startplugin\`` — the help promised a command the
     // dispatch couldn't honour.
     if let Some(result) = scaffold_cli::try_run_scaffold(&argv) {
         return result;
@@ -744,8 +744,8 @@ fn unknown_token(argv: &[std::ffi::OsString]) -> Option<String> {
         .map(|a| a.to_string_lossy().into_owned())
 }
 
-/// The four scaffolding commands dispatched **out-of-band** by the global
-/// `umbral` binary (`src/main.rs`): `startproject` / `startapp` / `startplugin`
+/// The scaffolding commands dispatched **out-of-band** by the global
+/// `umbral` binary (`src/main.rs`): `startproject` / `startplugin`
 /// / `startcommand`. They run WITHOUT a built `App` — `startproject` has no
 /// project yet — so they are intercepted before this crate's `dispatch` builds
 /// the derived `Cli` parser, are NOT subcommands of it, and clap never sees
@@ -810,7 +810,7 @@ pub fn builtin_command_names() -> Vec<String> {
         .map(|s| s.get_name().to_string())
         .collect();
     names.push("help".to_string());
-    // The out-of-band scaffolders (`startproject` / `startapp` / `startplugin`
+    // The out-of-band scaffolders (`startproject` / `startplugin`
     // / `startcommand`) aren't subcommands of this parser, but they're still
     // umbral commands — reserve their names so an app/plugin command can't
     // shadow them (gap 66).
@@ -880,7 +880,7 @@ pub fn static_catalog() -> Vec<(String, Option<String>)> {
             sub.get_about().map(|s| s.to_string()),
         ));
     }
-    // The out-of-band scaffolders (startproject / startapp / startplugin /
+    // The out-of-band scaffolders (startproject / startplugin /
     // startcommand) aren't subcommands of this parser — supply their rows so
     // the "Create a project or plugin" group has content (gap 66).
     catalog.extend(scaffold_command_catalog());
@@ -1823,7 +1823,7 @@ mod tests {
         // This is what resolves the gap-66 trap for good. The unified help
         // catalog must equal the set of commands `dispatch_with_argv` can route:
         // no listed-but-unrunnable command (the scaffold bug — help advertised
-        // `startapp`, dispatch answered `unknown command`), and no runnable-but-
+        // `startplugin`, dispatch answered `unknown command`), and no runnable-but-
         // hidden command. We compare `full_catalog` (help) against the SAME
         // per-source predicates dispatch consults:
         //   - scaffolders  → `scaffold_cli` (one `ScaffoldCli` clap type),

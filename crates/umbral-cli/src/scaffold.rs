@@ -4,8 +4,8 @@
 //!
 //! - [`scaffold_project`] writes a complete new project directory.
 //!   Maps to `umbral startproject <name>`.
-//! - [`scaffold_app`] writes a new plugin crate at
-//!   `plugins/<name>/`. Maps to `umbral startapp <name>`.
+//! - [`scaffold_plugin`] writes a new plugin crate at
+//!   `plugins/<name>/`. Maps to `umbral startplugin <name>`.
 //!
 //! Both are pure: take a target path and the new name, write files,
 //! return what was written. The binary's `main.rs` wraps them with
@@ -55,9 +55,9 @@ pub enum ScaffoldError {
     Io(io::Error),
 }
 
-/// Built-in plugin names that `umbral startapp` refuses to scaffold over.
+/// Built-in plugin names that `umbral startplugin` refuses to scaffold over.
 /// Adding a new built-in plugin? Add its name here so future
-/// `startapp <name>` calls fail fast with a clear message.
+/// `startplugin <name>` calls fail fast with a clear message.
 pub const RESERVED_PLUGIN_NAMES: &[&str] = &[
     // Every built-in plugin name (each crate under plugins/) — a project
     // plugin named the same would compile but could never register
@@ -394,7 +394,7 @@ const DOCS_URL: &str = "https://dalmasonto.github.io/umbral/docs/v0.0.1";
 /// │       ├── mod.rs        # per-kind re-export layer
 /// │       └── cards.rs      # one builtin admin dashboard widget
 /// ├── plugins/
-/// │   ├── .gitkeep          # local app plugins land here (umbral startapp)
+/// │   ├── .gitkeep          # local app plugins land here (umbral startplugin)
 /// │   └── README.md
 /// └── templates/
 ///     ├── base.html
@@ -636,7 +636,7 @@ sqlx.workspace = true
 //!     views/       — HTTP handlers, one file per resource grouping
 //!     seed/        — first-run data, `seed::all()` pins dependency order
 //!     widgets/     — admin dashboard widgets, one file per kind
-//!     ../plugins/  — local app plugins (`umbral startapp <name>`)
+//!     ../plugins/  — local app plugins (`umbral startplugin <name>`)
 //!
 //! Run with:
 //!   cargo run -- migrate   # apply pending migrations (run once after checkout)
@@ -1056,7 +1056,7 @@ pub fn overview_section() -> WidgetSection {
     write_file(&root, "src/widgets/cards.rs", widgets_cards_rs, &mut files)?;
 
     // ------------------------------------------------------------------ //
-    // plugins/ — empty home for local app plugins (umbral startapp)        //
+    // plugins/ — empty home for local app plugins (umbral startplugin)     //
     // ------------------------------------------------------------------ //
     write_file(&root, "plugins/.gitkeep", "", &mut files)?;
     let plugins_readme = "# plugins/\n\nLocal plugins go here; create one with `umbral startplugin <name>`.\nEach is its own crate (`lib.rs` + `models.rs` + `handlers.rs`) and is\nauto-wired into this project's `Cargo.toml` `[dependencies]`.\n";
@@ -1301,22 +1301,6 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
     })
 }
 
-/// Deprecated alias for [`scaffold_plugin`]. Everything the framework
-/// generates under `plugins/` is a *plugin* — there is no separate "app"
-/// contract — so the old minimal `startapp` writer folds into
-/// `startplugin` / [`scaffold_plugin`], leaving one generator to maintain.
-/// Kept as a forwarding shim so existing API callers keep working; the CLI
-/// `startapp` command forwards here and prints a deprecation note. (Not
-/// `#[deprecated]` at the Rust level — that would warn on every internal
-/// test call site; the user-facing deprecation lives on the CLI command.)
-pub fn scaffold_app(
-    name: &str,
-    project_root: &Path,
-    local_umbral_repo: Option<&Path>,
-) -> Result<ScaffoldReport, ScaffoldError> {
-    scaffold_plugin(name, project_root, local_umbral_repo)
-}
-
 /// Write a richer plugin scaffold at `<project_root>/plugins/<name>/`
 /// targeted at *distributable* / reusable plugins (third-party crates
 /// you'd publish or share across projects). Layout:
@@ -1334,15 +1318,14 @@ pub fn scaffold_app(
 ///     └── handlers.rs    — one example axum handler using AppContext
 /// ```
 ///
-/// This is the one plugin scaffolder. `startapp` / [`scaffold_app`] are a
-/// deprecated alias that forward here — everything generated under
+/// This is the one plugin scaffolder — everything generated under
 /// `plugins/` is a plugin, so there is no separate "app" template.
 pub fn scaffold_plugin(
     name: &str,
     project_root: &Path,
     local_umbral_repo: Option<&Path>,
 ) -> Result<ScaffoldReport, ScaffoldError> {
-    // Reserved first, then the identifier rules — see `scaffold_app`.
+    // Reserved first, then the identifier rules.
     let normalized = name.replace('-', "_");
     if RESERVED_PLUGIN_NAMES.contains(&normalized.as_str()) {
         return Err(ScaffoldError::ReservedName(name.to_string()));
@@ -2330,10 +2313,10 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_app_rejects_reserved_built_in_plugin_names() {
+    fn scaffold_plugin_rejects_reserved_built_in_plugin_names() {
         let tmp = tempfile::tempdir().expect("tempdir");
         for name in RESERVED_PLUGIN_NAMES {
-            let result = scaffold_app(name, tmp.path(), None);
+            let result = scaffold_plugin(name, tmp.path(), None);
             assert!(
                 matches!(result, Err(ScaffoldError::ReservedName(_))),
                 "expected ReservedName error for `{name}`, got: {result:?}",
@@ -2346,7 +2329,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_app_rejects_reserved_name_with_hyphen_variant() {
+    fn scaffold_plugin_rejects_reserved_name_with_hyphen_variant() {
         // `static` is reserved; so is `my-static`-anything? No — only
         // exact matches. But hyphens should normalize to underscores so
         // someone typing `umbral-storage` or `umbral_storage` doesn't slip
@@ -2355,12 +2338,12 @@ mod tests {
         // Pure name check: built-in names contain no hyphens today, but
         // the normalization defends against future built-ins like
         // `slack-bot` versus `slack_bot`.
-        let result = scaffold_app("auth", tmp.path(), None);
+        let result = scaffold_plugin("auth", tmp.path(), None);
         assert!(matches!(result, Err(ScaffoldError::ReservedName(_))));
     }
 
     #[test]
-    fn scaffold_app_message_lists_reserved_names() {
+    fn scaffold_plugin_message_lists_reserved_names() {
         let err = ScaffoldError::ReservedName("auth".to_string());
         let msg = format!("{err}");
         assert!(msg.contains("`auth`"), "error names the offending input");
@@ -2371,7 +2354,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_app_already_exists_message_says_app() {
+    fn scaffold_plugin_already_exists_message_says_app() {
         // Gap 39: the AlreadyExists message used to say "target" which
         // didn't tell a user that there's an existing APP. The new copy
         // names the app directly.
@@ -2468,18 +2451,6 @@ mod tests {
             models.contains("noedit"),
             "example model should show the noedit attribute",
         );
-    }
-
-    #[test]
-    fn scaffold_plugin_rejects_reserved_built_in_plugin_names() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        for name in RESERVED_PLUGIN_NAMES {
-            let result = scaffold_plugin(name, tmp.path(), None);
-            assert!(
-                matches!(result, Err(ScaffoldError::ReservedName(_))),
-                "expected ReservedName error for `{name}`, got: {result:?}",
-            );
-        }
     }
 
     #[test]
@@ -2637,43 +2608,14 @@ mod tests {
         );
     }
 
-    // ----------------------------------------------------------------- //
-    // scaffold_app is now a deprecated alias forwarding to scaffold_plugin //
-    // ----------------------------------------------------------------- //
-
     #[test]
-    fn scaffold_app_forwards_to_the_plugin_generator() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        scaffold_app("posts", tmp.path(), None).expect("scaffold ok");
-        let root = tmp.path().join("plugins/posts");
-
-        // The plugin layout (not the old plain views.rs/urls.rs one).
-        for rel in [
-            "Cargo.toml",
-            "README.md",
-            "src/lib.rs",
-            "src/models.rs",
-            "src/handlers.rs",
-        ] {
-            assert!(root.join(rel).exists(), "missing expected file: {rel}");
-        }
-        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-        assert!(lib.contains("pub mod models;"), "lib.rs publishes models");
-        assert!(
-            lib.contains("pub mod handlers;"),
-            "lib.rs publishes handlers"
-        );
-        assert!(lib.contains("PostsPlugin"), "PascalCase plugin name");
-    }
-
-    #[test]
-    fn scaffold_app_auto_registers_path_dep_in_project_cargo() {
+    fn scaffold_plugin_auto_registers_path_dep_in_project_cargo() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Fixture project Cargo.toml with a [dependencies] section.
         let project_cargo = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1\"\n";
         fs::write(tmp.path().join("Cargo.toml"), project_cargo).unwrap();
 
-        let report = scaffold_app("posts", tmp.path(), None).expect("scaffold ok");
+        let report = scaffold_plugin("posts", tmp.path(), None).expect("scaffold ok");
         assert_eq!(
             report.cargo_toml_registered,
             Some(true),
@@ -2693,14 +2635,14 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_app_still_rejects_reserved_names() {
+    fn scaffold_plugin_still_rejects_reserved_names() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = scaffold_app("auth", tmp.path(), None);
+        let result = scaffold_plugin("auth", tmp.path(), None);
         assert!(matches!(result, Err(ScaffoldError::ReservedName(_))));
     }
 
     #[test]
-    fn scaffold_plugin_validates_name_like_startapp() {
+    fn scaffold_plugin_validates_name() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(matches!(
             scaffold_plugin("2cool", tmp.path(), None),
@@ -2839,7 +2781,7 @@ mod tests {
     fn startcommand_plugin_writes_the_command_and_wires_the_plugin() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = project(&tmp);
-        scaffold_app("blog", &root, None).expect("scaffold_app");
+        scaffold_plugin("blog", &root, None).expect("scaffold_plugin");
 
         scaffold_command("reindex", &CommandTarget::Plugin("blog".to_string()), &root)
             .expect("scaffold");
@@ -2943,7 +2885,7 @@ mod tests {
     fn startcommand_rejects_an_unknown_plugin_and_lists_the_real_ones() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = project(&tmp);
-        scaffold_app("blog", &root, None).expect("scaffold_app");
+        scaffold_plugin("blog", &root, None).expect("scaffold_plugin");
 
         let err = scaffold_command("reindex", &CommandTarget::Plugin("blgo".into()), &root)
             .expect_err("a typo'd plugin name must not scaffold anything");
@@ -2983,8 +2925,8 @@ mod tests {
         // A fresh project has an empty `plugins/` (a .gitkeep + README, no crates).
         assert!(discover_plugins(&root).is_empty());
 
-        scaffold_app("blog", &root, None).expect("scaffold_app");
-        scaffold_app("shop", &root, None).expect("scaffold_app");
+        scaffold_plugin("blog", &root, None).expect("scaffold_plugin");
+        scaffold_plugin("shop", &root, None).expect("scaffold_plugin");
         // A stray directory with no Cargo.toml isn't a plugin and must not be
         // offered as a home for a command.
         fs::create_dir_all(root.join("plugins/notacrate")).unwrap();
@@ -3105,7 +3047,7 @@ mod tests {
     fn startcommand_declines_a_plugin_impl_whose_brace_is_on_the_next_line() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = project(&tmp);
-        scaffold_app("blog", &root, None).expect("scaffold_app");
+        scaffold_plugin("blog", &root, None).expect("scaffold_plugin");
 
         let lib_rs = root.join("plugins/blog/src/lib.rs");
         fs::write(

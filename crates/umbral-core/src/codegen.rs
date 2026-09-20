@@ -124,7 +124,7 @@ impl std::fmt::Display for CodegenError {
                     write!(
                         f,
                         "no plugin named `{asked}` — this project has no plugins yet. \
-                         Create one with `umbral startapp <name>`, or use `--in root`."
+                         Create one with `umbral startplugin <name>`, or use `--in root`."
                     )
                 } else {
                     write!(
@@ -514,7 +514,7 @@ pub mod prompt {
             println!("  {}. {p}  — the `{p}` plugin (travels with it)", i + 2);
         }
         if plugins.is_empty() {
-            println!("  (no plugins yet — `umbral startapp <name>` creates one)");
+            println!("  (no plugins yet — `umbral startplugin <name>` creates one)");
         }
         println!();
 
