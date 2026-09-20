@@ -442,6 +442,15 @@ pub struct ModelMeta {
     /// Mirrors `Model::READONLY_FIELDS`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readonly_fields: Vec<String>,
+    /// Mirrors `Model::SIGNAL_SKIP_FIELDS` (`#[umbral(signal_skip)]`).
+    /// gaps6 #14 follow-up: the DYNAMIC write path (REST/admin) has no
+    /// typed `Model::SIGNAL_SKIP_FIELDS` const to read, only `ModelMeta` —
+    /// carried here so `DynQuerySet::delete()`'s full-row `post_delete`
+    /// payload can redact secret/PII columns the same way the typed path's
+    /// `serialize_for_signal` does. Field names, not `Column`s — same shape
+    /// as `list_display` etc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signal_skip_fields: Vec<String>,
 }
 
 fn default_app_label() -> String {
@@ -473,6 +482,7 @@ impl Default for ModelMeta {
             list_filter: Vec::new(),
             inline_edit_fields: Vec::new(),
             readonly_fields: Vec::new(),
+            signal_skip_fields: Vec::new(),
         }
     }
 }
@@ -605,6 +615,10 @@ impl ModelMeta {
                 .map(|s| s.to_string())
                 .collect(),
             readonly_fields: T::READONLY_FIELDS.iter().map(|s| s.to_string()).collect(),
+            signal_skip_fields: T::SIGNAL_SKIP_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 
@@ -6910,6 +6924,7 @@ mod tests {
                 list_filter: Vec::new(),
                 inline_edit_fields: Vec::new(),
                 readonly_fields: Vec::new(),
+                signal_skip_fields: Vec::new(),
             }],
         );
         per_plugin.insert(
@@ -6937,6 +6952,7 @@ mod tests {
                 list_filter: Vec::new(),
                 inline_edit_fields: Vec::new(),
                 readonly_fields: Vec::new(),
+                signal_skip_fields: Vec::new(),
             }],
         );
         init_plugins(per_plugin);
@@ -7345,6 +7361,7 @@ mod tests {
                 list_filter: Vec::new(),
                 inline_edit_fields: Vec::new(),
                 readonly_fields: Vec::new(),
+                signal_skip_fields: Vec::new(),
             }
         }
         let prev = meta_with(baseline());

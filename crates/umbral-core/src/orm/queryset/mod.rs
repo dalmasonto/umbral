@@ -3920,8 +3920,21 @@ impl<T: Model> QuerySet<T> {
             // the whole model and need every field, not just the PK.
             if pk_field::<T>().is_some() {
                 if has_sub {
+                    // gaps6 #14 follow-up (CRITICAL): the full row bypasses
+                    // `serialize_for_signal`'s redaction (that helper only runs
+                    // on the typed `M: Serialize` emit path); strip
+                    // `SIGNAL_SKIP_FIELDS` here too, or a secret/PII column
+                    // (e.g. `AuthUser.password_hash`) leaks to every
+                    // `post_delete:<table>` subscriber, including
+                    // `RealtimePlugin` → WebSocket clients.
                     for row in &full_rows {
-                        crate::signals::emit_post_delete_by_table(T::TABLE, row.clone()).await;
+                        let mut row = row.clone();
+                        if let JsonValue::Object(map) = &mut row {
+                            for f in T::SIGNAL_SKIP_FIELDS {
+                                map.remove(*f);
+                            }
+                        }
+                        crate::signals::emit_post_delete_by_table(T::TABLE, row).await;
                     }
                 } else if let Some(pk) = pk {
                     for id in &ids {

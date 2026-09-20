@@ -44,8 +44,10 @@
 //! fire BOTH: `bulk_post_delete:<table>` (`ids`) AND a per-row
 //! `post_delete:<table>` for each deleted row — PK-only unless a
 //! `post_delete:<table>` subscriber exists, in which case the payload
-//! carries the full row (gaps6 #14). M2M relation changes emit
-//! `m2m_changed:<junction_table>`. See the doc callout in
+//! carries the full row (gaps6 #14) — with `#[umbral(signal_skip)]`
+//! fields stripped, same as every other signal payload, on BOTH the
+//! typed and dynamic (REST/admin) delete paths. M2M relation changes
+//! emit `m2m_changed:<junction_table>`. See the doc callout in
 //! `documentation/docs/v0.0.1/plugins/signals.mdx`.
 //!
 //! ## Signal name format
@@ -375,8 +377,11 @@ where
     /// Fires for BOTH `Manager::delete_instance` (the instance supplied by
     /// the caller) and `QuerySet::delete()` / `DynQuerySet::delete()`
     /// (each row is fired per-row, deserialized from the DB's `RETURNING`
-    /// data — gaps6 #14). All three carry the FULL row, so `M` must
-    /// deserialize from every column, not just the primary key.
+    /// data — gaps6 #14). All three carry the FULL row minus any
+    /// `#[umbral(signal_skip)]` field, so `M` must deserialize from every
+    /// non-skipped column, not just the primary key — a required (non-
+    /// `Option`, no `#[serde(default)]`) field marked `signal_skip` will
+    /// never decode here, same as it already doesn't on `post_save`.
     ///
     /// Signal name: `post_delete:<M::TABLE>`.
     pub fn post_delete<F, Fut>(&self, handler: F)

@@ -1231,9 +1231,20 @@ impl<'a> DynQuerySet<'a> {
             };
 
         // Per-row `post_delete:<table>` — full row, only when subscribed.
+        // gaps6 #14 follow-up (CRITICAL): strip `meta.signal_skip_fields`
+        // (the dynamic-path mirror of `Model::SIGNAL_SKIP_FIELDS`) before
+        // emitting — otherwise a secret/PII column (e.g.
+        // `AuthUser.password_hash`) leaks to every `post_delete:<table>`
+        // subscriber, including `RealtimePlugin` → WebSocket clients.
         if has_sub {
             for row in &full_rows {
-                crate::signals::emit_post_delete_by_table(&self.meta.table, row.clone()).await;
+                let mut row = row.clone();
+                if let serde_json::Value::Object(map) = &mut row {
+                    for f in &self.meta.signal_skip_fields {
+                        map.remove(f);
+                    }
+                }
+                crate::signals::emit_post_delete_by_table(&self.meta.table, row).await;
             }
         }
 

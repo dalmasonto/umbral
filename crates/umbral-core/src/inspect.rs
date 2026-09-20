@@ -2124,6 +2124,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             list_filter: Vec::new(),
             inline_edit_fields: Vec::new(),
             readonly_fields: Vec::new(),
+            signal_skip_fields: Vec::new(),
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
