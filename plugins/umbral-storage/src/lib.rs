@@ -1137,3 +1137,67 @@ impl Plugin for StoragePlugin {
         self.media.is_some()
     }
 }
+
+/// The caller a media-access gate reasons about, resolved from the app-wide
+/// authentication backend rather than raw headers.
+///
+/// `roles` follows the `extras["roles"]` convention: a JSON array of
+/// strings on `Identity::extras`. `umbral-auth`/`umbral-permissions` don't
+/// populate it (umbral-storage doesn't depend on umbral-permissions); a
+/// custom `Authentication` impl that wants role-based media gates sets it.
+pub struct MediaCaller {
+    user_id: Option<String>,
+    pub is_superuser: bool,
+    pub is_staff: bool,
+    pub roles: Vec<String>,
+}
+
+impl MediaCaller {
+    /// Resolve the caller for `headers` via `umbral::auth::default_authentication()`.
+    /// No authentication backend installed, or none identifies the request,
+    /// both resolve to the anonymous caller (`user_id() == None`).
+    pub async fn resolve(headers: &http::HeaderMap) -> Self {
+        let identity = match umbral::auth::default_authentication() {
+            Some(auth) => auth.authenticate(headers).await,
+            None => None,
+        };
+        match identity {
+            Some(id) => {
+                let roles = id
+                    .extras
+                    .get("roles")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Self {
+                    user_id: Some(id.user_id),
+                    is_superuser: id.is_superuser,
+                    is_staff: id.is_staff,
+                    roles,
+                }
+            }
+            None => Self {
+                user_id: None,
+                is_superuser: false,
+                is_staff: false,
+                roles: Vec::new(),
+            },
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.user_id.is_some()
+    }
+
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles.iter().any(|r| r == role)
+    }
+}
