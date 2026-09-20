@@ -1164,14 +1164,29 @@ impl<'a> DynQuerySet<'a> {
         } else {
             Vec::new()
         };
-        // Pre-collect the affected PKs only when the model has a PK
-        // column (every Model does in practice; the guard handles
-        // the hypothetical PK-less ModelMeta).
-        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
-            Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
-                .await
-                .unwrap_or_default(),
-            None => Vec::new(),
+
+        // gaps6 #14: this is the DYNAMIC path REST/admin actually run on.
+        // Before this, it fired ONLY `bulk_post_delete:<table>` — never a
+        // per-row `post_delete`, so a media_invalidate_on / SignalsPlugin
+        // subscriber never saw a delete made through REST or the admin.
+        // Gated on `has_subscribers`: unsubscribed stays on the cheap
+        // pre-select-PKs-then-DELETE path below; subscribed pays for
+        // `DELETE ... RETURNING *` instead so the payload carries full rows.
+        let has_sub = self.meta.pk_column().is_some()
+            && crate::signals::has_subscribers(&format!("post_delete:{}", self.meta.table));
+
+        // Pre-collect the affected PKs only on the unsubscribed path; the
+        // subscribed path gets PKs (and every other column) back from
+        // RETURNING * below instead.
+        let parent_pks: Vec<serde_json::Value> = if has_sub {
+            Vec::new()
+        } else {
+            match self.meta.pk_column() {
+                Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
+                    .await
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            }
         };
 
         let mut q = Query::delete();
@@ -1179,25 +1194,70 @@ impl<'a> DynQuerySet<'a> {
         for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
+        if has_sub {
+            q.returning_all();
+        }
 
-        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
-            DbPool::Sqlite(pool) => {
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-            DbPool::Postgres(pool) => {
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-        };
+        let (rows_affected, full_rows) =
+            match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
+                DbPool::Sqlite(pool) => {
+                    let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                    if has_sub {
+                        let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                        let full: Vec<serde_json::Value> = rows
+                            .iter()
+                            .map(|r| row_to_full_json(self.meta, r, decode_to_json))
+                            .collect::<Result<_, _>>()?;
+                        (full.len() as u64, full)
+                    } else {
+                        let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                        (res.rows_affected(), Vec::new())
+                    }
+                }
+                DbPool::Postgres(pool) => {
+                    let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                    if has_sub {
+                        let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                        let full: Vec<serde_json::Value> = rows
+                            .iter()
+                            .map(|r| row_to_full_json(self.meta, r, decode_pg_to_json))
+                            .collect::<Result<_, _>>()?;
+                        (full.len() as u64, full)
+                    } else {
+                        let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                        (res.rows_affected(), Vec::new())
+                    }
+                }
+            };
 
-        // gaps #77: emit `bulk_post_delete:<table>` with the PKs we
-        // captured pre-DELETE. Fires even when zero rows matched —
+        // Per-row `post_delete:<table>` — full row, only when subscribed.
+        if has_sub {
+            for row in &full_rows {
+                crate::signals::emit_post_delete_by_table(&self.meta.table, row.clone()).await;
+            }
+        }
+
+        // gaps #77: emit `bulk_post_delete:<table>` with the PKs (from the
+        // pre-select on the cheap path, or lifted out of the full rows on
+        // the subscribed path). Fires even when zero rows matched —
         // matches the typed bulk-delete convention (subscribers that
         // want to skip empty events filter in their handler).
-        crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
+        let bulk_ids = if has_sub {
+            match self.meta.pk_column() {
+                Some(pk_col) => full_rows
+                    .iter()
+                    .map(|r| {
+                        r.get(&pk_col.name)
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null)
+                    })
+                    .collect(),
+                None => Vec::new(),
+            }
+        } else {
+            parent_pks
+        };
+        crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, bulk_ids).await;
         if self.meta.audited {
             let pairs = audit_pairs(self.meta, audit_before, Vec::new());
             crate::orm::audit::record_many(self.meta, crate::orm::audit::DELETE, pairs).await;
@@ -4361,6 +4421,27 @@ pub(crate) fn audit_pairs(
             (pk, Some(b), a)
         })
         .collect()
+}
+
+/// Decode every column `meta` declares off one returned row into a JSON
+/// object — the DYNAMIC-path counterpart of the typed queryset's
+/// `backend_sqlite::row_to_json` / `backend_pg::row_to_json`. Those decode
+/// blind (iterate `row.columns()`, guess the type by fallible `try_get`
+/// cascade) because the typed path has no `ModelMeta` in scope; here we DO
+/// have `meta.fields`, so decode each by its declared `Column` instead —
+/// same approach `fetch_as_json` already uses for a normal SELECT. Used by
+/// `DynQuerySet::delete()`'s `RETURNING *` full-row post_delete payload
+/// (gaps6 #14).
+fn row_to_full_json<R>(
+    meta: &ModelMeta,
+    row: &R,
+    decode: impl Fn(&R, &Column) -> Result<serde_json::Value, sqlx::Error>,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let mut map = serde_json::Map::new();
+    for col in &meta.fields {
+        map.insert(col.name.clone(), decode(row, col)?);
+    }
+    Ok(serde_json::Value::Object(map))
 }
 
 async fn collect_parent_pks(

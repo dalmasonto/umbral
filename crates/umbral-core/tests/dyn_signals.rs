@@ -210,6 +210,54 @@ async fn delete_fires_bulk_post_delete_with_affected_ids() {
     );
 }
 
+/// gaps6 #14: the DYNAMIC delete path — what REST/admin actually run on —
+/// must ALSO fire a per-row `post_delete:<table>` (not only the bulk
+/// signal), carrying the FULL row under `instance` when subscribed.
+#[tokio::test]
+async fn delete_fires_a_per_row_post_delete_with_full_row_when_subscribed() {
+    let _guard = test_lock().lock().await;
+    boot().await;
+    clear_for_tests();
+
+    let mut row = serde_json::Map::new();
+    row.insert("title".to_string(), Value::String("trash2".to_string()));
+    row.insert("body".to_string(), Value::String("me2".to_string()));
+    let r = DynQuerySet::for_meta(&meta())
+        .insert_json(&row)
+        .await
+        .expect("seed");
+    let id = r["id"].as_i64().unwrap();
+
+    clear_for_tests();
+    let per_row = collect("post_delete:dsig_note");
+
+    let n = DynQuerySet::for_meta(&meta())
+        .filter_eq_string("id", &id.to_string())
+        .delete()
+        .await
+        .expect("delete");
+    assert_eq!(n, 1);
+
+    let per_row = per_row.lock().unwrap().clone();
+    assert_eq!(
+        per_row.len(),
+        1,
+        "DynQuerySet::delete must fire per-row post_delete when subscribed"
+    );
+    let instance = &per_row[0]["instance"];
+    assert_eq!(instance["id"].as_i64(), Some(id), "full row carries the pk");
+    assert_eq!(
+        instance["title"].as_str(),
+        Some("trash2"),
+        "full row carries every column, not just the pk: {instance:?}"
+    );
+    assert_eq!(
+        instance["body"].as_str(),
+        Some("me2"),
+        "full row carries every column, not just the pk: {instance:?}"
+    );
+}
+
 #[tokio::test]
 async fn delete_with_no_matches_still_fires_with_empty_ids() {
     let _guard = test_lock().lock().await;
