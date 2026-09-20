@@ -38,6 +38,9 @@ rust-s3 = { version = "0.37", optional = true, default-features = false, feature
 futures-executor = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
+# media_invalidate_on deserializes a signal payload's `instance` JSON into
+# the caller's model to compute invalidation tags.
+serde_json = "1"
 # `sync` for the Semaphore that bounds concurrent media processing (audit_2
 # plugin-storage-tasks #4) so an upload burst can't fan out unbounded
 # CPU/memory-heavy processing tasks.
@@ -88,4 +91,3 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # plugin→plugin dependency (umbral-storage never depends on umbral-cache at
 # runtime; both talk to the ambient contract in umbral::cache).
 umbral-cache = { path = "../umbral-cache", version = "0.0.12" }
-serde_json = "1"

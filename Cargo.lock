@@ -5733,6 +5733,7 @@ dependencies = [
  "percent-encoding",
  "rust-s3",
  "serde",
+ "serde_json",
  "sha2",
  "sqlx",
  "subtle",

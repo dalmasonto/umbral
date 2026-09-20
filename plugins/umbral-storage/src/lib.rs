@@ -69,6 +69,12 @@ pub type MediaAccessFn = Arc<
         + Send
         + Sync,
 >;
+
+/// One [`StoragePlugin::media_invalidate_on`] registration's type-erased map
+/// function: a signal payload's `"instance"` JSON in, the tags it should
+/// bust out.
+type MediaInvalidatorFn = Arc<dyn Fn(&serde_json::Value) -> Vec<String> + Send + Sync>;
+
 use umbral::storage::{ByteStream, DEFAULT, STATICFILES};
 
 mod collect;
@@ -165,6 +171,12 @@ pub struct StoragePlugin {
     /// gate. Distinct from having a gate (`media_access*` / `media_signed_urls`)
     /// — this declares "no gate, on purpose."
     media_public: bool,
+    /// [`StoragePlugin::media_invalidate_on`] registrations: source table →
+    /// closure mapping a changed row's JSON to the tags a
+    /// [`Self::media_access_cached`] decision depended on. Wired to
+    /// `post_save`/`post_delete` signals in `on_ready` so cached access
+    /// decisions bust when the source row changes.
+    media_invalidators: Vec<(&'static str, MediaInvalidatorFn)>,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -223,6 +235,7 @@ impl StoragePlugin {
             media_access_wants_identity: false,
             media_signed_urls: false,
             media_public: false,
+            media_invalidators: Vec::new(),
         }
     }
 
@@ -485,6 +498,39 @@ impl StoragePlugin {
                 Decision::of(ok)
             }
         })
+    }
+
+    /// Keep a [`Self::media_access_cached`] decision fresh below its TTL:
+    /// whenever a row of model `M` is created, updated, or deleted, `map_fn`
+    /// computes the tags that row's change should invalidate, and umbral
+    /// busts each one on the ambient [`umbral::cache::TaggedCache`]. Wired
+    /// in `on_ready` to the ORM's `post_save:<M::TABLE>` /
+    /// `post_delete:<M::TABLE>` signals.
+    ///
+    /// ```ignore
+    /// StoragePlugin::new()
+    ///     .media("/media", "./media")
+    ///     .media_access_cached(|caller: MediaCaller, _key: &str| async move {
+    ///         Decision::of(is_member(&caller).await).depends_on([format!("chan:{}", chan_id)])
+    ///     })
+    ///     .media_invalidate_on::<Membership>(|m| vec![format!("chan:{}", m.chan)])
+    /// ```
+    pub fn media_invalidate_on<M, F>(mut self, map_fn: F) -> Self
+    where
+        M: Model + serde::de::DeserializeOwned + 'static,
+        F: Fn(&M) -> Vec<String> + Send + Sync + 'static,
+    {
+        let erased = Arc::new(move |payload: &serde_json::Value| -> Vec<String> {
+            let Some(instance) = payload.get("instance") else {
+                return Vec::new();
+            };
+            match serde_json::from_value::<M>(instance.clone()) {
+                Ok(row) => map_fn(&row),
+                Err(_) => Vec::new(),
+            }
+        });
+        self.media_invalidators.push((M::TABLE, erased));
+        self
     }
 
     /// Test-only accessor for the configured [`MediaAccessFn`] gate, used by
@@ -1226,6 +1272,28 @@ impl Plugin for StoragePlugin {
                 let backend: Arc<dyn Storage> =
                     Arc::new(FsStorage::new(String::new(), &static_root));
                 umbral::storage::set_storage_named(STATICFILES, backend);
+            }
+        }
+
+        // media_invalidate_on: bust the tags a source row's change maps to
+        // whenever that row is saved or deleted, keeping media_access_cached
+        // decisions fresh below their TTL.
+        for (table, map) in &self.media_invalidators {
+            for event in ["post_save", "post_delete"] {
+                let map = map.clone();
+                umbral::signals::subscribe_async(
+                    &format!("{event}:{table}"),
+                    move |payload: &serde_json::Value| {
+                        let tags = map(payload);
+                        async move {
+                            if let Some(cache) = umbral::cache::ambient_tagged_cache() {
+                                for t in tags {
+                                    cache.bust_tag(&t).await;
+                                }
+                            }
+                        }
+                    },
+                );
             }
         }
 
