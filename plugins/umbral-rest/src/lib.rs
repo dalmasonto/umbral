@@ -2458,6 +2458,12 @@ impl Plugin for RestPlugin {
     /// and the resource isn't marked `rls_backed()` / `unscoped_ok(..)`, warn
     /// (or error under `strict_object_scope`).
     ///
+    /// Also walks every registered model with NO explicit `ResourceConfig`
+    /// (the auto-exposed default) — `resource_write_enabled`/`_object_scoped`
+    /// already treat an unconfigured table as write-enabled-and-unscoped, so
+    /// auto-exposed writable models are exactly the same IDOR surface, and by
+    /// far the largest slice of it since most models never call `.resource(...)`.
+    ///
     /// Snapshots the plugin's own configured-resource list, scope maps, and ack
     /// markers into the returned closure — the whole point of `system_checks`
     /// taking `&self` and `SystemCheck.run` being an owned closure.
@@ -2468,9 +2474,9 @@ impl Plugin for RestPlugin {
         // captures plain data, not `self`.
         let base_path = self.base_path().to_string();
         let mut unscoped: Vec<String> = Vec::new();
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for table in &self.configured_resources {
-            if !seen.insert(table.as_str()) {
+            if !seen.insert(table.clone()) {
                 continue; // dedupe repeated `.resource(...)` for the same table
             }
             // A resource for a table that isn't actually served (blocked /
@@ -2483,6 +2489,26 @@ impl Plugin for RestPlugin {
                 && !self.unscoped_acks.contains_key(table)
             {
                 unscoped.push(table.clone());
+            }
+        }
+        // Registered models with no `.resource(...)` at all are served under
+        // the same back-compat default (every action, no scope) — the check
+        // must catch those too, not just tables an author explicitly touched.
+        if let Some(models) = umbral::migrate::registered_models_opt() {
+            for m in &models {
+                let table = &m.table;
+                if !seen.insert(table.clone()) {
+                    continue;
+                }
+                if !self.allow(table) {
+                    continue;
+                }
+                if self.resource_write_enabled(table)
+                    && !self.resource_object_scoped(table)
+                    && !self.unscoped_acks.contains_key(table)
+                {
+                    unscoped.push(table.clone());
+                }
             }
         }
 

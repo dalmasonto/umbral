@@ -59,7 +59,7 @@ StoragePlugin::new()
 
 Because forgetting a scope is silent, umbral runs a boot-time system check that walks your REST resources, GraphQL mutations, and media routes and flags every **write-enabled** surface that has **no object scope** and **no acknowledgement marker**. It shares the id `security.object_scope`, so you can grep the whole family out of the boot log.
 
-- **REST** — a resource that exposes create/update/delete (the default, or a `.views([...])` set containing a write) with no `scope` / `owned_by` / `owned_by_for_writes` / `owned_via`.
+- **REST** — a resource that exposes create/update/delete (the default, or a `.views([...])` set containing a write) with no `scope` / `owned_by` / `owned_by_for_writes` / `owned_via`. This also covers **auto-exposed models** — any model registered with `.model::<T>()` that never got an explicit `ResourceConfig` at all — since those are served under the same write-enabled, unscoped default and are the largest slice of the IDOR surface in practice.
 - **GraphQL** — a `mutable` model with no `owned_by`. Read-only exposed models are never flagged.
 - **Storage** — a media route mounted with no `media_access*` gate and no `media_signed_urls`.
 
