@@ -138,6 +138,27 @@ pub trait CacheBackend: Send + Sync {
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>);
     async fn delete(&self, key: &str);
     async fn clear(&self);
+
+    /// Store a value AND index its key under each tag for later `bust_tag`.
+    /// Default: ignore tags (TTL-only invalidation).
+    async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, _tags: &[String]) {
+        self.set(key, value, ttl).await;
+    }
+    /// Delete every key indexed under `tag`, then the tag itself.
+    /// Default: no-op (backend relies on TTL).
+    async fn bust_tag(&self, _tag: &str) {}
+}
+
+/// Result of a `get_or_compute_tagged` miss-compute.
+pub struct Computed<T> {
+    pub value: T,
+    /// `None` opts this value out of caching (e.g. a volatile decision).
+    pub store: Option<StoreSpec>,
+}
+
+pub struct StoreSpec {
+    pub tags: Vec<String>,
+    pub ttl: Option<Duration>,
 }
 
 // ── Cache handle ─────────────────────────────────────────────────────────────
@@ -217,6 +238,29 @@ impl Cache {
         self.backend.clear().await;
     }
 
+    pub async fn bust_tag(&self, tag: &str) {
+        self.backend.bust_tag(tag).await;
+    }
+
+    pub async fn get_or_compute_tagged<T, Fut>(&self, key: &str, compute: impl FnOnce() -> Fut) -> T
+    where
+        T: Serialize + DeserializeOwned,
+        Fut: std::future::Future<Output = Computed<T>>,
+    {
+        if let Some(hit) = self.get::<T>(key).await {
+            return hit;
+        }
+        let c = compute().await;
+        if let Some(spec) = c.store {
+            if let Ok(bytes) = serde_json::to_vec(&c.value) {
+                self.backend
+                    .set_tagged(key, bytes, spec.ttl, &spec.tags)
+                    .await;
+            }
+        }
+        c.value
+    }
+
     // ── Raw bytes access for cache_page (avoids double-serialisation) ──
 
     pub(crate) async fn get_bytes_raw(&self, key: &str) -> Option<Vec<u8>> {
@@ -236,18 +280,24 @@ struct MemoryEntry {
 }
 
 #[derive(Default)]
+struct MemoryState {
+    values: HashMap<String, MemoryEntry>,
+    tags: HashMap<String, std::collections::HashSet<String>>,
+}
+
+#[derive(Default)]
 pub struct MemoryBackend {
-    inner: Mutex<HashMap<String, MemoryEntry>>,
+    inner: Mutex<MemoryState>,
 }
 
 #[async_trait]
 impl CacheBackend for MemoryBackend {
     async fn get(&self, key: &str) -> Option<Vec<u8>> {
-        let mut map = self.inner.lock().await;
-        if let Some(entry) = map.get(key) {
+        let mut st = self.inner.lock().await;
+        if let Some(entry) = st.values.get(key) {
             if let Some(exp) = entry.expires_at {
                 if Utc::now() >= exp {
-                    map.remove(key);
+                    st.values.remove(key);
                     return None;
                 }
             }
@@ -265,15 +315,42 @@ impl CacheBackend for MemoryBackend {
         self.inner
             .lock()
             .await
+            .values
             .insert(key.to_string(), MemoryEntry { value, expires_at });
     }
 
     async fn delete(&self, key: &str) {
-        self.inner.lock().await.remove(key);
+        self.inner.lock().await.values.remove(key);
     }
 
     async fn clear(&self) {
-        self.inner.lock().await.clear();
+        self.inner.lock().await.values.clear();
+    }
+
+    async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
+        let expires_at = ttl.and_then(|d| {
+            chrono::Duration::from_std(d)
+                .ok()
+                .and_then(|cd| Utc::now().checked_add_signed(cd))
+        });
+        let mut st = self.inner.lock().await;
+        st.values
+            .insert(key.to_string(), MemoryEntry { value, expires_at });
+        for t in tags {
+            st.tags
+                .entry(t.clone())
+                .or_default()
+                .insert(key.to_string());
+        }
+    }
+
+    async fn bust_tag(&self, tag: &str) {
+        let mut st = self.inner.lock().await;
+        if let Some(keys) = st.tags.remove(tag) {
+            for k in keys {
+                st.values.remove(&k);
+            }
+        }
     }
 }
 
