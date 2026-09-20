@@ -3758,11 +3758,17 @@ impl<T: Model> QuerySet<T> {
     /// `DELETE FROM table WHERE <predicates>`. Returns the number of
     /// rows deleted. With no `.filter` calls, deletes every row.
     ///
-    /// Fires `bulk_post_delete:<table>` once with the list of removed
-    /// PKs when at least one row was deleted. Per-row `pre_delete` /
-    /// `post_delete` are NOT fired by this path — use
-    /// [`Manager::delete_instance`] when per-row signal semantics are
-    /// required.
+    /// Fires `bulk_post_delete:<table>` once with the list of removed PKs,
+    /// and a per-row `post_delete:<table>` for each row, when at least one
+    /// row was deleted. `pre_delete` is NOT fired by this path (there is no
+    /// single moment to fire it for a multi-row statement) — use
+    /// [`Manager::delete_instance`] when `pre_delete` is required.
+    ///
+    /// The per-row `post_delete` payload is PK-only (`{"<pk>": <id>}`)
+    /// unless something is actually subscribed to `post_delete:<table>`
+    /// (gaps6 #14): with a subscriber present the DELETE uses
+    /// `RETURNING *` and the payload carries the full deleted row, matching
+    /// `Manager::delete_instance`'s payload shape.
     ///
     /// Feature #72: for `#[umbral(soft_delete)]` models this rewrites
     /// to `UPDATE ... SET deleted_at = NOW() WHERE ...` so rows
@@ -3796,10 +3802,19 @@ impl<T: Model> QuerySet<T> {
         let audit_before = self.audit_pre(backend).await;
         let mut stmt = self.build_delete_for(backend);
         let pk = pk_field::<T>();
-        if let Some(field) = pk {
+        // gaps6 #14: a subscribed `post_delete:<table>` needs the FULL row
+        // (media_invalidate_on and SignalsPlugin both deserialize the whole
+        // model), not just the PK — RETURNING * instead of RETURNING <pk>.
+        // Gated on `has_subscribers` so the unsubscribed common case stays
+        // on the cheap pk-only RETURNING.
+        let has_sub =
+            pk.is_some() && crate::signals::has_subscribers(&format!("post_delete:{}", T::TABLE));
+        if has_sub {
+            stmt.returning_all();
+        } else if let Some(field) = pk {
             stmt.returning_col(Alias::new(field.name));
         }
-        let ids: Vec<JsonValue> = match pool {
+        let (ids, full_rows): (Vec<JsonValue>, Vec<JsonValue>) = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
                 let rows = if atomic {
@@ -3822,12 +3837,26 @@ impl<T: Model> QuerySet<T> {
                         .fetch_all(&pool)
                         .await?
                 };
-                match pk {
-                    Some(field) => rows
-                        .iter()
-                        .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
-                        .collect::<Result<_, _>>()?,
-                    None => Vec::new(),
+                if has_sub {
+                    let full: Vec<JsonValue> =
+                        rows.iter().map(backend_sqlite::row_to_json).collect();
+                    let ids: Vec<JsonValue> = match pk {
+                        Some(field) => full
+                            .iter()
+                            .map(|r| r.get(field.name).cloned().unwrap_or(JsonValue::Null))
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    (ids, full)
+                } else {
+                    let ids = match pk {
+                        Some(field) => rows
+                            .iter()
+                            .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
+                            .collect::<Result<_, _>>()?,
+                        None => Vec::new(),
+                    };
+                    (ids, Vec::new())
                 }
             }
             DbPool::Postgres(pool) => {
@@ -3852,12 +3881,25 @@ impl<T: Model> QuerySet<T> {
                         .fetch_all(&pool)
                         .await?
                 };
-                match pk {
-                    Some(field) => rows
-                        .iter()
-                        .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
-                        .collect::<Result<_, _>>()?,
-                    None => Vec::new(),
+                if has_sub {
+                    let full: Vec<JsonValue> = rows.iter().map(backend_pg::row_to_json).collect();
+                    let ids: Vec<JsonValue> = match pk {
+                        Some(field) => full
+                            .iter()
+                            .map(|r| r.get(field.name).cloned().unwrap_or(JsonValue::Null))
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    (ids, full)
+                } else {
+                    let ids = match pk {
+                        Some(field) => rows
+                            .iter()
+                            .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
+                            .collect::<Result<_, _>>()?,
+                        None => Vec::new(),
+                    };
+                    (ids, Vec::new())
                 }
             }
         };
@@ -3865,21 +3907,27 @@ impl<T: Model> QuerySet<T> {
         if !ids.is_empty() {
             Self::audit_post(audit_before, &ids, crate::orm::audit::DELETE).await;
 
-            // gaps3 #29: also emit the PER-ROW `post_delete:<table>`, not only the
+            // gaps3 #29 / gaps6 #14: PER-ROW `post_delete:<table>`, not only the
             // bulk signal. `save()` and `update_or_create()` emit per-row signals;
             // `delete()` emitted only the bulk one, so `RealtimePlugin::on_model`
             // — which subscribes per-row — never saw a delete. A live consumer
             // hand-pushed a realtime event after every delete because of this.
             //
-            // The payload is the primary key, not the whole row: the row is gone
-            // by now, and re-reading it beforehand would cost a SELECT on every
-            // delete in the app whether or not anything is listening. The id is
-            // what a delete event is *for* — invalidate that row — and it is
-            // exactly what realtime's default projection carries anyway.
-            if let Some(pk) = pk_field::<T>() {
-                for id in &ids {
-                    let payload = serde_json::json!({ pk.name: id });
-                    crate::signals::emit_post_delete_by_table(T::TABLE, payload).await;
+            // When nothing is subscribed the payload stays PK-only (no extra
+            // read cost). When something IS subscribed we already paid for
+            // RETURNING * above, so the payload carries the full row —
+            // `media_invalidate_on` and `SignalsPlugin<M>` both deserialize
+            // the whole model and need every field, not just the PK.
+            if pk_field::<T>().is_some() {
+                if has_sub {
+                    for row in &full_rows {
+                        crate::signals::emit_post_delete_by_table(T::TABLE, row.clone()).await;
+                    }
+                } else if let Some(pk) = pk {
+                    for id in &ids {
+                        let payload = serde_json::json!({ pk.name: id });
+                        crate::signals::emit_post_delete_by_table(T::TABLE, payload).await;
+                    }
                 }
             }
             crate::signals::emit_bulk_post_delete::<T>(ids).await;

@@ -4,14 +4,12 @@
 //! would — keeping a cached `media_access_cached` decision fresh without
 //! waiting out the TTL.
 //!
-//! The per-row `post_delete` payload from a `QuerySet::delete()` carries
-//! only the deleted row's primary key (`{"instance": {"<pk>": <id>}}`), not
-//! the full row — the row is already gone by the time the signal fires, so
-//! there's nothing else to serialize (see `delete()` in
-//! `crates/umbral-core/src/orm/queryset/mod.rs`, gaps3 #29). This test's
-//! model therefore has a single `id` field and its `media_invalidate_on`
-//! map_fn keys the tag off `r.id` alone, so it deserializes cleanly from
-//! that PK-only payload.
+//! Since gaps6 #14, a subscribed `post_delete:<table>` (this plugin IS one,
+//! via `media_invalidate_on`) gets the FULL deleted row under
+//! `payload["instance"]`, not just the PK (see `delete()` in
+//! `crates/umbral-core/src/orm/queryset/mod.rs`). This test's model keys
+//! its tag off `r.id`; `media_invalidation_delete_nonpk.rs` covers the case
+//! that motivated the fix — a tag keyed off a NON-PK field.
 //!
 //! Lives in its own test binary (not alongside
 //! `media_invalidation.rs::source_row_change_busts_the_cached_decision`)

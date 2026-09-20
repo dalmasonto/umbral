@@ -138,6 +138,85 @@ async fn delete_fires_a_per_row_post_delete() {
     );
 }
 
+/// gaps6 #14: when a `post_delete:<table>` subscriber exists, the payload's
+/// `instance` carries the FULL row (every column), not just the PK — a
+/// media_invalidate_on / SignalsPlugin-style subscriber that deserializes
+/// the whole model needs `body` too.
+#[tokio::test]
+async fn delete_fires_full_row_payload_when_subscribed() {
+    let _g = lock().lock().await;
+    boot().await;
+    umbral::signals::clear_for_tests();
+
+    let row = SigNote::objects()
+        .create(SigNote {
+            id: 0,
+            body: "full-row".into(),
+        })
+        .await
+        .expect("create");
+
+    let seen = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = seen.clone();
+    umbral::signals::subscribe("post_delete:sig_note", move |payload| {
+        sink.lock().unwrap().push(payload.clone());
+    });
+
+    SigNote::objects()
+        .filter(sig_note::ID.eq(row.id))
+        .delete()
+        .await
+        .expect("delete");
+
+    let got = seen.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "one per-row post_delete; got {got:?}");
+    let instance = &got[0]["instance"];
+    assert_eq!(
+        instance["id"], row.id,
+        "the full row carries the pk: {instance:?}"
+    );
+    assert_eq!(
+        instance["body"], "full-row",
+        "the full row carries every column, not just the pk: {instance:?}"
+    );
+}
+
+/// gaps6 #14: with NO `post_delete:<table>` subscriber, `delete()` still
+/// works correctly (right row count, no error) — the subscriber gate is a
+/// cost optimization (pk-only RETURNING vs RETURNING *), never a
+/// correctness fork.
+#[tokio::test]
+async fn delete_without_a_subscriber_stays_correct() {
+    let _g = lock().lock().await;
+    boot().await;
+    umbral::signals::clear_for_tests();
+
+    let row = SigNote::objects()
+        .create(SigNote {
+            id: 0,
+            body: "no-subscriber".into(),
+        })
+        .await
+        .expect("create");
+
+    let count = SigNote::objects()
+        .filter(sig_note::ID.eq(row.id))
+        .delete()
+        .await
+        .expect("delete");
+
+    assert_eq!(
+        count, 1,
+        "the unsubscribed pk-only path still deletes the row"
+    );
+    let remaining = SigNote::objects()
+        .filter(sig_note::ID.eq(row.id))
+        .count()
+        .await
+        .expect("count");
+    assert_eq!(remaining, 0, "the row is actually gone");
+}
+
 /// `update_or_create`'s CREATE branch must fire post_save **exactly once**.
 ///
 /// It delegates to `create()`. Before gaps3 #29, `create()` was signal-free, so
