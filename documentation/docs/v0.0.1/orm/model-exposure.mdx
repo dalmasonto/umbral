@@ -1,0 +1,49 @@
+---
+title: Reading model metadata
+description: The shared ModelExposure contract every serializer plugin reads to learn a model's shape.
+sidebar_position: 90
+---
+
+# Reading model metadata
+
+Every plugin that turns a model into an external representation — REST, GraphQL,
+the admin, a plugin you write — needs the same facts about a model: which fields
+are safe to serialize, which a client may write, which column is the display
+string, which are foreign keys. Rather than each plugin re-deriving these,
+`ModelMeta` exposes them as derived views. You read them from the model registry
+(`umbral::registered_models()`) or from a concrete type via
+`ModelMeta::for_::<T>()`.
+
+The rule of thumb: **facts live on the model, policy lives in your plugin.**
+`ModelMeta` tells you a field is `secret` or `private`; your plugin decides who
+may unlock it.
+
+## One example
+
+```rust
+use umbral::migrate::ModelMeta;
+
+fn serialize_response(meta: &ModelMeta, staff: bool) -> Vec<String> {
+    // Facts from the model: everything safe to serialize, adding back private
+    // fields only for a staff caller. `secret` is never included.
+    meta.serializable_fields(staff)
+        .map(|col| col.name.clone())
+        .collect()
+}
+
+fn writable(meta: &ModelMeta) -> Vec<String> {
+    // The safe client-writable set: no primary key, no auto_* column, no
+    // privileged (mass-assignment-guarded) field.
+    meta.writable_fields().map(|c| c.name.clone()).collect()
+}
+```
+
+Other derived views: `field(name)`, `display_field()`, `public_fields()`,
+`is_server_managed(col)`, and `foreign_keys()`. Declared presentation intent
+(`list_display`, `search_fields`, `ordering`, `readonly_fields`, …) and raw
+per-field facts (`help`, `widget`, `choices`) are read directly off the public
+`ModelMeta` / `Column` fields.
+
+## Design rationale
+
+See the design note: `docs/decisions/2026-09-15-model-exposure-contract.md`.
