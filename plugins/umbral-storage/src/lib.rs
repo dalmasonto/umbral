@@ -97,6 +97,17 @@ fn forbidden_media() -> axum::response::Response {
         .into_response()
 }
 
+/// Build the media-access cache key. Length-prefixes each component so the
+/// `:` separators can't collide two distinct (file_key, caller) pairs onto
+/// one string (gaps6 #13).
+fn media_cache_key(file_key: &str, caller_id: &str) -> String {
+    format!(
+        "mediaacc:{}:{file_key}:{}:{caller_id}",
+        file_key.len(),
+        caller_id.len()
+    )
+}
+
 pub use media::clear_processors_for_test;
 pub use media::set_media_owner;
 pub use media::{
@@ -445,7 +456,7 @@ impl StoragePlugin {
                     .user_id()
                     .map(str::to_owned)
                     .unwrap_or_else(|| "anon".to_string());
-                let cache_key = format!("mediaacc:{key}:{caller_id}");
+                let cache_key = media_cache_key(&key, &caller_id);
                 match umbral::cache::ambient_tagged_cache() {
                     Some(cache) => {
                         if let Some(hit) = cache.get_bool(&cache_key).await {
@@ -1450,5 +1461,21 @@ impl Decision {
 
     pub(crate) fn ttl_or_default(&self) -> Duration {
         self.ttl.unwrap_or(MEDIA_ACCESS_DEFAULT_TTL)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::media_cache_key;
+
+    #[test]
+    fn media_cache_key_is_injective_across_colon_boundaries() {
+        assert_ne!(media_cache_key("a", "b:c"), media_cache_key("a:b", "c"));
+        // stable + distinct for ordinary inputs
+        assert_eq!(
+            media_cache_key("invoices/1.pdf", "42"),
+            media_cache_key("invoices/1.pdf", "42")
+        );
+        assert_ne!(media_cache_key("f", "u1"), media_cache_key("f", "u2"));
     }
 }
