@@ -1,0 +1,41 @@
+---
+title: Tagged cache invalidation
+description: Cache a computed value under one or more tags with Cache::get_or_compute_tagged, then bust every value under a tag in one call with bust_tag - the primitive behind zero-config media-access caching.
+sidebar_position: 1
+icon: refresh-cw
+tags: [cache, invalidation, performance]
+---
+
+Reach for tagged invalidation when a cached value depends on rows that change independently of any fixed TTL - membership, ownership, a permission flag - and you want to bust exactly the cached values a row's change affects, rather than waiting out a TTL or flushing the whole cache. `Cache::get_or_compute_tagged` checks the cache first, and on a miss runs your closure and stores the result indexed under the tags you name; `Cache::bust_tag` deletes every value stored under a tag. TTL still applies underneath as the backstop if you forget to bust.
+
+This is the same primitive `StoragePlugin::media_access_cached` (see [Media access control](/docs/v0.0.1/storage/media-access)) uses internally, exposed via the core `umbral::cache::TaggedCache` trait so any plugin can reach the ambient cache without depending on `umbral-cache` directly.
+
+## Example
+
+```rust
+use umbral_cache::{Cache, Computed, StoreSpec};
+
+let cache = umbral_cache::ambient().expect("cache initialised at boot");
+
+let is_member: bool = cache
+    .get_or_compute_tagged("membership:42:7", || async move {
+        let allowed = check_membership(42, 7).await;
+        Computed {
+            value: allowed,
+            store: Some(StoreSpec {
+                tags: vec!["channel:7".into()],
+                ttl: None, // rely on the tag bust, not a TTL
+            }),
+        }
+    })
+    .await;
+
+// elsewhere, when membership for channel 7 changes:
+cache.bust_tag("channel:7").await;
+```
+
+Passing `store: None` from the closure opts that particular value out of caching entirely (useful for a volatile decision you never want to persist).
+
+## See also
+
+Full design in [`docs/superpowers/specs/2026-09-20-media-access-redesign-design.md`](https://github.com/).

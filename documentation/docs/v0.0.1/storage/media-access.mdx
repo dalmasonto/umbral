@@ -1,0 +1,55 @@
+---
+title: Media access control
+description: Gate the media GET route with a cache-first Decision closure - allow or deny per caller and key, with tag-based invalidation driven by your own models.
+sidebar_position: 1
+icon: shield-check
+tags: [storage, media, cache, security, authorization]
+---
+
+`StoragePlugin::media_access_cached` gates who can fetch an uploaded file. You write one closure that inspects the caller and the file key and returns a [`Decision`](#decision); the wrapper checks the ambient [`TaggedCache`](/docs/v0.0.1/cache/tagged-invalidation) *before* running your closure, so a repeated request for the same (caller, key) pair is served from cache instead of re-running your DB lookups. The framework owns the cache key (`mediaacc:<file_key>:<caller_id>`) - you never supply one.
+
+## Example
+
+```rust
+use std::time::Duration;
+use umbral::prelude::*;
+use umbral_cache::{Cache, CachePlugin};
+use umbral_storage::{Decision, MediaCaller, StoragePlugin};
+
+App::builder()
+    .plugin(CachePlugin::new(Cache::memory())) // installs the ambient TaggedCache
+    .plugin(
+        StoragePlugin::new()
+            .media("/media", "./media")
+            .media_access_cached(|caller: MediaCaller, key: &str| async move {
+                let is_member = channel_membership(&caller, key).await;
+                Decision::of(is_member).depends_on(["channel-membership".into()])
+            })
+            // bust the decision whenever a Membership row changes
+            .media_invalidate_on::<Membership>(|m| vec!["channel-membership".into()]),
+    )
+    .build()?;
+```
+
+No ambient cache installed (no `CachePlugin`, or installed too late) - every request recomputes; the failure mode is always "recompute," never "silently allow."
+
+## Decision
+
+`Decision::allow()` / `Decision::deny()` / `Decision::of(bool)` build a cacheable-by-default decision. Chain `.depends_on([tags])` to tie it to cache tags, `.ttl(duration)` to override the default TTL, or `.no_cache()` to force a recompute on every request.
+
+## MediaCaller
+
+The closure receives a `MediaCaller` resolved from the app's authentication backend: `user_id()`, `is_authenticated()`, `is_superuser`, `is_staff`, and `has_role(&str)` against `roles`. `roles` follows the `extras["roles"]` convention - a JSON array of strings on `Identity::extras` that a custom `Authentication` implementation populates for role-based gates.
+
+## Presets
+
+For the common cases, skip the closure entirely:
+
+- `media_access_staff()` - allow staff and superusers, deny everyone else.
+- `media_access_roles(["editor", "reviewer"])` - allow a superuser or a caller whose `roles` contains any of the given roles.
+
+Both are sugar over `media_access_cached` and get the same cache-first behavior.
+
+## See also
+
+Full design in [`docs/superpowers/specs/2026-09-20-media-access-redesign-design.md`](https://github.com/).
