@@ -135,8 +135,8 @@ Local evidence anchors used repeatedly:
 29. [tf#242] [HIGH] Database branching/preview environments are missing.
     Evidence: Supabase has a strong branching/preview workflow; Umbra has migrations and inspectdb but no per-PR database branch workflow. Recommended fix: add CLI recipes for ephemeral DBs, shadow databases, schema diffs, seed data, and teardown.
 
-30. [tf#243] [HIGH] Backup/recovery is not PITR-grade.
-    Evidence: backup via dumpdata/loaddata exists (`FEATURES.md:15`), but orgs need scheduled encrypted backups, WAL archiving/PITR, restore drills, retention policies, and restore verification. Recommended fix: define a Postgres backup plugin/runbook for logical and physical recovery.
+30. [tf#243] [HIGH] Backup/recovery is not PITR-grade(since the same server might hold the db, this should be able to work by using a different write path atleast, default to use the same as db but with an option to configure an external path ie another server).
+    Evidence: backup via dumpdata/loaddata exists (`FEATURES.md:15`), but orgs need scheduled encrypted backups, WAL archiving/PITR, restore drills, retention policies, and restore verification. Recommended fix: define a Postgres backup plugin/runbook for logical and physical recovery. (Canonical home for the "enable PITR on Postgres" ask — a duplicate gaps6 #10 was consolidated here to avoid conflicting trackers.)
 
 31. [tf#244] [HIGH] No CDC/outbox/database webhook product exists.
     Evidence: signals exist and realtime can fan out model changes, but there is no durable database-change stream like Supabase database webhooks or a transactional outbox. Recommended fix: add outbox tables, after-commit publishing, retry, delivery logs, and webhook destinations.
