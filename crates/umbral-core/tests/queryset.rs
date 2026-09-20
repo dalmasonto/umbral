@@ -607,3 +607,31 @@ fn to_sql_renders_the_select_without_executing() {
         "the bound value MUST stay out of the SQL string (it's a parameter, not literal); got {sql}",
     );
 }
+
+/// gaps6 #1: `.name()` off a column token returns the `&'static str` column
+/// name, and that name round-trips through a real `.values()` query — the
+/// token isn't just decorative, it drives an actual projection.
+#[tokio::test]
+async fn column_name_feeds_a_real_values_query() {
+    assert_eq!(post::ID.name(), "id");
+    assert_eq!(post::TITLE.name(), "title");
+    assert_eq!(post::BODY.name(), "body");
+    assert_eq!(post::PUBLISHED_AT.name(), "published_at");
+
+    // AsRef<str> / Display also read the same name.
+    assert_eq!(post::TITLE.as_ref(), "title");
+    assert_eq!(post::TITLE.to_string(), "title");
+
+    let pool = fresh_pool().await;
+
+    let rows = Post::objects()
+        .on(&pool)
+        .filter(post::ID.eq(1))
+        .values(&[post::ID.name(), post::TITLE.name()])
+        .await
+        .expect("values() with token-derived names should succeed");
+
+    assert_eq!(rows.len(), 1, "id=1 should match exactly one row");
+    assert_eq!(rows[0]["id"], 1);
+    assert_eq!(rows[0]["title"], "Hello world");
+}

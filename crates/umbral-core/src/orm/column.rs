@@ -3666,3 +3666,85 @@ impl<T> DateTimeColExt<T> for NullableDateTimeCol<T> {
         ColExpr::new_with_sqlite(pg, sqlite)
     }
 }
+
+// =============================================================================
+// gaps6 #1 — typed, compile-safe column NAME access off every column token.
+//
+// `Model::FIELD` stays the typed token (`.eq()`, `.order_by()`, ...); `.name()`
+// exposes the underlying `&'static str` for call sites that want a raw column
+// name (e.g. `select_related`/`values`) without hand-typing a string literal
+// that can drift from the model.
+// =============================================================================
+
+macro_rules! impl_col_name {
+    ($($col:ident),+ $(,)?) => {
+        $(
+            impl<T> $col<T> {
+                /// The underlying SQL column name.
+                pub const fn name(&self) -> &'static str {
+                    self.name
+                }
+            }
+
+            impl<T> AsRef<str> for $col<T> {
+                fn as_ref(&self) -> &str {
+                    self.name
+                }
+            }
+
+            impl<T> std::fmt::Display for $col<T> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str(self.name)
+                }
+            }
+        )+
+    };
+}
+
+impl_col_name!(
+    IntCol,
+    StrCol,
+    DateTimeCol,
+    NullableDateTimeCol,
+    NaiveDateTimeCol,
+    NullableNaiveDateTimeCol,
+    F64Col,
+    BoolCol,
+    UuidCol,
+    DateCol,
+    TimeCol,
+    NullableIntCol,
+    NullableStrCol,
+    NullableF64Col,
+    NullableBoolCol,
+    NullableUuidCol,
+    NullableDateCol,
+    NullableTimeCol,
+    JsonCol,
+    NullableJsonCol,
+    ArrayCol,
+    NullableArrayCol,
+    InetCol,
+    NullableInetCol,
+    CidrCol,
+    NullableCidrCol,
+    MacAddrCol,
+    FullTextCol,
+    NullableFullTextCol,
+    NullableMacAddrCol,
+    XmlCol,
+    NullableXmlCol,
+    LtreeCol,
+    NullableLtreeCol,
+    BitCol,
+    NullableBitCol,
+    ForeignKeyCol,
+    NullableForeignKeyCol,
+    BytesCol,
+    NullableBytesCol,
+    DecimalCol,
+    NullableDecimalCol,
+    BigDecimalCol,
+    NullableBigDecimalCol,
+    GeometryCol,
+);

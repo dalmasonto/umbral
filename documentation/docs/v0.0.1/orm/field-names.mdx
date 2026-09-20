@@ -1,0 +1,26 @@
+---
+title: Column names
+description: Get the underlying SQL column name off a typed column token — for call sites that want a raw string, without hand-typing one that can drift from the model.
+sidebar_position: 26
+icon: at-sign
+tags: [orm, columns, querying]
+---
+
+Every column constant `#[derive(Model)]` emits (`User::USERNAME`, `post::TITLE`, ...) is a typed token — `.eq()`, `.order_by()`, and friends build predicates and order expressions from it. Some APIs want a plain `&str` column name instead, most commonly `.select_related("...")` and `.values(&[...])`. Call `.name()` on the token to get that string, so the name stays sourced from the model instead of a hand-typed literal that can silently drift when a column is renamed.
+
+```rust
+use umbral::prelude::*;
+use umbral_core::orm::post::post;
+
+// `.name()` returns the same `&'static str` the token wraps.
+assert_eq!(post::TITLE.name(), "title");
+
+let rows = Post::objects()
+    .filter(post::ID.eq(1))
+    .values(&[post::ID.name(), post::TITLE.name()])
+    .await?;
+```
+
+The token also implements `AsRef<str>` and `Display`, so it can be passed anywhere a `&str` or a formatted name is expected without calling `.name()` explicitly.
+
+See [Column types](./column-types) for the full column-token catalogue and [Querying](./querying) for `.values()` / `.select_related()`.
