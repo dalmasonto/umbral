@@ -21,7 +21,7 @@ The three levers umbral can actually pull: **(a)** cache the decision by a repro
 1. **Scope:** full cohesive redesign — caching + caller ergonomics + role presets together.
 2. **Invalidation:** signal-driven auto-invalidation on developer-declared source tables, with a TTL backstop.
 3. **Caller:** a rich umbral identity (user id, `is_superuser`, roles) plus the raw `HeaderMap` as an escape hatch for app-specific identities (agent keys). Not a new pluggable resolver chain (deferred).
-4. **Mechanism:** Approach A — tag-based cached decisions. A decision carries a cache key and a set of dependency tags; a source-row change busts every key indexed under the affected tag. Chosen over hierarchical-prefix keys (invalidation shape chained to the key; multi-dependency doesn't fit one path) and full declarative inference (over-engineered for v1).
+4. **Mechanism:** Approach A — tag-based cached decisions. A decision is cached under a framework-owned per-`(file, caller)` key (read before the DB work) and carries a set of dependency tags; a source-row change busts every key indexed under the affected tag. Chosen over hierarchical-prefix keys (invalidation shape chained to the key; multi-dependency doesn't fit one path) and full declarative inference (over-engineered for v1).
 
 ## Design
 
@@ -31,13 +31,11 @@ The three levers umbral can actually pull: **(a)** cache the decision by a repro
 StoragePlugin::new()
     .media("/media", "./media")
     .media_access_cached(|caller: MediaCaller, key: &str| async move {
-        if caller.is_superuser { return Decision::allow(); }               // uncached, cheap
+        if caller.is_superuser { return Decision::allow(); }               // cheap
         let Some(uid) = caller.user_id() else { return Decision::deny(); }; // anon → deny
-        let (channel_id, allowed) = my_membership_check(uid, key).await;    // the expensive DB part
-        Decision::of(allowed)
-            .cache_per_caller(format!("media:{key}"))                       // safe key: caller id auto-prepended
-            .depends_on([format!("chan:{channel_id}")])                     // invalidation tags
-            // .ttl(Duration::from_secs(30))                                // optional; default applies
+        let (channel_id, allowed) = my_membership_check(uid, key).await;    // runs ONLY on cache miss
+        Decision::of(allowed).depends_on([format!("chan:{channel_id}")])    // invalidation tags
+        // .ttl(Duration::from_secs(30))  // optional; default applies. .no_cache() to opt out.
     })
     // declare how a source-row change maps to tags to bust; umbral wires the signal:
     .media_invalidate_on::<ChannelMember>(|row| [format!("chan:{}", row.channel)])
@@ -52,11 +50,11 @@ Types:
   - `is_authenticated(&self) -> bool`.
   - `roles: Vec<String>` and `has_role(&self, &str) -> bool` — the caller's groups/roles, sourced from the same umbral-auth groups the permission layer reads. If the resolved identity object does not already carry them, the resolver loads them once per request (implementation verifies the exact field/query against umbral-auth); this load is itself a candidate for the same cache. Powers the role presets.
 - `Decision`:
-  - Constructors `allow()`, `deny()`, `of(bool)` — all **uncached** by default.
-  - `cache_as(key: impl Into<String>)` — cache under a raw key (use for intentionally caller-independent / public decisions).
-  - `cache_per_caller(suffix: impl Into<String>)` — cache under a key with the resolved caller id auto-prepended. This is the safe, recommended default: it makes it impossible to accidentally cache one caller's `allow` for everyone. A decision with neither builder is never cached.
-  - `depends_on(tags: impl IntoIterator<Item = String>)` — invalidation tags.
+  - Constructors `allow()`, `deny()`, `of(bool)`.
+  - `depends_on(tags: impl IntoIterator<Item = String>)` — invalidation tags, discovered during the (miss-only) DB work and indexed at store time.
   - `ttl(Duration)` — optional; a plugin default (~60s) applies when omitted.
+  - `no_cache()` — opt this decision out of caching (for genuinely volatile decisions). **Decisions are cached by default**; the framework owns the cache key so there is nothing to name.
+- **Cache key is framework-owned, never developer-supplied.** The wrapper derives `mediaacc:{file_key}:{caller_id|anon}` — the exact identity of "can this caller read this file" — and reads the cache *before* invoking the closure (see the caching flow below). This is what makes the cache read-first, and it removes the caller-in-key footgun entirely (the key always includes the caller). There is no `cache_as` / `cache_per_caller`; a per-file, per-caller key is the only shape, which is correct for media authorization.
 - Role presets (zero closure):
   - `media_access_roles(roles: impl IntoIterator<Item = &str>)` — authenticated AND holds one of the roles.
   - existing `media_access_owner()` / `media_signed_urls()` kept.
@@ -97,17 +95,16 @@ The gate (`media_gate`) already resolves a decision by invoking `MediaAccessFn` 
 
 1. signed-URL short-circuit — unchanged.
 2. resolve `MediaCaller` from headers + ambient auth (reuse the `media_access_identity` resolution, enriched with roles).
-3. run the role preset or the closure; the closure internally performs `get_or_compute_tagged` when the returned `Decision` is cacheable.
+3. derive the framework-owned key `mediaacc:{file_key}:{caller_id|anon}` and **read the cache first**. On hit → return the cached bool with no DB work. On miss → invoke the closure (which does the DB work), then, unless the returned `Decision` is `no_cache()`, store `key→bool` with the TTL and index the `depends_on` tags. This cache-first ordering is the point of the redesign; the closure runs only on a miss.
 4. allow ⇒ serve (FS `ServeDir` / non-FS proxy stream); deny ⇒ `forbidden_media()` (403).
 
 No new enforcement surface — both backends inherit caching for free.
 
 ### 5. Security semantics
 
-- **Only cacheable decisions are cached.** `allow()` / `deny()` without `cache_as` / `cache_per_caller` are never cached — superuser bypass, anonymous deny, and any volatile decision stay live.
-- **Both allow and deny are cacheable** (Approach A), bounded by TTL + signal bust.
+- **Decisions cached by default; `no_cache()` opts out.** Both allow and deny are cached (Approach A), bounded by TTL + signal bust. Genuinely volatile decisions use `no_cache()` to stay live.
 - **Fail closed on auth, fail-to-compute on cache.** Anonymous → deny unless the closure allows. Cache miss or cache error → run the live check. A DB error inside the closure is the developer's to convert to `deny()`. Bytes are never served on an infrastructure error.
-- **Caller-in-key footgun neutralised by default:** `cache_per_caller` auto-namespaces the key by the resolved caller id, so the easy path cannot cache one user's `allow` for another. `cache_as` (caller-independent) carries a doc warning.
+- **No caller-in-key footgun.** The framework owns the key and always includes the resolved caller id, so one caller's `allow` can never be served to another — the developer cannot get the key wrong because they never write it.
 - **Signed-URL mode composes** unchanged.
 - **No cache configured ⇒ always compute.** `Cache::ambient() == None` means the closure runs every time; caching is a pure optimization whose failure mode is "recompute," never "allow."
 
