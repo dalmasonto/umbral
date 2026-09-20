@@ -9,6 +9,7 @@ pub mod app;
 pub mod auth_contract;
 pub mod backend;
 pub mod backup;
+pub mod cache;
 pub mod check;
 pub mod cli;
 pub mod codegen;

@@ -289,6 +289,13 @@ pub mod cors {
     pub use umbral_core::cors::CorsConfig;
 }
 
+/// Ambient, object-safe tagged-cache contract (feature: media access). The
+/// contract lives in `umbral-core` so plugins can consume it without
+/// depending on `umbral-cache`, which implements and registers it.
+pub mod cache {
+    pub use umbral_core::cache::{TaggedCache, ambient_tagged_cache, set_ambient_tagged_cache};
+}
+
 /// Feature #74 — per-model JSON fixture load / dump for tests
 /// and dev seeding. Plain JSON arrays of row objects; hand-
 /// editable, diff-friendly. See [`umbral_core::fixtures`] for the

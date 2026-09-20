@@ -272,6 +272,32 @@ impl Cache {
     }
 }
 
+/// Implements the core `umbral::cache::TaggedCache` contract so other
+/// plugins (e.g. umbral-storage) can reach a tagged cache ambiently
+/// without depending on this crate.
+#[async_trait]
+impl umbral::cache::TaggedCache for Cache {
+    async fn get_bool(&self, key: &str) -> Option<bool> {
+        self.get::<bool>(key).await
+    }
+
+    async fn set_tagged_bool(
+        &self,
+        key: &str,
+        value: bool,
+        ttl: Option<Duration>,
+        tags: &[String],
+    ) {
+        if let Ok(bytes) = serde_json::to_vec(&value) {
+            self.backend.set_tagged(key, bytes, ttl, tags).await;
+        }
+    }
+
+    async fn bust_tag(&self, tag: &str) {
+        self.backend.bust_tag(tag).await;
+    }
+}
+
 // ── MemoryBackend ────────────────────────────────────────────────────────────
 
 struct MemoryEntry {
@@ -832,6 +858,7 @@ impl CachePlugin {
     /// manual / test wiring. Calling it twice panics (same contract as
     /// `settings::init`).
     pub fn init(cache: Cache) {
+        umbral::cache::set_ambient_tagged_cache(std::sync::Arc::new(cache.clone()));
         if AMBIENT_CACHE.set(cache).is_err() {
             panic!("CachePlugin::init called more than once");
         }
@@ -917,6 +944,7 @@ impl Plugin for CachePlugin {
         // cache was supplied via `new`, install it as the ambient handle.
         match &self.cache {
             Some(cache) => {
+                umbral::cache::set_ambient_tagged_cache(std::sync::Arc::new(cache.clone()));
                 if AMBIENT_CACHE.set(cache.clone()).is_err() {
                     tracing::warn!(
                         "CachePlugin::new: an ambient cache was already installed (via \
