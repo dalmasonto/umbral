@@ -15,8 +15,11 @@ There are now **three** layers that can own a `cargo run -- <cmd>` subcommand, a
 
 `umbral_cli::dispatch_with_argv` (crates/umbral-cli/src/lib.rs) does:
 
+0. **Scaffolders** (`start*`) — `scaffold_cli::try_run_scaffold(argv)`, tried before anything builds/readies the app. Shared verbatim with the global `umbral` binary. See `.claude/skills/cli-help-dispatch-invariant.md`.
 1. **App commands + plugin commands** — `umbral_core::cli::dispatch_with_app_commands(app.commands(), app.plugins(), argv)`. App commands (registered via `AppBuilder::command` / `.commands(vec)`) are collected **first**, then each plugin's `Plugin::commands()`. First-registered wins a name clash; the loser is dropped with a `tracing::warn!`.
 2. **Built-in subcommands** — only if step 1 returns `Unmatched`. clap parses argv against the `Command` enum in `umbral-cli/src/lib.rs` (`serve`, `migrate`, `makemigrations`, …).
+
+Whatever `umbral help` lists MUST be dispatchable by one of these steps — that help⟺dispatch invariant (and the two-`Cli` split behind it) is its own skill: `.claude/skills/cli-help-dispatch-invariant.md`.
 
 **The consequence that bites:** step 1 runs BEFORE step 2. A plugin or app command named `migrate` does not collide loudly — it *takes over*, and migrations quietly stop applying. That's why `scaffold::reserved_command_names()` rejects those names at `startcommand` time. The framework half of that set is read off the derived clap parser (`<Cli as CommandFactory>::command()`), so a new built-in reserves its own name; the built-in *plugins'* commands can't be read that way (they only exist on a built App) and are listed in `RESERVED_PLUGIN_COMMAND_NAMES`.
 
