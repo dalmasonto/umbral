@@ -1201,3 +1201,85 @@ impl MediaCaller {
         self.roles.iter().any(|r| r == role)
     }
 }
+
+/// The default TTL a cacheable [`Decision`] gets when it doesn't call
+/// [`Decision::ttl`] explicitly.
+const MEDIA_ACCESS_DEFAULT_TTL: Duration = Duration::from_secs(60);
+
+/// The result of a media-access closure (used by the caching wrapper added
+/// in a later task): allow or deny, plus how that decision should be cached
+/// — cache-tag dependencies, a TTL override, or opted out of caching
+/// entirely with [`Self::no_cache`]. Cacheable by default.
+pub struct Decision {
+    allow: bool,
+    tags: Vec<String>,
+    ttl: Option<Duration>,
+    cache: bool,
+}
+
+impl Decision {
+    /// Allow, cacheable, no tag dependencies, default TTL.
+    pub fn allow() -> Self {
+        Self {
+            allow: true,
+            tags: Vec::new(),
+            ttl: None,
+            cache: true,
+        }
+    }
+
+    /// Deny, cacheable, no tag dependencies, default TTL.
+    pub fn deny() -> Self {
+        Self {
+            allow: false,
+            tags: Vec::new(),
+            ttl: None,
+            cache: true,
+        }
+    }
+
+    /// Allow or deny per `allow`, cacheable, no tag dependencies, default TTL.
+    pub fn of(allow: bool) -> Self {
+        Self {
+            allow,
+            tags: Vec::new(),
+            ttl: None,
+            cache: true,
+        }
+    }
+
+    /// Bust this cached decision when any of `tags` is invalidated (e.g. via
+    /// `TaggedCache::bust_tag`).
+    pub fn depends_on(mut self, tags: impl IntoIterator<Item = String>) -> Self {
+        self.tags.extend(tags);
+        self
+    }
+
+    /// Override the default cache TTL ([`MEDIA_ACCESS_DEFAULT_TTL`]).
+    pub fn ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Opt this decision out of caching — the gate re-runs on every request.
+    pub fn no_cache(mut self) -> Self {
+        self.cache = false;
+        self
+    }
+
+    pub fn is_allow(&self) -> bool {
+        self.allow
+    }
+
+    pub fn is_cacheable(&self) -> bool {
+        self.cache
+    }
+
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+
+    pub(crate) fn ttl_or_default(&self) -> Duration {
+        self.ttl.unwrap_or(MEDIA_ACCESS_DEFAULT_TTL)
+    }
+}
