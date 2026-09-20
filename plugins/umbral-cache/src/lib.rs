@@ -646,6 +646,18 @@ impl RedisBackend {
     fn k(&self, key: &str) -> String {
         format!("{}{key}", self.prefix)
     }
+
+    /// The reverse-index key holding `key`'s current tag set (gaps6 #11).
+    fn keytags_key(&self, key: &str) -> String {
+        self.k(&format!("ukeytags:{key}"))
+    }
+
+    /// Strip this backend's prefix off a namespaced member, recovering the
+    /// raw key (gaps6 #11 — `bust_tag` only has namespaced members from
+    /// `SMEMBERS`, but the reverse index is keyed by the raw key).
+    fn unprefixed<'a>(&self, member: &'a str) -> &'a str {
+        member.strip_prefix(&self.prefix).unwrap_or(member)
+    }
 }
 
 #[cfg(feature = "redis")]
@@ -680,8 +692,31 @@ impl CacheBackend for RedisBackend {
     async fn delete(&self, key: &str) {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        let key = self.k(key);
-        if let Err(e) = conn.del::<_, ()>(&key).await {
+        let member = self.k(key);
+        let keytags_key = self.keytags_key(key);
+        // Prune the reverse index too (gaps6 #11), mirroring
+        // Memory/SqliteBackend — otherwise a stale (tag, key) membership
+        // survives and a later bust_tag on the old tag wrongly evicts a
+        // reused key name.
+        let old_tags: Vec<String> = match conn.smembers(&keytags_key).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, key, "umbral-cache: Redis cache keytags SMEMBERS failed (swallowed)");
+                Vec::new()
+            }
+        };
+        for t in &old_tags {
+            let tag_key = self.k(&format!("utag:{t}"));
+            if let Err(e) = conn.srem::<_, _, ()>(&tag_key, &member).await {
+                tracing::warn!(error = %e, key, tag = %t, "umbral-cache: Redis cache tag index SREM (delete prune) failed (swallowed)");
+            }
+        }
+        if !old_tags.is_empty() {
+            if let Err(e) = conn.del::<_, ()>(&keytags_key).await {
+                tracing::warn!(error = %e, key, "umbral-cache: Redis cache keytags DEL failed (swallowed)");
+            }
+        }
+        if let Err(e) = conn.del::<_, ()>(&member).await {
             tracing::warn!(error = %e, key, "umbral-cache: Redis cache delete failed (swallowed)");
         }
     }
@@ -723,19 +758,44 @@ impl CacheBackend for RedisBackend {
         }
     }
 
-    // TODO(gaps6 #11): the tag index (`utag:<tag>` sets) is not pruned on
-    // delete/clear/retag here — Redis has no cheap key->tags reverse index,
-    // unlike Memory/SqliteBackend::untag. A key name reused under a stale tag
-    // can be wrongly evicted by a later bust_tag. See planning/gaps6.md #11.
+    // gaps6 #11: `ukeytags:<key>` is a per-key reverse index of its current
+    // tags, kept in sync so delete/clear/retag can prune the key out of
+    // every `utag:<tag>` set it used to belong to — mirroring
+    // Memory/SqliteBackend::untag. Without it a stale (tag, key) membership
+    // could survive a retag and a later bust_tag on the old tag would
+    // wrongly evict a reused key name.
     async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
         use redis::AsyncCommands;
-        self.set(key, value, ttl).await; // reuse existing SET/EX
         let mut conn = self.client.clone();
+        let member = self.k(key);
+        let keytags_key = self.keytags_key(key);
+
+        let old_tags: Vec<String> = match conn.smembers(&keytags_key).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, key, "umbral-cache: Redis cache keytags SMEMBERS failed (swallowed)");
+                Vec::new()
+            }
+        };
+        for t in &old_tags {
+            let tag_key = self.k(&format!("utag:{t}"));
+            if let Err(e) = conn.srem::<_, _, ()>(&tag_key, &member).await {
+                tracing::warn!(error = %e, key, tag = %t, "umbral-cache: Redis cache tag index SREM (retag prune) failed (swallowed)");
+            }
+        }
+
+        self.set(key, value, ttl).await; // reuse existing SET/EX
+
+        if let Err(e) = conn.del::<_, ()>(&keytags_key).await {
+            tracing::warn!(error = %e, key, "umbral-cache: Redis cache keytags DEL failed (swallowed)");
+        }
         for t in tags {
             let tag_key = self.k(&format!("utag:{t}"));
-            let member = self.k(key);
             if let Err(e) = conn.sadd::<_, _, ()>(&tag_key, &member).await {
                 tracing::warn!(error = %e, key, tag = %t, "umbral-cache: Redis cache tag index SADD failed (swallowed)");
+            }
+            if let Err(e) = conn.sadd::<_, _, ()>(&keytags_key, t).await {
+                tracing::warn!(error = %e, key, tag = %t, "umbral-cache: Redis cache keytags SADD failed (swallowed)");
             }
         }
     }
@@ -754,6 +814,30 @@ impl CacheBackend for RedisBackend {
         // Members are already namespaced (stored via self.k(key) in set_tagged
         // above) — delete them directly, do NOT re-apply self.k here.
         for m in &members {
+            // gaps6 #11: also prune this key out of any OTHER tag sets it
+            // still belongs to, so a dangling reference to an evicted key
+            // can't linger under a different tag.
+            let raw_key = self.unprefixed(m);
+            let keytags_key = self.keytags_key(raw_key);
+            let other_tags: Vec<String> = match conn.smembers(&keytags_key).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, tag, member = %m, "umbral-cache: Redis cache bust_tag keytags SMEMBERS failed (swallowed)");
+                    Vec::new()
+                }
+            };
+            for t in &other_tags {
+                if t == tag {
+                    continue;
+                }
+                let other_tag_key = self.k(&format!("utag:{t}"));
+                if let Err(e) = conn.srem::<_, _, ()>(&other_tag_key, m).await {
+                    tracing::warn!(error = %e, tag = %t, member = %m, "umbral-cache: Redis cache bust_tag cross-tag SREM failed (swallowed)");
+                }
+            }
+            if let Err(e) = conn.del::<_, ()>(&keytags_key).await {
+                tracing::warn!(error = %e, member = %m, "umbral-cache: Redis cache bust_tag keytags DEL failed (swallowed)");
+            }
             if let Err(e) = conn.del::<_, ()>(m).await {
                 tracing::warn!(error = %e, tag, member = %m, "umbral-cache: Redis cache bust_tag DEL member failed (swallowed)");
             }
