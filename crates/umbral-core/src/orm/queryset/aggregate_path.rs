@@ -82,6 +82,7 @@ pub(crate) fn build_aggregate_subquery<T: Model>(
         crate::db::router::schema_qualified_table(T::TABLE),
         root_alias.clone(),
     );
+    let mut hop_tables: Vec<(Alias, &'static str)> = Vec::new();
     let leaf_alias = walk_joins(
         &mut q,
         root_alias.clone(),
@@ -89,6 +90,7 @@ pub(crate) fn build_aggregate_subquery<T: Model>(
         NullJoinPolicy::Inner,
         "__agg_",
         &registered,
+        Some(&mut hop_tables),
     )?;
 
     // Correlate: the subquery's own root row must be the SAME row as the
@@ -111,18 +113,24 @@ pub(crate) fn build_aggregate_subquery<T: Model>(
         .to_string();
     let leaf_meta = registered.iter().find(|m| m.table == leaf_table);
 
-    // Soft-delete scoping (Task 3 review, IMPORTANT #2): the single-hop
-    // `annotate_related`/`annotate_count` path folds `AND
+    // Soft-delete scoping (Task 3 review, IMPORTANT #2, gaps6 #5): the
+    // single-hop `annotate_related`/`annotate_count` path folds `AND
     // <child>.deleted_at IS NULL` into its correlated subquery when the
     // child model is `#[umbral(soft_delete)]` (`child_soft_delete` in
     // `queryset/mod.rs`'s `build_query_for`) — a trashed child must not
     // silently inflate the count/sum/etc. A deep relation-path aggregate
-    // must not regress that: exclude a soft-deleted LEAF row here the same
-    // way. (Scoped to the leaf only, not every intermediate hop along the
-    // path — see this module's `annotate_relation_path.rs` test file /
-    // the Task 3 report for the narrower-than-ideal remaining gap.)
-    if leaf_meta.is_some_and(|m| m.soft_delete) {
-        q.and_where(Expr::col((leaf_alias.clone(), Alias::new("deleted_at"))).is_null());
+    // must not regress that for ANY hop along the path, not just the leaf:
+    // `annotate_count("posts__comments")` with a soft-deleted `posts` row
+    // must not count that post's (still-live) comments. Every hop table
+    // `walk_joins` joined (via `hop_tables`, including the leaf) gets its
+    // own `deleted_at IS NULL` when that hop's model opted into soft-delete.
+    for (alias, table) in &hop_tables {
+        if registered
+            .iter()
+            .any(|m| m.table == *table && m.soft_delete)
+        {
+            q.and_where(Expr::col((alias.clone(), Alias::new("deleted_at"))).is_null());
+        }
     }
 
     let expr: SimpleExpr = match agg {

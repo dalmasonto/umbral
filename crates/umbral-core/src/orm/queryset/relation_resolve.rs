@@ -108,6 +108,11 @@ pub(crate) fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a 
 /// `walk_joins_schema_qualified.rs`, which asserts the junction table AND the
 /// far/child table are both schema-qualified in the emitted SQL for the M2M
 /// and reverse-FK arms specifically (TaskFlow #446).
+/// `hop_out`, when `Some`, collects each hop's `(far_alias, to_table)` in
+/// walk order — the per-hop hook a caller needs to attach a predicate (e.g.
+/// a soft-delete scope) to an INTERMEDIATE hop table, not just the leaf. See
+/// `aggregate_path::build_aggregate_subquery`, the only caller that passes
+/// `Some` today.
 pub(crate) fn walk_joins(
     select: &mut SelectStatement,
     root_alias: Alias,
@@ -115,10 +120,14 @@ pub(crate) fn walk_joins(
     policy: NullJoinPolicy,
     prefix: &str,
     registered: &[ModelMeta],
+    mut hop_out: Option<&mut Vec<(Alias, &'static str)>>,
 ) -> Result<Alias, sqlx::Error> {
     let mut near_alias = root_alias;
     for (idx, hop) in hops.iter().enumerate() {
         let far_alias = Alias::new(format!("{prefix}{}", idx + 1));
+        if let Some(out) = hop_out.as_deref_mut() {
+            out.push((far_alias.clone(), hop.to_table));
+        }
         let jt = match policy {
             NullJoinPolicy::LeftForNullable if !hop.required => JoinType::LeftJoin,
             NullJoinPolicy::Right => JoinType::RightJoin,
@@ -271,6 +280,7 @@ pub(crate) fn build_to_one_select<Leaf: Model>(
         NullJoinPolicy::Inner,
         "__rel_",
         &registered,
+        None,
     )?;
 
     // Project the leaf's own columns, aliased to their bare names so `Leaf`'s
@@ -566,6 +576,7 @@ fn build_prefix_pivot_subquery(
         NullJoinPolicy::Inner,
         "__rel_",
         registered,
+        None,
     )
     .map_err(|e| e.to_string())?;
     // Project the pivot's PK (the last prefix target's PK).

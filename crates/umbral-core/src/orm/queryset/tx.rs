@@ -75,6 +75,7 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             + HydrateRelated,
     {
         self.qs.query.limit(1);
+        self.qs.user_limit = Some(1);
         let q = self.qs.build_query_for(self.tx.backend_name());
         let mut row = match self.tx.backend_name() {
             "sqlite" => {
@@ -136,6 +137,7 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.qs.query.limit(1);
+        self.qs.user_limit = Some(1);
         let backend = self.tx.backend_name();
         let q = self.qs.build_query_for(backend);
         let row_opt: Option<T> = match backend {
@@ -164,6 +166,7 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.qs.query.limit(2);
+        self.qs.user_limit = Some(2);
         let q = self.qs.build_query_for(self.tx.backend_name());
         let mut rows: Vec<T> = match self.tx.backend_name() {
             "sqlite" => {

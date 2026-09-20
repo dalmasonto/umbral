@@ -85,9 +85,15 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
         // dotted path — so we rebuild the nested object bottom-up and
         // hand the chain to `hydrate_fk`, whose macro body recursively
         // deserialises nested `ForeignKey<U>` slots.
-        let Some(hops) = crate::orm::queryset::resolve_join_hops_for::<T>(field_name) else {
+        //
+        // gaps6 #4: reads hop tables off `RelPath::from_path` — the SAME
+        // resolver `apply_join_related` used to build this JOIN's `ON`
+        // clauses and `<dotted-path>__<col>` aliases, so hop `idx` here is
+        // guaranteed to line up with that column prefix by construction.
+        let Ok(path) = crate::orm::relation::RelPath::from_path::<T>(field_name) else {
             continue;
         };
+        let hops = &path.hops;
         let segs: Vec<&str> = field_name.split("__").collect();
         // Build the nested object bottom-up. Each level's columns are
         // aliased by its cumulative dotted prefix (`plugin`,
@@ -102,7 +108,7 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
         for idx in (0..hops.len()).rev() {
             let hop = &hops[idx];
             let prefix = segs[..=idx].join("__");
-            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+            let Some(meta) = registered.iter().find(|m| m.table == hop.to_table) else {
                 deeper = None;
                 if idx == 0 {
                     hop0_missing = true;
@@ -190,14 +196,19 @@ pub(super) fn extract_m2m_child_json<T: Model>(
     // nest it under the child's onward FK key (overriding the raw FK
     // id that was just inserted above). A NULL onward PK leaves the FK
     // as its raw id — unresolved, the LEFT-miss shape.
-    if let Some((_ct, _cpk, onward)) = crate::orm::queryset::resolve_m2m_chain::<T>(field_name) {
+    // gaps6 #4: onward hops (past the M2M root) read off the same
+    // `RelPath::from_path` result `apply_join_related` built the JOIN from —
+    // `path.hops[0]` is the M2M hop itself, `path.hops[1..]` its onward FK
+    // tail, matching the `<dotted-path>__<col>` aliases 1:1 by construction.
+    if let Ok(path) = crate::orm::relation::RelPath::from_path::<T>(field_name) {
+        let onward = &path.hops[1..];
         let registered = crate::migrate::registered_models();
         let mut deeper: Option<JsonValue> = None;
         for i in (0..onward.len()).rev() {
             let hop = &onward[i];
             let seg_idx = i + 1;
             let prefix = segs[..=seg_idx].join("__");
-            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+            let Some(meta) = registered.iter().find(|m| m.table == hop.to_table) else {
                 deeper = None;
                 continue;
             };

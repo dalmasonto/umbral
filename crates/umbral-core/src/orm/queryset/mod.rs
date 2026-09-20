@@ -1511,7 +1511,7 @@ fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx:
         if field_name.contains("__") {
             let first = field_name.split("__").next().unwrap_or(field_name);
             let leads_m2m = T::M2M_RELATIONS.iter().any(|r| r.field_name == first);
-            if leads_m2m || resolve_join_hops::<T>(field_name).is_some() {
+            if leads_m2m || fk_path_is_resolvable::<T>(field_name) {
                 continue;
             }
             return Err(sqlx::Error::Protocol(format!(
@@ -1554,101 +1554,59 @@ fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx:
     Ok(())
 }
 
-/// One resolved hop of a `join_related` FK chain — the child TABLE a hop
-/// targets.
+/// True when a dotted FK path (`"plugin__author"`) resolves to a chain of
+/// forward-FK hops off `T` — the loud-error gate `validate_join_related_fields`
+/// falls back to for a `join_related` path that doesn't lead with an M2M
+/// field. Hop 0 reads `T::FIELDS`; deeper hops read the migrate registry's
+/// `Column`s for the prior hop's target table.
 ///
-/// Pre-Task-445 this also carried the FK column name, the target's PK
-/// column, and its nullability, because `apply_join_related` hand-built
-/// its own JOIN `ON` clauses and LEFT/INNER inference straight off this
-/// struct. That JOIN emission now goes through `RelPath::from_path` +
-/// `relation_resolve::walk_joins` instead (heavy-relations epic, Task
-/// 445), so `JoinHop` shrank to just what its ONE remaining consumer
-/// needs: `backend_sqlite`/`backend_pg`'s post-fetch decode helpers
-/// (`hydrate_joined_rels`, `extract_m2m_child_json`) resolve a path's hop
-/// tables to look up each level's registered `ModelMeta` (and, from it,
-/// the PK column) to decode the `<dotted-path>__<col>` aliased columns
-/// `apply_join_related` projected — a job unrelated to how the JOIN SQL
-/// itself was built.
-#[derive(Debug, Clone)]
-pub(crate) struct JoinHop {
-    /// Table this hop targets.
-    pub(crate) child_table: String,
-}
-
-/// Resolve a dotted FK path (`"plugin__author"`) into ordered hops.
-/// Hop 0 reads `T::FIELDS`; deeper hops read the migrate registry's
-/// `Column`s for the prior hop's target table. Returns `None` (skip,
-/// emit no JOIN) on any unresolved hop — same forgiving posture as the
-/// pre-existing one-hop path's silent skip in `to_sql`.
+/// FK-only: a path whose FIRST segment is an M2M field is NOT handled here
+/// (the caller already special-cases that before falling back to this).
 ///
-/// FK-only: a path whose FIRST segment is an M2M field is NOT handled
-/// here (M2M chains route through `apply_join_related`'s M2M branch);
-/// this returns `None` for such a path.
-pub(crate) fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
+/// gaps6 #4: this used to return the resolved hop tables too (as
+/// `Vec<JoinHop>`), shared with `backend_sqlite`/`backend_pg`'s post-fetch
+/// decoders. Those now read hop tables straight off `RelPath::from_path` —
+/// the SAME resolver `apply_join_related` already used to build the JOIN
+/// SQL and its `<dotted-path>__<col>` aliases — so this function shrank
+/// back to the boolean resolvability check its one remaining caller needs.
+fn fk_path_is_resolvable<T: Model>(path: &str) -> bool {
     let registered = crate::migrate::registered_models();
     let segs: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
-    if segs.is_empty() {
-        return None;
+    let Some(first) = segs.first() else {
+        return false;
+    };
+    let Some(f0) = T::FIELDS.iter().find(|f| f.name == *first) else {
+        return false;
+    };
+    let Some(t0) = f0.fk_target else {
+        return false;
+    };
+    let Some(m0) = registered.iter().find(|m| m.table == t0) else {
+        return false;
+    };
+    if m0.fields.iter().find(|c| c.primary_key).is_none() {
+        return false;
     }
-    let mut hops = Vec::with_capacity(segs.len());
-    // Hop 0 off the typed parent. The PK lookup isn't stored (see
-    // `JoinHop`'s doc comment) but stays part of the resolvability check:
-    // a target with no declared PK makes the whole path unresolvable,
-    // same as before this hop stopped needing the PK's name.
-    let f0 = T::FIELDS.iter().find(|f| f.name == segs[0])?;
-    let t0 = f0.fk_target?;
-    let m0 = registered.iter().find(|m| m.table == t0)?;
-    m0.fields.iter().find(|c| c.primary_key)?;
-    hops.push(JoinHop {
-        child_table: t0.to_string(),
-    });
     let mut current = t0;
     for seg in &segs[1..] {
-        let meta = registered.iter().find(|m| m.table == current)?;
-        let col = meta.fields.iter().find(|c| c.name == *seg)?;
-        let tgt = col.fk_target.as_deref()?;
-        let tmeta = registered.iter().find(|m| m.table == tgt)?;
-        tmeta.fields.iter().find(|c| c.primary_key)?;
-        hops.push(JoinHop {
-            child_table: tgt.to_string(),
-        });
+        let Some(meta) = registered.iter().find(|m| m.table == current) else {
+            return false;
+        };
+        let Some(col) = meta.fields.iter().find(|c| c.name == *seg) else {
+            return false;
+        };
+        let Some(tgt) = col.fk_target.as_deref() else {
+            return false;
+        };
+        let Some(tmeta) = registered.iter().find(|m| m.table == tgt) else {
+            return false;
+        };
+        if tmeta.fields.iter().find(|c| c.primary_key).is_none() {
+            return false;
+        }
         current = tgt;
     }
-    Some(hops)
-}
-
-/// Thin wrapper so the backend hydration helpers (a sibling module)
-/// can resolve a chain without importing the private name directly.
-pub(crate) fn resolve_join_hops_for<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
-    resolve_join_hops::<T>(path)
-}
-
-/// Resolve a path whose FIRST segment is an M2M field on `T` into the
-/// M2M child table + child PK + the onward FK chain hops off that
-/// child. `onward` is empty for a bare `"tags"`; for `"tags__category"`
-/// it carries the `category` FK hop off the child table. `None` when
-/// `segs[0]` isn't an M2M field or any onward hop fails to resolve.
-pub(crate) fn resolve_m2m_chain<T: Model>(path: &str) -> Option<(String, String, Vec<JoinHop>)> {
-    let registered = crate::migrate::registered_models();
-    let segs: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
-    let first = segs.first()?;
-    let rel = T::M2M_RELATIONS.iter().find(|r| r.field_name == *first)?;
-    let child_meta = registered.iter().find(|m| m.table == rel.target_table)?;
-    let child_pk = child_meta.fields.iter().find(|c| c.primary_key)?;
-    let mut onward = Vec::with_capacity(segs.len().saturating_sub(1));
-    let mut current = rel.target_table;
-    for seg in &segs[1..] {
-        let meta = registered.iter().find(|m| m.table == current)?;
-        let col = meta.fields.iter().find(|c| c.name == *seg)?;
-        let tgt = col.fk_target.as_deref()?;
-        let tmeta = registered.iter().find(|m| m.table == tgt)?;
-        tmeta.fields.iter().find(|c| c.primary_key)?;
-        onward.push(JoinHop {
-            child_table: tgt.to_string(),
-        });
-        current = tgt;
-    }
-    Some((rel.target_table.to_string(), child_pk.name.clone(), onward))
+    true
 }
 
 /// Gap #111 — error returned when a typed terminal (`fetch` / `first`
@@ -2053,6 +2011,7 @@ impl<T: Model> QuerySet<T> {
                     policy,
                     &prefix,
                     &registered,
+                    None,
                 ) {
                     Ok(alias) => alias,
                     // Same forgiving posture as the unresolved-path case
@@ -2338,6 +2297,7 @@ impl<T: Model> QuerySet<T> {
         // joined children the same way `fetch()` does with `.limit(1)`;
         // prefer `prefetch_related` there.)
         self.query.limit(1);
+        self.user_limit = Some(1);
         let rows = self.fetch().await?;
         Ok(rows.into_iter().next())
     }
@@ -4396,6 +4356,7 @@ impl<T: Model> QuerySet<T> {
             &self.only_cols,
         )?;
         self.query.limit(1);
+        self.user_limit = Some(1);
         let q = self.build_query_for("postgres");
         let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
         sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)

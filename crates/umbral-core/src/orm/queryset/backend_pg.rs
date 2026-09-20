@@ -67,17 +67,19 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
     for field_name in join_fields {
         // See `super::backend_sqlite::hydrate_joined_rels` for the
         // nested-chain algorithm; only the row type and decode helper
-        // differ.
-        let Some(hops) = crate::orm::queryset::resolve_join_hops_for::<T>(field_name) else {
+        // differ. gaps6 #4: hop tables read off `RelPath::from_path`, the
+        // same resolver the JOIN emission used.
+        let Ok(path) = crate::orm::relation::RelPath::from_path::<T>(field_name) else {
             continue;
         };
+        let hops = &path.hops;
         let segs: Vec<&str> = field_name.split("__").collect();
         let mut deeper: Option<serde_json::Value> = None;
         let mut hop0_missing = false;
         for idx in (0..hops.len()).rev() {
             let hop = &hops[idx];
             let prefix = segs[..=idx].join("__");
-            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+            let Some(meta) = registered.iter().find(|m| m.table == hop.to_table) else {
                 deeper = None;
                 if idx == 0 {
                     hop0_missing = true;
@@ -152,14 +154,17 @@ pub(super) fn extract_m2m_child_json<T: Model>(
         let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
         obj.insert(col.name.clone(), val);
     }
-    if let Some((_ct, _cpk, onward)) = crate::orm::queryset::resolve_m2m_chain::<T>(field_name) {
+    // gaps6 #4: onward hops read off the same `RelPath::from_path` result
+    // the JOIN emission used — see the SQLite counterpart for the rationale.
+    if let Ok(path) = crate::orm::relation::RelPath::from_path::<T>(field_name) {
+        let onward = &path.hops[1..];
         let registered = crate::migrate::registered_models();
         let mut deeper: Option<JsonValue> = None;
         for i in (0..onward.len()).rev() {
             let hop = &onward[i];
             let seg_idx = i + 1;
             let prefix = segs[..=seg_idx].join("__");
-            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+            let Some(meta) = registered.iter().find(|m| m.table == hop.to_table) else {
                 deeper = None;
                 continue;
             };

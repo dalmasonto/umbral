@@ -57,7 +57,7 @@ pub struct Comment {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
-#[umbral(table = "arp_post")]
+#[umbral(table = "arp_post", soft_delete)]
 pub struct Post {
     #[umbral(primary_key)]
     pub id: i64,
@@ -70,6 +70,12 @@ pub struct Post {
     // this column) keep working unchanged.
     #[sqlx(default)]
     pub password_hash: Option<String>,
+    // gaps6 #5 — `Post` is now an INTERMEDIATE hop in "posts__comments" that
+    // can itself be soft-deleted; proves the deep-path aggregate scopes every
+    // hop, not just the leaf (`Comment`, already soft_delete above).
+    #[sqlx(default)]
+    #[umbral(index)]
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
@@ -251,6 +257,41 @@ async fn boot() {
                     .expect("seed comment");
             }
         }
+
+        // judy (id 10, post 10): the post is itself SOFT-DELETED but its 2
+        // comments are still live — gaps6 #5. karen (id 11, post 11): a live
+        // post with the same shape, as a control. Post ids continue the
+        // autoincrement sequence from iris's post (9) above.
+        sqlx::query("INSERT INTO arp_user (name) VALUES ('judy')")
+            .execute(&pool)
+            .await
+            .expect("seed judy");
+        sqlx::query("INSERT INTO arp_post (price, author, deleted_at) VALUES (0, 10, ?)")
+            .bind(chrono::Utc::now())
+            .execute(&pool)
+            .await
+            .expect("seed judy's soft-deleted post");
+        for _ in 0..2 {
+            sqlx::query("INSERT INTO comments (post) VALUES (10)")
+                .execute(&pool)
+                .await
+                .expect("seed judy's comment");
+        }
+
+        sqlx::query("INSERT INTO arp_user (name) VALUES ('karen')")
+            .execute(&pool)
+            .await
+            .expect("seed karen");
+        sqlx::query("INSERT INTO arp_post (price, author) VALUES (0, 11)")
+            .execute(&pool)
+            .await
+            .expect("seed karen's live post");
+        for _ in 0..2 {
+            sqlx::query("INSERT INTO comments (post) VALUES (11)")
+                .execute(&pool)
+                .await
+                .expect("seed karen's comment");
+        }
     })
     .await;
 }
@@ -327,6 +368,31 @@ async fn annotate_count_over_deep_path_excludes_soft_deleted_leaf_rows() {
         by_name(&rows, "frank")["posts__comments_count"].as_i64(),
         Some(1),
         "the soft-deleted comment must not inflate the deep-path count"
+    );
+}
+
+/// gaps6 #5 — the deep-path aggregate used to scope soft-delete on the LEAF
+/// table only. A soft-deleted INTERMEDIATE hop (here, `Post`) must also
+/// exclude its children from the aggregate, even though the children
+/// themselves are still live rows.
+#[tokio::test]
+async fn annotate_count_over_deep_path_excludes_children_under_a_soft_deleted_intermediate_hop() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    let rows = User::objects()
+        .annotate_count("posts__comments")
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated");
+    assert_eq!(
+        by_name(&rows, "judy")["posts__comments_count"].as_i64(),
+        Some(0),
+        "judy's post is soft-deleted; its 2 live comments must not be counted"
+    );
+    assert_eq!(
+        by_name(&rows, "karen")["posts__comments_count"].as_i64(),
+        Some(2),
+        "karen's post is live; her 2 comments must count normally"
     );
 }
 
@@ -493,6 +559,46 @@ async fn filter_annotation_plus_order_by_annotation_plus_limit_returns_the_corre
     );
 }
 
+/// gaps6 #3 — `first()` used to set `LIMIT 1` directly on `self.query`,
+/// bypassing the TRACKED `user_limit` the `filter_annotation` wrap re-applies
+/// to the outer query. So `first()` after a `filter_annotation` silently lost
+/// its LIMIT and fetched the whole filtered set before taking the first row.
+#[tokio::test]
+async fn filter_annotation_first_applies_limit_1_after_the_wrap() {
+    let _g = query_count_harness::query_lock().await;
+    boot().await;
+    query_count_harness::reset();
+    // alice (id 1) passes `posts__comments_count > 0`; bob (id 2) fails it.
+    let row = User::objects()
+        .filter(user::ID.lt(3))
+        .annotate_count("posts__comments")
+        .filter_annotation("posts__comments_count", Cmp::Gt, 0.into())
+        .first()
+        .await
+        .expect("first after filter_annotation")
+        .expect("alice must match");
+    assert_eq!(
+        row.name, "alice",
+        "first() must return the single passing row"
+    );
+
+    let sql = query_count_harness::last_sql();
+    let anno_pos = sql
+        .find("__anno")
+        .expect("first() must ride the filter_annotation wrap");
+    // The bound value renders as `?` (sea_query_binder parameterizes it), not
+    // the literal `1` — presence of a LIMIT clause at all on the outer query
+    // is exactly what the bug dropped (the wrap only re-applied the TRACKED
+    // `user_limit`, which `first()` never set).
+    let limit_pos = sql.find("LIMIT ?").unwrap_or_else(|| {
+        panic!("first() must carry a LIMIT on the OUTER (post-filter) query: {sql}")
+    });
+    assert!(
+        limit_pos > anno_pos,
+        "LIMIT must sit on the outer wrapped query, not be dropped: {sql}"
+    );
+}
+
 #[tokio::test]
 async fn annotate_avg_min_max_over_path() {
     let _g = query_count_harness::query_lock().await;
@@ -587,6 +693,7 @@ mod query_count_harness {
     use tracing_subscriber::prelude::*;
 
     static QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static LAST_SQL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
     static INIT: Once = Once::new();
     static COUNT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -619,6 +726,7 @@ mod query_count_harness {
             if stmt.trim_start().to_ascii_uppercase().starts_with("PRAGMA") {
                 return;
             }
+            *LAST_SQL.lock().unwrap() = stmt;
             QUERY_COUNT.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -639,10 +747,15 @@ mod query_count_harness {
 
     pub fn reset() {
         QUERY_COUNT.store(0, Ordering::SeqCst);
+        LAST_SQL.lock().unwrap().clear();
     }
 
     pub fn count() -> usize {
         QUERY_COUNT.load(Ordering::SeqCst)
+    }
+
+    pub fn last_sql() -> String {
+        LAST_SQL.lock().unwrap().clone()
     }
 }
 
