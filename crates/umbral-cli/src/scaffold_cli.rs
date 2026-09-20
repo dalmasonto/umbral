@@ -163,15 +163,18 @@ pub fn command_catalog() -> Vec<(String, Option<String>)> {
 /// subcommand parser uses, so command-specific help exits cleanly at both entry
 /// points rather than falling through to the top-level catalog.
 pub fn try_run_scaffold(argv: &[OsString]) -> Option<Result<(), BoxError>> {
-    let sub = argv
+    let sub_index = argv
         .iter()
+        .enumerate()
         .skip(1)
-        .find(|a| !a.to_string_lossy().starts_with('-'))
-        .map(|a| a.to_string_lossy().into_owned())?;
+        .find(|(_, a)| !a.to_string_lossy().starts_with('-'))
+        .map(|(i, _)| i)?;
+    let sub = argv[sub_index].to_string_lossy().into_owned();
     if !is_scaffold_command(&sub) {
         return None;
     }
-    match ScaffoldCli::try_parse_from(argv) {
+    let argv = normalize_scaffold_help(argv, sub_index);
+    match ScaffoldCli::try_parse_from(&argv) {
         Ok(cli) => Some(run_scaffold(cli.command)),
         Err(e) => {
             // `--help`, `--version`, or a usage error (missing NAME, bad flag).
@@ -181,6 +184,40 @@ pub fn try_run_scaffold(argv: &[OsString]) -> Option<Result<(), BoxError>> {
             std::process::exit(if e.use_stderr() { 2 } else { 0 });
         }
     }
+}
+
+/// Normalise a help request that landed in a scaffold command's NAME slot.
+///
+/// `startplugin help` and the `-help` single-dash typo must mean "show this
+/// command's usage" — NOT "scaffold a plugin literally named `help`". Without
+/// this, clap takes `help` as `<NAME>` and generates a broken `help` crate
+/// (exactly how a stray `plugins/help/` gets created when a user was only asking
+/// for help). clap already treats `--help`/`-h` as help; this rewrites the other
+/// two to `--help` so every form renders the same usage. `sub_index` is the
+/// index of the scaffold subcommand token in `argv`.
+fn normalize_scaffold_help(argv: &[OsString], sub_index: usize) -> Vec<OsString> {
+    // The first non-flag token after the subcommand is the NAME slot.
+    let name_index = argv
+        .iter()
+        .enumerate()
+        .skip(sub_index + 1)
+        .find(|(_, a)| !a.to_string_lossy().starts_with('-'))
+        .map(|(i, _)| i);
+    argv.iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let s = a.to_string_lossy();
+            if i > sub_index && s == "-help" {
+                // single-dash typo for --help, anywhere after the subcommand
+                OsString::from("--help")
+            } else if Some(i) == name_index && s == "help" {
+                // a bare `help` sitting where the NAME goes is a help request
+                OsString::from("--help")
+            } else {
+                a.clone()
+            }
+        })
+        .collect()
 }
 
 /// Run a parsed scaffolding command: write the files and print the report. This
@@ -353,6 +390,27 @@ mod tests {
             help.contains("Deprecated alias") || help.contains("startplugin"),
             "startapp help should point at startplugin:\n{help}"
         );
+    }
+
+    #[test]
+    fn bare_help_in_name_slot_is_a_help_request_not_a_plugin_named_help() {
+        // `startplugin help` must show usage, NOT scaffold a `plugins/help/` crate.
+        let norm = normalize_scaffold_help(&os(&["umbral", "startplugin", "help"]), 1);
+        assert_eq!(norm, os(&["umbral", "startplugin", "--help"]));
+        let err = ScaffoldCli::try_parse_from(&norm).expect_err("help renders, not a parse");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn dash_help_typo_is_rewritten_to_help() {
+        let norm = normalize_scaffold_help(&os(&["umbral", "startcommand", "-help"]), 1);
+        assert!(norm.iter().any(|a| a.to_string_lossy() == "--help"));
+    }
+
+    #[test]
+    fn a_real_name_is_left_untouched() {
+        let argv = os(&["umbral", "startplugin", "billing"]);
+        assert_eq!(normalize_scaffold_help(&argv, 1), argv);
     }
 
     #[test]
