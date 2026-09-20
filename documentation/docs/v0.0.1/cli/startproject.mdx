@@ -1,6 +1,6 @@
 ---
 title: Scaffolding (startproject, startplugin)
-description: "The `umbral` global binary creates new projects (`startproject`) and plugin crates (`startplugin`; `startapp` is a deprecated alias)."
+description: "The `umbral` global binary creates new projects (`startproject`) and plugin crates (`startplugin`)."
 sidebar_position: 1
 icon: layers
 ---
@@ -37,7 +37,7 @@ you only ever depend on, never install.
 
 ## What the global `umbral` binary does
 
-It does two things: `startproject` and `startplugin` (plus `startapp`, a deprecated alias of `startplugin`). Everything else (`serve`, `migrate`, `createsuperuser`, …) runs against your project's own binary via [`cargo run -- <command>`](./management-commands).
+It does two things: `startproject` and `startplugin`. Everything else (`serve`, `migrate`, `createsuperuser`, …) runs against your project's own binary via [`cargo run -- <command>`](./management-commands).
 
 <Callout type="info">
 **Two CLIs, one mental model.** The global `umbral` binary scaffolds
@@ -263,10 +263,6 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {
 <Callout type="info">
 Plugin names follow Cargo crate-name rules — ASCII alphanumeric, underscore, hyphen, can't start with a digit. The struct name is `pascal_case(name) + "Plugin"`, so `blog-engine` becomes `BlogEnginePlugin`.
 </Callout>
-
-### `startapp` is a deprecated alias
-
-`startapp` used to write a thinner plugin skeleton, but everything under `plugins/` is a plugin — there is no separate "app" contract — so it now just forwards to `startplugin` and prints a deprecation note. Use `startplugin`.
 
 ### Names umbral refuses to scaffold
 

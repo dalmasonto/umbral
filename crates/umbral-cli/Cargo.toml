@@ -1,6 +1,6 @@
 [package]
 name = "umbral-cli"
-description = "The command-line tool for umbral. Library exposes `dispatch(app)` for user binaries; binary `umbral` is a global scaffolding tool (startproject / startapp)."
+description = "The command-line tool for umbral. Library exposes `dispatch(app)` for user binaries; binary `umbral` is a global scaffolding tool (startproject / startplugin)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ rust-version.workspace = true
 # - lib: `umbral_cli::dispatch(app)` is what user binaries call to host the
 #   management subcommands (serve / migrate / makemigrations / ...).
 # - bin `umbral`: the global scaffolding tool installed via
-#   `cargo install umbral-cli` (handles startproject / startapp).
+#   `cargo install umbral-cli` (handles startproject / startplugin).
 [lib]
 name = "umbral_cli"
 path = "src/lib.rs"

@@ -506,7 +506,7 @@ pub fn render_help(catalog: &[(String, Option<String>)], version: Option<&str>) 
     const GROUPS: &[(&str, &[&str])] = &[
         (
             "Create a project or plugin",
-            &["startproject", "startapp", "startplugin", "startcommand"],
+            &["startproject", "startplugin", "startcommand"],
         ),
         ("Run the app", &["serve", "dev"]),
         (

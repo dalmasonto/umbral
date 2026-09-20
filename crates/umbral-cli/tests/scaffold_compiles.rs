@@ -151,7 +151,7 @@ fn the_generated_commands_and_rest_classes_compile_with_no_warnings() {
     let target_dir = repo.join("target/scaffold-check");
 
     // A project-owned command, and one inside a plugin — both wiring paths.
-    umbral_cli::scaffold::scaffold_app("blog", root, Some(&repo)).expect("startapp");
+    umbral_cli::scaffold::scaffold_plugin("blog", root, Some(&repo)).expect("startplugin");
     scaffold_command("backfill_slugs", &Target::Root, root).expect("startcommand --in root");
     scaffold_command("reindex", &Target::Plugin("blog".into()), root)
         .expect("startcommand --in blog");

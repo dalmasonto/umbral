@@ -14,7 +14,7 @@ description: Use when adding or changing a CLI command family, the unified `umbr
 
 On top of those, the unified help screen (`umbral help` / `--help` / unknown-command) is rendered from a **catalog** that merges commands from several sources. The trap is that the *help catalog* (what the user is told they can run) and the *dispatcher* (what actually runs) are **two separate walks over the same sources**. Unify the listing without unifying the dispatch and the help lies: it advertises a command that answers `error: unknown command`.
 
-That is exactly gap 66 → the bug fixed in `fix(cli): dispatch scaffolders from the app-embedded CLI too`: the scaffolders (`startproject` / `startapp` / `startplugin` / `startcommand`) were added to the help catalog but were only dispatchable by the global binary, so `cargo run -- startapp --help` inside a project said `unknown command startapp`.
+That is exactly gap 66 → the bug fixed in `fix(cli): dispatch scaffolders from the app-embedded CLI too`: the scaffolders (`startproject` / `startplugin` / `startcommand`) were added to the help catalog but were only dispatchable by the global binary, so `cargo run -- startplugin --help` inside a project said `unknown command startplugin`.
 
 ## Approach
 

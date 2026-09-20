@@ -1,6 +1,6 @@
 # umbral-cli
 
-The `manage.py` equivalent for umbral. Library exposes `dispatch(app)` for user binaries; binary `umbral` is a global scaffolding tool (startproject / startapp).
+The `manage.py` equivalent for umbral. Library exposes `dispatch(app)` for user binaries; binary `umbral` is a global scaffolding tool (startproject / startplugin).
 
 This is the command-line tool for the umbral framework. It provides commands such as `migrate`, `makemigrations`, `inspectdb`, and `worker`.
 

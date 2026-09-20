@@ -1,4 +1,4 @@
-//! The scaffolding subcommands (`startproject` / `startapp` / `startplugin` /
+//! The scaffolding subcommands (`startproject` / `startplugin` /
 //! `startcommand`), defined **once** and shared by both CLI entry points.
 //!
 //! Two binaries reach these commands:
@@ -9,10 +9,10 @@
 //!
 //! Before this module existed, only `main.rs` knew how to dispatch them, so the
 //! app-embedded surface *listed* the scaffolders in its unified help (gap 66)
-//! but answered `error: unknown command \`startapp\`` when you actually ran one
-//! — the help promised a command the dispatch couldn't honour. Both entry
-//! points now call [`try_run_scaffold`], so `cargo run -- startapp --help`
-//! renders the command's usage and `cargo run -- startapp foo` scaffolds, in
+//! but answered `error: unknown command \`startplugin\`` when you actually ran
+//! one — the help promised a command the dispatch couldn't honour. Both entry
+//! points now call [`try_run_scaffold`], so `cargo run -- startplugin --help`
+//! renders the command's usage and `cargo run -- startplugin foo` scaffolds, in
 //! full parity with the global binary.
 //!
 //! Scaffolding needs **no built `App`** — `startproject` runs where no project
@@ -63,28 +63,13 @@ pub enum ScaffoldCommand {
         #[arg(long, value_name = "PATH")]
         local: Option<PathBuf>,
     },
-    /// Deprecated alias of `startplugin`. Generates the same plugin crate.
-    ///
-    /// There is no separate "app" contract — everything under `plugins/`
-    /// is a plugin — so `startapp` folds into `startplugin`. Prefer
-    /// `startplugin`; this alias prints a deprecation note and forwards.
-    Startapp {
-        /// Plugin name. ASCII alphanumeric, underscore, hyphen.
-        name: String,
-        /// Project root. Defaults to the current directory.
-        #[arg(long, default_value = ".")]
-        path: PathBuf,
-        /// Path to a local umbral repo checkout. See `startproject --local`.
-        #[arg(long, value_name = "PATH")]
-        local: Option<PathBuf>,
-    },
     /// Create a plugin crate in `<project>/plugins/<name>/`.
     ///
     /// Writes a complete starter: an example `Model` showing common field
     /// attributes (`max_length`, `choices`, nullable timestamp, `noedit`),
     /// an example axum handler that reads query params and returns JSON,
     /// and a README walking through the layout. This is the one plugin
-    /// scaffolder; `startapp` is a deprecated alias.
+    /// scaffolder.
     Startplugin {
         /// Plugin name. ASCII alphanumeric, underscore, hyphen.
         name: String,
@@ -230,18 +215,6 @@ pub fn run_scaffold(cmd: ScaffoldCommand) -> Result<(), BoxError> {
             print_report(&r, &name, false);
             Ok(())
         }
-        ScaffoldCommand::Startapp { name, path, local } => {
-            // `startapp` is a deprecated alias of `startplugin` — everything
-            // generated under plugins/ is a plugin; there is no separate
-            // "app" contract. Same output either way.
-            eprintln!(
-                "note: `startapp` is deprecated — use `startplugin` (there's no separate \
-                 \"app\" contract; everything under plugins/ is a plugin)."
-            );
-            let r = scaffold_plugin(&name, &path, local.as_deref())?;
-            print_report(&r, &name, true);
-            Ok(())
-        }
         ScaffoldCommand::Startplugin { name, path, local } => {
             let r = scaffold_plugin(&name, &path, local.as_deref())?;
             print_report(&r, &name, true);
@@ -362,11 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_the_four_scaffolders_and_nothing_else() {
-        for name in ["startproject", "startapp", "startplugin", "startcommand"] {
+    fn recognizes_the_three_scaffolders_and_nothing_else() {
+        for name in ["startproject", "startplugin", "startcommand"] {
             assert!(is_scaffold_command(name), "`{name}` should be a scaffolder");
         }
-        for name in ["migrate", "serve", "plugin", "frobnicate", ""] {
+        for name in ["startapp", "migrate", "serve", "plugin", "frobnicate", ""] {
             assert!(
                 !is_scaffold_command(name),
                 "`{name}` must NOT be a scaffolder"
@@ -376,20 +349,15 @@ mod tests {
 
     #[test]
     fn scaffold_help_renders_the_command_usage_not_unknown_command() {
-        // The bug: `startapp --help` used to fall through to `error: unknown
+        // The bug: `startplugin --help` used to fall through to `error: unknown
         // command`. clap must instead surface DisplayHelp with the command's
         // args (NAME, --path, --local) so the user sees the real usage.
-        let err = ScaffoldCli::try_parse_from(os(&["umbral", "startapp", "--help"]))
+        let err = ScaffoldCli::try_parse_from(os(&["umbral", "startplugin", "--help"]))
             .expect_err("--help returns a clap Err carrying the help text");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
         let help = err.to_string();
         assert!(help.contains("--path"), "usage missing --path:\n{help}");
         assert!(help.contains("--local"), "usage missing --local:\n{help}");
-        // Deprecation is documented right in the about line clap renders.
-        assert!(
-            help.contains("Deprecated alias") || help.contains("startplugin"),
-            "startapp help should point at startplugin:\n{help}"
-        );
     }
 
     #[test]
