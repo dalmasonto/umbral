@@ -696,6 +696,46 @@ impl CacheBackend for RedisBackend {
             }
         }
     }
+
+    // TODO(gaps6 #11): the tag index (`utag:<tag>` sets) is not pruned on
+    // delete/clear/retag here — Redis has no cheap key->tags reverse index,
+    // unlike Memory/SqliteBackend::untag. A key name reused under a stale tag
+    // can be wrongly evicted by a later bust_tag. See planning/gaps6.md #11.
+    async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
+        use redis::AsyncCommands;
+        self.set(key, value, ttl).await; // reuse existing SET/EX
+        let mut conn = self.client.clone();
+        for t in tags {
+            let tag_key = self.k(&format!("utag:{t}"));
+            let member = self.k(key);
+            if let Err(e) = conn.sadd::<_, _, ()>(&tag_key, &member).await {
+                tracing::warn!(error = %e, key, tag = %t, "umbral-cache: Redis cache tag index SADD failed (swallowed)");
+            }
+        }
+    }
+
+    async fn bust_tag(&self, tag: &str) {
+        use redis::AsyncCommands;
+        let mut conn = self.client.clone();
+        let set_key = self.k(&format!("utag:{tag}"));
+        let members: Vec<String> = match conn.smembers(&set_key).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, tag, "umbral-cache: Redis cache bust_tag SMEMBERS failed (swallowed)");
+                Vec::new()
+            }
+        };
+        // Members are already namespaced (stored via self.k(key) in set_tagged
+        // above) — delete them directly, do NOT re-apply self.k here.
+        for m in &members {
+            if let Err(e) = conn.del::<_, ()>(m).await {
+                tracing::warn!(error = %e, tag, member = %m, "umbral-cache: Redis cache bust_tag DEL member failed (swallowed)");
+            }
+        }
+        if let Err(e) = conn.del::<_, ()>(&set_key).await {
+            tracing::warn!(error = %e, tag, "umbral-cache: Redis cache bust_tag DEL tag set failed (swallowed)");
+        }
+    }
 }
 
 // ── CacheHeaders config ──────────────────────────────────────────────────────
