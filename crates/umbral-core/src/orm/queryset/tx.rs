@@ -29,6 +29,25 @@ pub struct QuerySetTx<'tx, T> {
     pub(super) tx: &'tx mut crate::db::Transaction,
 }
 
+/// Pull the PK column out of each already-decoded full row (the `has_sub`
+/// RETURNING-* path in `delete()`), mirroring the non-tx `QuerySet::delete`.
+fn pk_ids_from_full_rows(
+    full: &[serde_json::Value],
+    pk: Option<&'static crate::orm::FieldSpec>,
+) -> Vec<serde_json::Value> {
+    match pk {
+        Some(field) => full
+            .iter()
+            .map(|r| {
+                r.get(field.name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 impl<'tx, T: Model> QuerySetTx<'tx, T> {
     // -----------------------------------------------------------------------
     // Read terminals
@@ -205,29 +224,114 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     /// — otherwise a `.delete()` that happened to run inside `on_tx()` would
     /// permanently destroy rows the caller expected to be recoverable.
     /// `.hard_delete()` opts back into a real DELETE.
+    ///
+    /// gaps6 #14/#15: mirrors the non-tx `QuerySet::delete()` signal
+    /// contract exactly (per-row `post_delete` — full redacted row when
+    /// subscribed, pk-only otherwise — plus one `bulk_post_delete`), except
+    /// every emit is BUFFERED on the transaction and only runs after the
+    /// caller's `db::transaction*` commits. A rollback drops the buffer
+    /// with the transaction, so nothing fires for a delete that never
+    /// actually happened.
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
         if self.qs.soft_delete_active && !self.qs.hard_delete {
             return self.soft_delete_in_tx().await;
         }
-        let stmt = self.qs.build_delete_for(self.tx.backend_name());
-        match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
+        let mut stmt = self.qs.build_delete_for(self.tx.backend_name());
+        let pk = pk_field::<T>();
+        let has_sub =
+            pk.is_some() && crate::signals::has_subscribers(&format!("post_delete:{}", T::TABLE));
+        if has_sub {
+            stmt.returning_all();
+        } else if let Some(field) = pk {
+            stmt.returning_col(sea_query::Alias::new(field.name));
         }
+        let (ids, full_rows): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
+            match self.tx.backend_name() {
+                "sqlite" => {
+                    let tx = self.tx.as_sqlite_mut().unwrap();
+                    let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                    let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&mut **tx)
+                        .await?;
+                    if has_sub {
+                        let full: Vec<serde_json::Value> = rows
+                            .iter()
+                            .map(super::backend_sqlite::row_to_json)
+                            .collect();
+                        let ids = pk_ids_from_full_rows(&full, pk);
+                        (ids, full)
+                    } else {
+                        let ids = match pk {
+                            Some(field) => rows
+                                .iter()
+                                .map(|r| super::backend_sqlite::pk_to_json(r, field.name, field.ty))
+                                .collect::<Result<_, _>>()?,
+                            None => Vec::new(),
+                        };
+                        (ids, Vec::new())
+                    }
+                }
+                _ => {
+                    let tx = self.tx.as_pg_mut().unwrap();
+                    let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                    let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&mut **tx)
+                        .await?;
+                    if has_sub {
+                        let full: Vec<serde_json::Value> =
+                            rows.iter().map(super::backend_pg::row_to_json).collect();
+                        let ids = pk_ids_from_full_rows(&full, pk);
+                        (ids, full)
+                    } else {
+                        let ids = match pk {
+                            Some(field) => rows
+                                .iter()
+                                .map(|r| super::backend_pg::pk_to_json(r, field.name, field.ty))
+                                .collect::<Result<_, _>>()?,
+                            None => Vec::new(),
+                        };
+                        (ids, Vec::new())
+                    }
+                }
+            };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            if pk.is_some() {
+                if has_sub {
+                    for row in full_rows {
+                        let mut row = row;
+                        if let serde_json::Value::Object(map) = &mut row {
+                            for f in T::SIGNAL_SKIP_FIELDS {
+                                map.remove(*f);
+                            }
+                        }
+                        let table = T::TABLE;
+                        self.tx.push_pending_signal(Box::new(move || {
+                            Box::pin(async move {
+                                crate::signals::emit_post_delete_by_table(table, row).await;
+                            })
+                        }));
+                    }
+                } else if let Some(pkf) = pk {
+                    for id in ids.iter() {
+                        let payload = serde_json::json!({ pkf.name: id });
+                        let table = T::TABLE;
+                        self.tx.push_pending_signal(Box::new(move || {
+                            Box::pin(async move {
+                                crate::signals::emit_post_delete_by_table(table, payload).await;
+                            })
+                        }));
+                    }
+                }
+            }
+            let table = T::TABLE;
+            self.tx.push_pending_signal(Box::new(move || {
+                Box::pin(async move {
+                    crate::signals::emit_bulk_post_delete_by_table(table, ids).await;
+                })
+            }));
+        }
+        Ok(count)
     }
 
     /// The soft-delete rewrite of [`Self::delete`], run inside the caller's
@@ -267,58 +371,118 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             stmt.and_where(p.cond_for(backend));
         }
         stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+        let pk = pk_field::<T>();
+        if let Some(pkf) = pk {
+            stmt.returning_col(Alias::new(pkf.name));
+        }
 
-        match backend {
+        // Mirrors `QuerySet::soft_delete_update`: only the bulk signal fires
+        // for a soft delete, buffered here to run after commit (gaps6 #15).
+        let ids: Vec<serde_json::Value> = match backend {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&mut **tx)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&mut **tx)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| super::backend_sqlite::pk_to_json(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&mut **tx)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&mut **tx)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| super::backend_pg::pk_to_json(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            let table = T::TABLE;
+            self.tx.push_pending_signal(Box::new(move || {
+                Box::pin(async move {
+                    crate::signals::emit_bulk_post_delete_by_table(table, ids).await;
+                })
+            }));
         }
+        Ok(count)
     }
 
     /// UPDATE inside the transaction. Takes the same `column → JSON value`
-    /// map as [`super::QuerySet::update_values`].
+    /// map as [`super::QuerySet::update_values`]. Buffers `bulk_post_save`
+    /// (mirroring the non-tx path's signal) to fire after commit (gaps6 #15).
     pub async fn update_values(
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
-        let stmt = self.qs.build_update_for(self.tx.backend_name(), &values)?;
-        match self.tx.backend_name() {
+        let mut stmt = self.qs.build_update_for(self.tx.backend_name(), &values)?;
+        let pk = pk_field::<T>();
+        if let Some(field) = pk {
+            stmt.returning_col(sea_query::Alias::new(field.name));
+        }
+        let ids: Vec<serde_json::Value> = match self.tx.backend_name() {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&mut **tx)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&mut **tx)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| super::backend_sqlite::pk_to_json(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&mut **tx)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&mut **tx)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| super::backend_pg::pk_to_json(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            let table = T::TABLE;
+            self.tx.push_pending_signal(Box::new(move || {
+                Box::pin(async move {
+                    crate::signals::emit_bulk_post_save_by_table(table, ids, false).await;
+                })
+            }));
         }
+        Ok(count)
     }
 
     /// INSERT one row and return the populated row, inside the transaction.
     ///
     /// This is the `Manager::create_in_tx` equivalent called through the
     /// QuerySet API: `Post::objects().on_tx(tx).create(instance).await?`.
+    ///
+    /// gaps6 #15: buffers the same `post_save` (created=true) the non-tx
+    /// `Manager::create` emits, redacted through `serialize_for_signal` —
+    /// same choke point, same `SIGNAL_SKIP_FIELDS` contract — but the emit
+    /// itself only runs after the caller's transaction commits.
     pub async fn create(self, instance: impl Into<T>) -> Result<T, crate::orm::write::WriteError>
     where
         T: serde::Serialize
@@ -331,7 +495,7 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
         let instance: T = instance.into();
         let map = serialize_to_map(&instance)?;
         let stmt = build_insert_one_for::<T>(self.tx.backend_name(), &map)?;
-        match self.tx.backend_name() {
+        let mut row: T = match self.tx.backend_name() {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
@@ -341,29 +505,35 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
                 // a transaction surfaces as an opaque `Sqlx(_)`, so callers that
                 // branch on `WriteError::UniqueViolation` (e.g. the OAuth
                 // username-retry loop) can't tell a collision from a real error.
-                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
                     .await
                     .map_err(|e| {
                         crate::orm::validation::classify_sql_error(&e, &map)
                             .unwrap_or(crate::orm::write::WriteError::Sqlx(e))
-                    })?;
-                row.set_m2m_parent_ids();
-                Ok(row)
+                    })?
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
                     .await
                     .map_err(|e| {
                         crate::orm::validation::classify_sql_error(&e, &map)
                             .unwrap_or(crate::orm::write::WriteError::Sqlx(e))
-                    })?;
-                row.set_m2m_parent_ids();
-                Ok(row)
+                    })?
             }
+        };
+        row.set_m2m_parent_ids();
+        if let Some(payload) = crate::signals::serialize_for_signal(&row, "post_save") {
+            let table = T::TABLE;
+            self.tx.push_pending_signal(Box::new(move || {
+                Box::pin(async move {
+                    crate::signals::emit_post_save_by_table(table, payload, true).await;
+                })
+            }));
         }
+        Ok(row)
     }
 }

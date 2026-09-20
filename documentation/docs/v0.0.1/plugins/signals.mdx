@@ -190,6 +190,21 @@ For reference - the `on_model` API deserialises these for you, so you only need 
 | `pre_save`, `post_save` | `{ "instance": <M as JSON>, "created": bool }` |
 | `pre_delete`, `post_delete` | `{ "instance": <M as JSON> }` |
 
+## Transactional writes (`on_tx`)
+
+A write made through `Model::objects().on_tx(tx)` (inside `db::transaction(...)`, `db::transaction_on(...)`, `db::transaction_sqlite(...)`, or `db::transaction_pg(...)`) fires its `post_save` / `post_delete` / `bulk_post_save` / `bulk_post_delete` signals **after the transaction commits**, not while it's open. This matters because a naive "emit inline, mid-transaction" implementation is a phantom-signal bug: the signal (and any side effect a handler triggers) would fire even if the transaction later rolls back, telling subscribers about a write that never actually happened. Instead, each `on_tx()` write buffers its signal on the transaction, and the runner flushes that buffer only once `commit()` succeeds - a rollback simply drops the buffer, so a rolled-back write fires nothing.
+
+```rust
+db::transaction(|tx| Box::pin(async move {
+    Order::objects().on_tx(tx).create(new_order).await?;
+    // post_save:order fires only after this closure returns Ok and the
+    // transaction commits - never if it returns Err and rolls back.
+    Ok::<_, MyError>(())
+})).await?;
+```
+
+**Boundary:** this only applies to a transaction opened through one of the `db::transaction*` helpers, because those are the ones that own the commit call. A transaction you `begin()` and commit yourself (`let mut tx = db::begin().await?; ...; tx.commit().await?;`) is outside umbral's lifecycle - it has no hook to flush from, so any signals buffered on it are silently dropped when the `Transaction` value is dropped. Use `db::transaction(...)` (or its `_on` / `_sqlite` / `_pg` siblings) whenever you need signals to fire.
+
 ## What's not shipped at v0.0.1
 
 - **Signal disconnect / per-call disable.** Testing a handler today requires `umbral_signals::clear_for_tests()` to wipe all handlers and re-register. Targeted disconnect lands when tests need finer control.

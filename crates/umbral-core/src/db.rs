@@ -817,6 +817,7 @@ pub async fn close() {
 /// through these accessors.
 pub struct Transaction {
     inner: TransactionInner,
+    pending_signals: Vec<PendingSignal>,
 }
 
 enum TransactionInner {
@@ -824,7 +825,32 @@ enum TransactionInner {
     Postgres(sqlx::Transaction<'static, sqlx::Postgres>),
 }
 
+/// A buffered signal emit, queued by an `on_tx()` write terminal and run
+/// only after the owning transaction commits (gaps6 #15). Boxed as a
+/// closure — rather than a `(name, payload)` pair — so the buffered work
+/// calls the SAME `crate::signals::emit_*` helpers the non-tx path uses:
+/// no second, drift-prone reimplementation of payload shaping or
+/// `SIGNAL_SKIP_FIELDS` redaction.
+type PendingSignal =
+    Box<dyn FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
 impl Transaction {
+    /// Queue a signal to run after this transaction commits. Called by
+    /// `on_tx()` write terminals (`orm::queryset::tx`); never run if the
+    /// transaction rolls back instead — see [`Self::take_pending_signals`].
+    pub(crate) fn push_pending_signal(&mut self, sig: PendingSignal) {
+        self.pending_signals.push(sig);
+    }
+
+    /// Drain the buffered signals. The `transaction*` runners call this
+    /// BEFORE `commit()` (buffering doesn't survive the consuming call) and
+    /// only await the drained closures AFTER `commit()` succeeds. On the
+    /// rollback path the runners never call this — the buffer, and the
+    /// `Transaction` that owns it, are simply dropped, so nothing fires.
+    pub(crate) fn take_pending_signals(&mut self) -> Vec<PendingSignal> {
+        std::mem::take(&mut self.pending_signals)
+    }
+
     /// Return a mutable reference to the inner SQLite transaction, or `None`
     /// when this is a Postgres transaction.
     pub fn as_sqlite_mut(&mut self) -> Option<&mut sqlx::Transaction<'static, sqlx::Sqlite>> {
@@ -898,12 +924,14 @@ pub async fn begin() -> Result<Transaction, sqlx::Error> {
             let tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             Ok(Transaction {
                 inner: TransactionInner::Sqlite(tx),
+                pending_signals: Vec::new(),
             })
         }
         DbPool::Postgres(pool) => {
             let tx = pool.begin().await?;
             Ok(Transaction {
                 inner: TransactionInner::Postgres(tx),
+                pending_signals: Vec::new(),
             })
         }
     }
@@ -930,9 +958,11 @@ pub async fn begin_for(alias: &str) -> Result<Transaction, sqlx::Error> {
         DbPool::Sqlite(pool) => Ok(Transaction {
             // BEGIN IMMEDIATE for SQLite — see `begin()`.
             inner: TransactionInner::Sqlite(pool.begin_with("BEGIN IMMEDIATE").await?),
+            pending_signals: Vec::new(),
         }),
         DbPool::Postgres(pool) => Ok(Transaction {
             inner: TransactionInner::Postgres(pool.begin().await?),
+            pending_signals: Vec::new(),
         }),
     }
 }
@@ -943,6 +973,7 @@ pub async fn begin_sqlite(pool: &sqlx::SqlitePool) -> Result<Transaction, sqlx::
     let tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     Ok(Transaction {
         inner: TransactionInner::Sqlite(tx),
+        pending_signals: Vec::new(),
     })
 }
 
@@ -951,6 +982,7 @@ pub async fn begin_pg(pool: &sqlx::PgPool) -> Result<Transaction, sqlx::Error> {
     let tx = pool.begin().await?;
     Ok(Transaction {
         inner: TransactionInner::Postgres(tx),
+        pending_signals: Vec::new(),
     })
 }
 
@@ -1015,11 +1047,17 @@ where
     let mut tx = begin().await.map_err(E::from)?;
     match f(&mut tx).await {
         Ok(val) => {
+            let pending = tx.take_pending_signals();
             tx.commit().await.map_err(E::from)?;
+            for sig in pending {
+                sig().await;
+            }
             Ok(val)
         }
         Err(e) => {
             // Best-effort rollback — if it fails we surface the original error.
+            // The buffered signals are never drained here, so they're simply
+            // dropped with `tx` — a rolled-back write fires nothing (gaps6 #15).
             let _ = tx.rollback().await;
             Err(e)
         }
@@ -1049,11 +1087,16 @@ where
     let mut tx = begin_for(alias).await.map_err(E::from)?;
     match f(&mut tx).await {
         Ok(val) => {
+            let pending = tx.take_pending_signals();
             tx.commit().await.map_err(E::from)?;
+            for sig in pending {
+                sig().await;
+            }
             Ok(val)
         }
         Err(e) => {
-            // Best-effort rollback — if it fails we surface the original error.
+            // Best-effort rollback — the buffered signals go unflushed and are
+            // dropped with `tx` (gaps6 #15).
             let _ = tx.rollback().await;
             Err(e)
         }
@@ -1075,7 +1118,11 @@ where
     let mut tx = begin_sqlite(pool).await.map_err(E::from)?;
     match f(&mut tx).await {
         Ok(val) => {
+            let pending = tx.take_pending_signals();
             tx.commit().await.map_err(E::from)?;
+            for sig in pending {
+                sig().await;
+            }
             Ok(val)
         }
         Err(e) => {
@@ -1099,7 +1146,11 @@ where
     let mut tx = begin_pg(pool).await.map_err(E::from)?;
     match f(&mut tx).await {
         Ok(val) => {
+            let pending = tx.take_pending_signals();
             tx.commit().await.map_err(E::from)?;
+            for sig in pending {
+                sig().await;
+            }
             Ok(val)
         }
         Err(e) => {

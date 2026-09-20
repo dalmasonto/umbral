@@ -359,7 +359,12 @@ pub async fn emit(name: &str, payload: Value) -> usize {
 /// model marked `#[umbral(signal_skip)]` are stripped here, at the single choke
 /// point every typed emitter routes through. Returns `None` (after logging) on
 /// a serialization failure so the caller drops the signal.
-fn serialize_for_signal<M>(instance: &M, context: &'static str) -> Option<Value>
+///
+/// `pub(crate)` — the `on_tx()` write terminals (`orm::queryset::tx`) buffer
+/// their post-commit signal payloads through this same choke point so a
+/// buffered `create()`/`delete()` gets the identical redaction the non-tx
+/// path gets, rather than re-deriving it.
+pub(crate) fn serialize_for_signal<M>(instance: &M, context: &'static str) -> Option<Value>
 where
     M: crate::orm::Model + serde::Serialize,
 {
