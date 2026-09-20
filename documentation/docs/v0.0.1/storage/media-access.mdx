@@ -66,6 +66,10 @@ Both are sugar over `media_access_cached` and get the same cache-first behavior.
 
 `media_invalidate_on::<M>(...)` wires `post_save`/`post_delete` signals per row. A **bulk** ORM write - `Model::objects().filter(...).delete()`, or the bulk-update equivalent - fires the bulk signal instead, which is not wired to invalidation, so a cached decision can stay stale for up to the TTL (default 60s) after a bulk change. If you need sub-TTL revocation freshness, revoke through per-row saves/deletes, or set a shorter `.ttl(...)`.
 
+<Callout type="warning">
+On **delete**, the `post_delete` payload carries only the deleted row's **primary key**, not its other columns. So a `media_invalidate_on` map fn that derives its tags from a non-PK field (e.g. `|m| vec![format!("chan:{}", m.channel)]`) can't compute those tags on a delete and won't bust — the cached decision then rides its TTL. Key delete-invalidation tags on the **PK** (`|m| vec![format!("member:{}", m.id)]`), or bust from a `post_save` on a row that still carries the full data. Save/update paths carry the full row and are unaffected.
+</Callout>
+
 ## See also
 
 Full design in [`docs/superpowers/specs/2026-09-20-media-access-redesign-design.md`](https://github.com/).
