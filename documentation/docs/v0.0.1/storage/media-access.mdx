@@ -41,6 +41,14 @@ No ambient cache installed (no `CachePlugin`, or installed too late) - every req
 
 The closure receives a `MediaCaller` resolved from the app's authentication backend: `user_id()`, `is_authenticated()`, `is_superuser`, `is_staff`, and `has_role(&str)` against `roles`. `roles` follows the `extras["roles"]` convention - a JSON array of strings on `Identity::extras` that a custom `Authentication` implementation populates for role-based gates.
 
+<Callout type="info">
+The cached path still resolves the caller's `Identity` (session/auth lookup) on every request - only the in-closure membership/DB work is skipped on a cache hit.
+</Callout>
+
+<Callout type="warning">
+**Cache keys are identity-keyed, not header-keyed.** The wrapper derives `mediaacc:{key}:{caller_id}` from the *resolved* `Identity` (`user_id()`, or `"anon"` for an unauthenticated caller) - never from raw request headers. If you need to gate and cache a non-session identity, such as an agent API key, don't reach for a raw-headers escape hatch: resolve that key to its own distinct `Identity` in a custom `Authentication` backend (see the auth extension seam, gaps4 #42), for example `user_id = "agent:<id>"`. That identity then flows through `MediaCaller` like any other and gets its own safe cache bucket - one agent key can never collide with, or be served, another caller's cached decision.
+</Callout>
+
 ## Presets
 
 For the common cases, skip the closure entirely:
@@ -49,6 +57,14 @@ For the common cases, skip the closure entirely:
 - `media_access_roles(["editor", "reviewer"])` - allow a superuser or a caller whose `roles` contains any of the given roles.
 
 Both are sugar over `media_access_cached` and get the same cache-first behavior.
+
+<Callout type="warning">
+`media_access_roles` reads roles from `Identity::extras["roles"]`. The built-in `SessionAuthentication` does **not** populate `extras["roles"]`, so with the default auth backend this preset denies everyone except superusers. To use it, populate `extras["roles"]` (a JSON string array) from a custom `Authentication` implementation.
+</Callout>
+
+## Invalidation and staleness
+
+`media_invalidate_on::<M>(...)` wires `post_save`/`post_delete` signals per row. A **bulk** ORM write - `Model::objects().filter(...).delete()`, or the bulk-update equivalent - fires the bulk signal instead, which is not wired to invalidation, so a cached decision can stay stale for up to the TTL (default 60s) after a bulk change. If you need sub-TTL revocation freshness, revoke through per-row saves/deletes, or set a shorter `.ttl(...)`.
 
 ## See also
 

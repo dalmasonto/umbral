@@ -20,7 +20,7 @@ The three levers umbral can actually pull: **(a)** cache the decision by a repro
 
 1. **Scope:** full cohesive redesign — caching + caller ergonomics + role presets together.
 2. **Invalidation:** signal-driven auto-invalidation on developer-declared source tables, with a TTL backstop.
-3. **Caller:** a rich umbral identity (user id, `is_superuser`, roles) plus the raw `HeaderMap` as an escape hatch for app-specific identities (agent keys). Not a new pluggable resolver chain (deferred).
+3. **Caller:** a rich umbral identity (user id, `is_superuser`, roles). Not a new pluggable resolver chain (deferred). *Revised at implementation:* the raw `HeaderMap` escape hatch originally planned here was dropped before shipping — see the shipped-surface note in §1 — because it would have let a closure branch on header state the cache key doesn't capture, reopening the caller-in-key footgun (§5) the rest of this design closes. App-specific identities (agent keys) go through a custom `Authentication` backend instead.
 4. **Mechanism:** Approach A — tag-based cached decisions. A decision is cached under a framework-owned per-`(file, caller)` key (read before the DB work) and carries a set of dependency tags; a source-row change busts every key indexed under the affected tag. Chosen over hierarchical-prefix keys (invalidation shape chained to the key; multi-dependency doesn't fit one path) and full declarative inference (over-engineered for v1).
 
 ## Design
@@ -43,12 +43,12 @@ StoragePlugin::new()
 
 Types:
 
-- `MediaCaller<'a>`:
-  - `headers: &'a HeaderMap` — escape hatch (agent keys, custom auth).
+- `MediaCaller` (shipped as identity-only — see the note below):
   - `user_id(&self) -> Option<&str>` — the resolved umbral-auth pk as a string (`None` = anonymous).
   - `is_superuser: bool`.
   - `is_authenticated(&self) -> bool`.
   - `roles: Vec<String>` and `has_role(&self, &str) -> bool` — the caller's groups/roles, sourced from the same umbral-auth groups the permission layer reads. If the resolved identity object does not already carry them, the resolver loads them once per request (implementation verifies the exact field/query against umbral-auth); this load is itself a candidate for the same cache. Powers the role presets.
+  - **Shipped surface note:** the raw `headers: &'a HeaderMap` field described in an earlier draft of this spec was dropped. `MediaCaller` is identity-only. This is a deliberate safety choice, not an oversight: the cache key is derived from the resolved `Identity` (`user_id()`/`anon`), and if the closure could also see raw headers, a developer could branch cacheable behavior on header state the key doesn't capture — caching one caller's allow and serving it to a different caller that presents different headers but resolves to the same (or no) identity. A non-session identity, such as an agent API key, is handled by resolving it to its own distinct `Identity` in a custom `Authentication` backend (`user_id = "agent:<id>"`), not by a raw-headers hatch in `MediaCaller`.
 - `Decision`:
   - Constructors `allow()`, `deny()`, `of(bool)`.
   - `depends_on(tags: impl IntoIterator<Item = String>)` — invalidation tags, discovered during the (miss-only) DB work and indexed at store time.
@@ -138,6 +138,6 @@ The simple case must need almost nothing:
 
 ### 9. Out of scope / deferred
 
-- **Pluggable caller-resolver chain** (unify session/bearer/agent behind one `Caller`) — the raw-headers escape hatch covers the dual-identity case for now.
+- **Pluggable caller-resolver chain** (unify session/bearer/agent behind one `Caller`) — not built. The shipped `MediaCaller` stays identity-only (see the shipped-surface note in §1); the dual-identity case (a human session vs. an agent key) is handled today by resolving the agent key to its own `Identity` in a custom `Authentication` backend, not by a raw-headers hatch on `MediaCaller`.
 - **Fine-grained bulk-signal invalidation** — bulk writes fall back to TTL in v1.
 - **Unifying the invalidation primitive with gaps6 #7 (materialized fields)** — this design deliberately builds `bust_tag` generically in `umbral-cache` so #7 can reuse it, but #7's declaration surface and recompute strategy remain its own effort.

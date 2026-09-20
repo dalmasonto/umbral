@@ -173,7 +173,11 @@ async fn superuser_allow_and_anonymous_deny_through_the_real_route() {
         .oneshot(get_as("/media/admin-only.txt", None))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Decision::deny() 403s");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "Decision::deny() 403s"
+    );
     let body = body_of(resp).await;
     assert!(!body.windows(11).any(|w| w == b"ADMIN-BYTES"));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
