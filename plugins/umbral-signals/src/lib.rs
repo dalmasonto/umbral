@@ -29,21 +29,24 @@
 //! | `post_save`   | after INSERT or UPDATE    | `Manager::save` |
 //! | `pre_update`  | before UPDATE only        | `Manager::save` |
 //! | `post_update` | after UPDATE only         | `Manager::save` |
-//! | `pre_delete`  | before per-row DELETE     | `Manager::delete_instance` |
-//! | `post_delete` | after per-row DELETE      | `Manager::delete_instance` |
+//! | `pre_delete`  | before per-row DELETE     | `Manager::delete_instance` only |
+//! | `post_delete` | after per-row DELETE      | `Manager::delete_instance`, `QuerySet::delete()`, `DynQuerySet::delete()` |
 //!
 //! `pre_update` / `post_update` carry BOTH the old (`previous`) and new
 //! (`instance`) row, and fire only on UPDATE. The ORM reads the old-row
 //! snapshot only when an `*_update` subscriber exists, so they cost
 //! nothing when nobody listens.
 //!
-//! **Bulk methods fire BULK signals, not per-row signals.**
-//! `Manager::bulk_create`, `QuerySet::update_values`, and
-//! `QuerySet::delete` emit `bulk_post_save:<table>` / `bulk_post_delete:<table>`
-//! (payload carries the affected `ids`), NOT the per-row `post_save`/
-//! `post_delete`. M2M relation changes emit `m2m_changed:<junction_table>`.
-//! Subscribe to those names if you need bulk/M2M visibility. See the doc
-//! callout in `documentation/docs/v0.0.1/plugins/signals.mdx`.
+//! **Bulk methods ALSO fire a bulk signal alongside the per-row ones.**
+//! `Manager::bulk_create` and `QuerySet::update_values` fire ONLY
+//! `bulk_post_save:<table>` (payload carries the affected `ids`), never
+//! per-row `post_save`. `QuerySet::delete()` / `DynQuerySet::delete()`
+//! fire BOTH: `bulk_post_delete:<table>` (`ids`) AND a per-row
+//! `post_delete:<table>` for each deleted row — PK-only unless a
+//! `post_delete:<table>` subscriber exists, in which case the payload
+//! carries the full row (gaps6 #14). M2M relation changes emit
+//! `m2m_changed:<junction_table>`. See the doc callout in
+//! `documentation/docs/v0.0.1/plugins/signals.mdx`.
 //!
 //! ## Signal name format
 //!
@@ -367,11 +370,13 @@ where
 
     /// Register a handler called **after** a per-row DELETE for this model.
     ///
-    /// `handler(instance)` receives a reference to the instance that
-    /// was just deleted (as it was at call time — not a DB read-back).
+    /// `handler(instance)` receives a reference to the deleted row.
     ///
-    /// **Note:** only fires for `Manager::delete_instance`. Bulk
-    /// `QuerySet::delete()` calls do NOT fire this signal.
+    /// Fires for BOTH `Manager::delete_instance` (the instance supplied by
+    /// the caller) and `QuerySet::delete()` / `DynQuerySet::delete()`
+    /// (each row is fired per-row, deserialized from the DB's `RETURNING`
+    /// data — gaps6 #14). All three carry the FULL row, so `M` must
+    /// deserialize from every column, not just the primary key.
     ///
     /// Signal name: `post_delete:<M::TABLE>`.
     pub fn post_delete<F, Fut>(&self, handler: F)

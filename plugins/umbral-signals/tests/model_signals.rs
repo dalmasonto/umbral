@@ -344,8 +344,18 @@ async fn bulk_update_values_does_not_fire_any_signal() {
     );
 }
 
+/// gaps6 #14: `QuerySet::delete()` never fires `pre_delete` (no single
+/// "before" moment for a multi-row statement — unchanged), but DOES fire a
+/// per-row `post_delete` for each deleted row, and — with a `post_delete`
+/// subscriber present, as `on_model::<SigPost>().post_delete(...)` here
+/// installs — the payload carries the FULL row, so the typed handler's
+/// `decode_instance::<SigPost>` (which needs `title` too, not just `id`)
+/// actually succeeds. Before gaps6 #14 the per-row payload was PK-only, so
+/// `decode_instance` silently failed to deserialize and the handler never
+/// ran — this test previously (and wrongly) read that decode failure as
+/// "bulk delete fires no signals."
 #[tokio::test]
-async fn bulk_queryset_delete_does_not_fire_any_signal() {
+async fn bulk_queryset_delete_fires_post_delete_per_row_with_full_row() {
     let _guard = test_lock().lock().await;
     reset().await;
 
@@ -365,9 +375,9 @@ async fn bulk_queryset_delete_does_not_fire_any_signal() {
         .expect("insert y");
     clear_for_tests();
 
-    let signal_count = Arc::new(AtomicUsize::new(0));
+    let pre_count = Arc::new(AtomicUsize::new(0));
     {
-        let sc = signal_count.clone();
+        let sc = pre_count.clone();
         on_model::<SigPost>().pre_delete(move |_| {
             let sc = sc.clone();
             async move {
@@ -375,18 +385,20 @@ async fn bulk_queryset_delete_does_not_fire_any_signal() {
             }
         });
     }
+    let post_titles = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     {
-        let sc = signal_count.clone();
-        on_model::<SigPost>().post_delete(move |_| {
-            let sc = sc.clone();
+        let sink = post_titles.clone();
+        on_model::<SigPost>().post_delete(move |post| {
+            let sink = sink.clone();
+            let title = post.title.clone();
             async move {
-                sc.fetch_add(1, Ordering::SeqCst);
+                sink.lock().unwrap().push(title);
             }
         });
     }
 
-    // Bulk DELETE — must NOT fire signals.
-    // `delete()` lives on QuerySet. Use `.on(pool)` for an unfiltered delete.
+    // Bulk DELETE. `delete()` lives on QuerySet. Use `.on(pool)` for an
+    // unfiltered delete.
     let pool = umbral::db::pool();
     SigPost::objects()
         .on(&pool)
@@ -395,9 +407,17 @@ async fn bulk_queryset_delete_does_not_fire_any_signal() {
         .expect("bulk delete");
 
     assert_eq!(
-        signal_count.load(Ordering::SeqCst),
+        pre_count.load(Ordering::SeqCst),
         0,
-        "bulk QuerySet::delete must not fire delete signals"
+        "QuerySet::delete still never fires pre_delete"
+    );
+    let mut titles = post_titles.lock().unwrap().clone();
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["x".to_string(), "y".to_string()],
+        "post_delete fires once per row, and the handler's decoded SigPost \
+         carries `title` — proof the payload is the FULL row, not PK-only"
     );
 }
 
