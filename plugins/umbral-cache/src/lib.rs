@@ -492,6 +492,17 @@ impl CacheBackend for SqliteBackend {
         {
             tracing::warn!(error = %e, key, "umbral-cache: SQLite cache delete failed (swallowed)");
         }
+        // Prune the tag index too, mirroring MemoryBackend::untag. Otherwise
+        // a stale (tag, key) row can survive a delete and, if the key name
+        // is later reused untagged (or under a different tag), a bust_tag on
+        // the old tag would wrongly evict the reused key's live value.
+        if let Err(e) = sqlx::query("DELETE FROM umbral_cache_tag WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(error = %e, key, "umbral-cache: SQLite cache tag index delete failed (swallowed)");
+        }
     }
 
     async fn clear(&self) {
@@ -501,32 +512,58 @@ impl CacheBackend for SqliteBackend {
         {
             tracing::warn!(error = %e, "umbral-cache: SQLite cache clear failed (swallowed)");
         }
+        if let Err(e) = sqlx::query("DELETE FROM umbral_cache_tag")
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(error = %e, "umbral-cache: SQLite cache tag index clear failed (swallowed)");
+        }
     }
 
     async fn set_tagged(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>, tags: &[String]) {
         self.set(key, value, ttl).await;
+        // Prune the key's prior tag rows before inserting the current set,
+        // mirroring MemoryBackend::untag — otherwise a re-tag leaves the key
+        // indexed under its old tags too, and a bust_tag on a now-stale tag
+        // would wrongly evict a value that was re-tagged away from it.
+        if let Err(e) = sqlx::query("DELETE FROM umbral_cache_tag WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(error = %e, key, "umbral-cache: SQLite cache tag index prune failed (swallowed)");
+        }
         for t in tags {
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO umbral_cache_tag (tag, key) VALUES (?, ?) ON CONFLICT DO NOTHING",
             )
             .bind(t)
             .bind(key)
             .execute(&self.pool)
-            .await;
+            .await
+            {
+                tracing::warn!(error = %e, key, tag = %t, "umbral-cache: SQLite cache tag index insert failed (swallowed)");
+            }
         }
     }
 
     async fn bust_tag(&self, tag: &str) {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "DELETE FROM umbral_cache WHERE key IN (SELECT key FROM umbral_cache_tag WHERE tag = ?)",
         )
         .bind(tag)
         .execute(&self.pool)
-        .await;
-        let _ = sqlx::query("DELETE FROM umbral_cache_tag WHERE tag = ?")
+        .await
+        {
+            tracing::warn!(error = %e, tag, "umbral-cache: SQLite cache bust_tag value delete failed (swallowed)");
+        }
+        if let Err(e) = sqlx::query("DELETE FROM umbral_cache_tag WHERE tag = ?")
             .bind(tag)
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(error = %e, tag, "umbral-cache: SQLite cache bust_tag index delete failed (swallowed)");
+        }
     }
 }
 
