@@ -36,6 +36,7 @@ pub mod forms_runtime;
 pub mod gis;
 pub mod m2m;
 pub mod masked;
+pub mod materialized;
 pub mod model;
 pub mod multichoice;
 pub mod nested;
@@ -137,6 +138,7 @@ pub use file_field::{FileField, ImageField};
 pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic, set_junction_dynamic_in_tx};
 pub use masked::{MaskError, MaskKeyring, Masked, mask_keyring_configured, set_mask_keyring};
+pub use materialized::{Materialized, MaterializedSpec};
 pub use model::{
     ArrayElement, DecimalSpec, FieldSpec, FkAction, GeometryKind, GeometrySpec, HydrateRelated,
     M2MRelationSpec, Model, ModelBase, OneToOneRelationSpec, PrimaryKey, ReverseFkRelationSpec,
