@@ -798,6 +798,24 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
+    /// Filter to the single row whose primary key equals `pk_value`, coercing
+    /// the JSON scalar to the pk column's SQL type. Used by the materialized-
+    /// field write-back (gaps6 #7), which knows the affected pk only as JSON.
+    /// If the model has no single-column pk, or the value can't be coerced, the
+    /// filter matches nothing — the write-back safely no-ops rather than
+    /// touching every row.
+    pub fn filter_pk_eq(self, pk_value: &serde_json::Value) -> Self {
+        let Some(pk) = self.meta.pk_column() else {
+            return self.filter_condition(Condition::all().add(Expr::val(1).eq(0)));
+        };
+        match json_to_sea_value(pk.ty, pk_value, false, &pk.name, None) {
+            Ok(v) => {
+                self.filter_condition(Condition::all().add(Expr::col(Alias::new(&pk.name)).eq(v)))
+            }
+            Err(_) => self.filter_condition(Condition::all().add(Expr::val(1).eq(0))),
+        }
+    }
+
     /// Filter the parent set down to rows that have an M2M link to at
     /// least one of `child_ids` through the named M2M field. Emits:
     ///
