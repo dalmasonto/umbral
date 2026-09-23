@@ -462,14 +462,20 @@ impl StoragePlugin {
                         if let Some(hit) = cache.get_bool(&cache_key).await {
                             return hit; // cache hit → no closure work
                         }
+                        // gaps6 #12: capture the bust epoch BEFORE the closure
+                        // runs its DB work, so a revocation that lands while the
+                        // decision is being computed is detected at store time
+                        // and the stale allow is never cached.
+                        let epoch = cache.bust_epoch().await;
                         let decision = f(caller, &key).await; // miss → run the closure
                         if decision.is_cacheable() {
                             cache
-                                .set_tagged_bool(
+                                .set_tagged_bool_guarded(
                                     &cache_key,
                                     decision.is_allow(),
                                     Some(decision.ttl_or_default()),
                                     decision.tags(),
+                                    epoch,
                                 )
                                 .await;
                         }

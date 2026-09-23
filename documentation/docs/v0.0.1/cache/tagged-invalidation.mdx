@@ -36,6 +36,12 @@ cache.bust_tag("channel:7").await;
 
 Passing `store: None` from the closure opts that particular value out of caching entirely (useful for a volatile decision you never want to persist).
 
+## The bust-during-compute race
+
+A cache miss runs your closure (the DB work) and then stores the result — and a `bust_tag` can land in that gap, between the miss and the store. A naive store would write the just-computed value *after* the bust that was meant to invalidate it, leaving a stale value alive until its TTL.
+
+The cache closes this with a **guarded store**. Capture the cache's monotonic bust epoch *before* computing, then store through `set_tagged_bool_guarded(key, value, ttl, tags, since_epoch)`: the store is skipped (returning `false`) if any of the value's tags was busted after that epoch. This is what powers media-access caching (`media_access_cached`) — a permission revoked while a decision was being computed never gets cached. The guard is per-tag, so a bust of an unrelated tag doesn't force a needless recompute, and the failure mode is always *recompute*, never *serve-stale*.
+
 ## See also
 
 Full design in [`docs/superpowers/specs/2026-09-20-media-access-redesign-design.md`](https://github.com/).

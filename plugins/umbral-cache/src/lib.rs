@@ -163,29 +163,63 @@ pub struct StoreSpec {
 
 // ── Cache handle ─────────────────────────────────────────────────────────────
 
+/// Process-wide bust bookkeeping shared by every clone of a [`Cache`] handle,
+/// used to detect a `bust_tag` that races a miss-compute (gaps6 #12). A single
+/// monotonic `counter` advances on each bust; `last` remembers, per tag, the
+/// epoch at which it was most recently busted. The map is the source of truth
+/// for the staleness decision (read under its own lock); the counter only hands
+/// out the "epoch" a caller captures before computing a cacheable decision.
+#[derive(Default)]
+struct BustLog {
+    counter: std::sync::atomic::AtomicU64,
+    last: Mutex<HashMap<String, u64>>,
+}
+
+impl BustLog {
+    fn current(&self) -> u64 {
+        self.counter.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Advance the epoch and stamp `tag` with it. Called BEFORE the backend
+    /// evicts the tag's keys, so a concurrent guarded store re-checking the log
+    /// can never observe the eviction without also observing the epoch bump.
+    async fn record(&self, tag: &str) {
+        let e = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        self.last.lock().await.insert(tag.to_string(), e);
+    }
+
+    /// True if any of `tags` was busted at an epoch after `since`.
+    async fn busted_since(&self, tags: &[String], since: u64) -> bool {
+        let last = self.last.lock().await;
+        tags.iter().any(|t| last.get(t).is_some_and(|&e| e > since))
+    }
+}
+
 /// Public handle. Owns its backend behind an Arc so views can clone
 /// it freely (typically stashed in the request context or accessed via
 /// the ambient [`AMBIENT_CACHE`]).
 #[derive(Clone)]
 pub struct Cache {
     backend: Arc<dyn CacheBackend>,
+    /// Shared across every clone so a bust on one handle is visible to a
+    /// guarded store on another (they're all the same process-wide cache).
+    bust_log: Arc<BustLog>,
 }
 
 impl Cache {
     /// Build a cache backed by a freshly-allocated [`MemoryBackend`].
     pub fn memory() -> Self {
-        Self {
-            backend: Arc::new(MemoryBackend::default()),
-        }
+        Self::with_backend(Arc::new(MemoryBackend::default()))
     }
 
     /// Build a cache backed by a SQLite table. The constructor
     /// creates the table on first call; it's idempotent.
     pub async fn sqlite(pool: SqlitePool) -> Result<Self, CacheError> {
         let backend = SqliteBackend::new(pool).await?;
-        Ok(Self {
-            backend: Arc::new(backend),
-        })
+        Ok(Self::with_backend(Arc::new(backend)))
     }
 
     /// Build a cache backed by Redis.
@@ -199,14 +233,15 @@ impl Cache {
     #[cfg(feature = "redis")]
     pub async fn redis(url: &str) -> Result<Self, CacheError> {
         let backend = RedisBackend::connect(url).await?;
-        Ok(Self {
-            backend: Arc::new(backend),
-        })
+        Ok(Self::with_backend(Arc::new(backend)))
     }
 
     /// Wrap an arbitrary backend.
     pub fn with_backend(backend: Arc<dyn CacheBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            bust_log: Arc::new(BustLog::default()),
+        }
     }
 
     /// Look up a key, deserialise to T. Returns None on miss, on
@@ -239,6 +274,9 @@ impl Cache {
     }
 
     pub async fn bust_tag(&self, tag: &str) {
+        // gaps6 #12: stamp the bust epoch BEFORE evicting, so a guarded store
+        // racing this bust observes the epoch bump.
+        self.bust_log.record(tag).await;
         self.backend.bust_tag(tag).await;
     }
 
@@ -294,7 +332,46 @@ impl umbral::cache::TaggedCache for Cache {
     }
 
     async fn bust_tag(&self, tag: &str) {
+        // gaps6 #12: record the bust epoch before evicting (see the inherent
+        // `Cache::bust_tag`).
+        self.bust_log.record(tag).await;
         self.backend.bust_tag(tag).await;
+    }
+
+    async fn bust_epoch(&self) -> u64 {
+        self.bust_log.current()
+    }
+
+    /// Guarded store closing the miss-compute/bust write-skew race (gaps6 #12).
+    ///
+    /// A pre-check skips the store outright when a relevant bust already
+    /// landed. The store then runs, and a POST-check compensates for a bust
+    /// that raced the store itself: because `bust_tag` stamps the epoch before
+    /// it evicts, any bust whose eviction could have missed our not-yet-written
+    /// value is guaranteed to be visible to this post-check, which then deletes
+    /// the value we just wrote. Either the racing bust's own eviction removed
+    /// it, or this does — so a decision invalidated between epoch capture and
+    /// store never survives to its TTL.
+    async fn set_tagged_bool_guarded(
+        &self,
+        key: &str,
+        value: bool,
+        ttl: Option<Duration>,
+        tags: &[String],
+        since_epoch: u64,
+    ) -> bool {
+        if self.bust_log.busted_since(tags, since_epoch).await {
+            return false;
+        }
+        let Ok(bytes) = serde_json::to_vec(&value) else {
+            return false;
+        };
+        self.backend.set_tagged(key, bytes, ttl, tags).await;
+        if self.bust_log.busted_since(tags, since_epoch).await {
+            self.backend.delete(key).await;
+            return false;
+        }
+        true
     }
 }
 
