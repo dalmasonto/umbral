@@ -135,13 +135,71 @@ pub async fn record(
     before: Option<&Map<String, Value>>,
     after: Option<&Map<String, Value>>,
 ) {
-    if !meta.audited {
+    let Some(body) = audit_body(meta, row_pk, action, before, after) else {
         return;
+    };
+    let audit = audit_meta();
+    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&audit)
+        .insert_json(&body)
+        .await
+    {
+        tracing::error!(
+            table = %meta.table,
+            row_pk = %row_pk,
+            action = %action,
+            "umbral: failed to write audit row: {e:?}",
+        );
+    }
+}
+
+/// Transaction-bound sibling of [`record`], for a write made inside `on_tx()`
+/// (gaps6 #16). The audit row is inserted through the SAME open transaction —
+/// so it commits or rolls back atomically with the business write, and (on
+/// SQLite, where only one writer holds the database) it doesn't deadlock
+/// against the still-open write tx that an ambient-pool insert would.
+pub async fn record_in_tx(
+    meta: &ModelMeta,
+    row_pk: &str,
+    action: &str,
+    before: Option<&Map<String, Value>>,
+    after: Option<&Map<String, Value>>,
+    tx: &mut crate::db::Transaction,
+) {
+    let Some(body) = audit_body(meta, row_pk, action, before, after) else {
+        return;
+    };
+    let audit = audit_meta();
+    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&audit)
+        .insert_json_in_tx(&body, tx)
+        .await
+    {
+        tracing::error!(
+            table = %meta.table,
+            row_pk = %row_pk,
+            action = %action,
+            "umbral: failed to write audit row (in tx): {e:?}",
+        );
+    }
+}
+
+/// Build the `umbral_audit` row body for one write, or `None` when nothing
+/// should be recorded (the model is not audited, or an UPDATE changed no
+/// column). Shared by [`record`] and [`record_in_tx`] so the ambient and
+/// transactional paths can't drift on what an audit row looks like.
+fn audit_body(
+    meta: &ModelMeta,
+    row_pk: &str,
+    action: &str,
+    before: Option<&Map<String, Value>>,
+    after: Option<&Map<String, Value>>,
+) -> Option<Map<String, Value>> {
+    if !meta.audited {
+        return None;
     }
     let changes = diff(before, after);
     // An update that changed nothing is not an event worth a row.
     if action == UPDATE && changes.as_object().is_some_and(Map::is_empty) {
-        return;
+        return None;
     }
 
     let mut body = Map::new();
@@ -157,22 +215,11 @@ pub async fn record(
     );
     body.insert("at".into(), json!(chrono::Utc::now()));
     body.insert("changes".into(), json!(changes.to_string()));
-
-    let audit = audit_meta();
-    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&audit)
-        .insert_json(&body)
-        .await
-    {
-        tracing::error!(
-            table = %meta.table,
-            row_pk = %row_pk,
-            action = %action,
-            "umbral: failed to write audit row: {e:?}",
-        );
-    }
+    Some(body)
 }
 
 /// Record one entry per affected row, for a write that matched several.
+#[allow(clippy::type_complexity)]
 pub async fn record_many(
     meta: &ModelMeta,
     action: &str,
@@ -187,6 +234,28 @@ pub async fn record_many(
     }
     for (pk, before, after) in rows {
         record(meta, &pk, action, before.as_ref(), after.as_ref()).await;
+    }
+}
+
+/// Transaction-bound sibling of [`record_many`] (gaps6 #16): one audit row per
+/// affected row, all inserted through the caller's open transaction so they
+/// commit or roll back with the write they describe.
+#[allow(clippy::type_complexity)]
+pub async fn record_many_in_tx(
+    meta: &ModelMeta,
+    action: &str,
+    rows: Vec<(
+        String,
+        Option<Map<String, Value>>,
+        Option<Map<String, Value>>,
+    )>,
+    tx: &mut crate::db::Transaction,
+) {
+    if !meta.audited {
+        return;
+    }
+    for (pk, before, after) in rows {
+        record_in_tx(meta, &pk, action, before.as_ref(), after.as_ref(), tx).await;
     }
 }
 

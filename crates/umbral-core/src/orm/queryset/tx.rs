@@ -213,6 +213,77 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     }
 
     // -----------------------------------------------------------------------
+    // Audit trail (gaps6 #16)
+    //
+    // An `#[umbral(audited)]` write made inside `on_tx()` records to
+    // `umbral_audit` just like the non-tx path — but the audit read AND write
+    // are threaded through the SAME transaction. That is not a nicety: on
+    // SQLite only one writer may hold the database, so an ambient-pool INSERT
+    // into `umbral_audit` while the caller's write tx is open would deadlock;
+    // and the after-image must be read on the tx connection or it won't see
+    // the tx's own uncommitted write. The audit row therefore also rolls back
+    // with the transaction — no audit trail for a change that never happened.
+    // These mirror `QuerySet::audit_pre` / `audit_post`, tx-bound.
+    // -----------------------------------------------------------------------
+
+    /// Pre-image of the rows this write will touch, read through the tx.
+    /// Empty (and free) unless the model is `#[umbral(audited)]`.
+    async fn audit_pre_in_tx(
+        &mut self,
+        backend: &str,
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        if !meta.audited {
+            return Vec::new();
+        }
+        let conds: Vec<sea_query::Condition> = {
+            let mut conds = Vec::new();
+            for p in &self.qs.predicates {
+                conds.push(sea_query::Condition::all().add(p.cond_for(backend)));
+            }
+            for e in self.qs.implicit_predicates() {
+                conds.push(sea_query::Condition::all().add(e));
+            }
+            conds
+        };
+        crate::orm::dynamic::audit_snapshot_in_tx(&meta, &conds, &mut *self.tx).await
+    }
+
+    /// Record an audited write against the rows `ids` names, through the tx.
+    /// DELETE has no after-image; CREATE/UPDATE re-read the after-image BY PK
+    /// on the tx connection (so it reflects the in-flight, uncommitted write).
+    async fn audit_post_in_tx(
+        &mut self,
+        before: Vec<serde_json::Map<String, serde_json::Value>>,
+        ids: &[serde_json::Value],
+        action: &str,
+    ) {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        if !meta.audited {
+            return;
+        }
+        let after = if action == crate::orm::audit::DELETE {
+            Vec::new()
+        } else {
+            match crate::orm::audit::pk_in_condition(&meta, ids) {
+                Some(c) => {
+                    crate::orm::dynamic::audit_snapshot_in_tx(&meta, &[c], &mut *self.tx).await
+                }
+                None => Vec::new(),
+            }
+        };
+        let pairs = if action == crate::orm::audit::CREATE {
+            after
+                .into_iter()
+                .map(|a| (crate::orm::audit::pk_of(&meta, &a), None, Some(a)))
+                .collect()
+        } else {
+            crate::orm::dynamic::audit_pairs(&meta, before, after)
+        };
+        crate::orm::audit::record_many_in_tx(&meta, action, pairs, &mut *self.tx).await;
+    }
+
+    // -----------------------------------------------------------------------
     // Write terminals
     // -----------------------------------------------------------------------
 
@@ -232,11 +303,15 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     /// caller's `db::transaction*` commits. A rollback drops the buffer
     /// with the transaction, so nothing fires for a delete that never
     /// actually happened.
-    pub async fn delete(self) -> Result<u64, sqlx::Error> {
+    pub async fn delete(mut self) -> Result<u64, sqlx::Error> {
         if self.qs.soft_delete_active && !self.qs.hard_delete {
             return self.soft_delete_in_tx().await;
         }
-        let mut stmt = self.qs.build_delete_for(self.tx.backend_name());
+        let backend = self.tx.backend_name();
+        // gaps6 #16: pre-image for the audit trail, read through the tx before
+        // the rows are gone. Empty (and free) unless the model is audited.
+        let audit_before = self.audit_pre_in_tx(backend).await;
+        let mut stmt = self.qs.build_delete_for(backend);
         let pk = pk_field::<T>();
         let has_sub =
             pk.is_some() && crate::signals::has_subscribers(&format!("post_delete:{}", T::TABLE));
@@ -295,6 +370,13 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
                 }
             };
         let count = ids.len() as u64;
+        // gaps6 #16: record the DELETE in the audit trail (needs `&ids`; the
+        // bulk-signal buffering below moves `ids`). Runs through the tx, so it
+        // rolls back with the delete it describes.
+        if count > 0 {
+            self.audit_post_in_tx(audit_before, &ids, crate::orm::audit::DELETE)
+                .await;
+        }
         if !ids.is_empty() {
             if pk.is_some() {
                 if has_sub {
@@ -339,9 +421,12 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     /// stamp `deleted_at = NOW()` on the matched live rows (idempotent —
     /// never re-stamps an already soft-deleted row). Mirrors
     /// `QuerySet::soft_delete_update`, minus the private tx it opens.
-    async fn soft_delete_in_tx(self) -> Result<u64, sqlx::Error> {
+    async fn soft_delete_in_tx(mut self) -> Result<u64, sqlx::Error> {
         use sea_query::{Alias, Query, Value};
         let backend = self.tx.backend_name();
+        // gaps6 #16: a soft delete is logged as a DELETE, matching the non-tx
+        // `soft_delete_update`. Pre-image read through the tx before stamping.
+        let audit_before = self.audit_pre_in_tx(backend).await;
         let now = chrono::Utc::now();
         let table = crate::db::router::schema_qualified_table(T::TABLE);
 
@@ -409,6 +494,12 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             }
         };
         let count = ids.len() as u64;
+        // gaps6 #16: audit the soft delete as a DELETE (needs `&ids`; the bulk
+        // signal below moves `ids`).
+        if count > 0 {
+            self.audit_post_in_tx(audit_before, &ids, crate::orm::audit::DELETE)
+                .await;
+        }
         if !ids.is_empty() {
             let table = T::TABLE;
             self.tx.push_pending_signal(Box::new(move || {
@@ -424,10 +515,14 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     /// map as [`super::QuerySet::update_values`]. Buffers `bulk_post_save`
     /// (mirroring the non-tx path's signal) to fire after commit (gaps6 #15).
     pub async fn update_values(
-        self,
+        mut self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
-        let mut stmt = self.qs.build_update_for(self.tx.backend_name(), &values)?;
+        let backend = self.tx.backend_name();
+        // gaps6 #16: pre-image for the audit trail, read through the tx before
+        // the UPDATE lands. Empty (and free) unless the model is audited.
+        let audit_before = self.audit_pre_in_tx(backend).await;
+        let mut stmt = self.qs.build_update_for(backend, &values)?;
         let pk = pk_field::<T>();
         if let Some(field) = pk {
             stmt.returning_col(sea_query::Alias::new(field.name));
@@ -463,6 +558,13 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             }
         };
         let count = ids.len() as u64;
+        // gaps6 #16: record the UPDATE in the audit trail (needs `&ids`; the
+        // bulk signal below moves `ids`). The after-image is re-read by PK
+        // through the tx, so it reflects the in-flight UPDATE.
+        if count > 0 {
+            self.audit_post_in_tx(audit_before, &ids, crate::orm::audit::UPDATE)
+                .await;
+        }
         if !ids.is_empty() {
             let table = T::TABLE;
             self.tx.push_pending_signal(Box::new(move || {
@@ -526,6 +628,24 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             }
         };
         row.set_m2m_parent_ids();
+        // gaps6 #16: record the CREATE in the audit trail through this same
+        // transaction (rolls back with it). Mirrors the non-tx create's
+        // serialized-row after-image — before is None.
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        if meta.audited {
+            if let Ok(serde_json::Value::Object(after)) = serde_json::to_value(&row) {
+                let pk = crate::orm::audit::pk_of(&meta, &after);
+                crate::orm::audit::record_in_tx(
+                    &meta,
+                    &pk,
+                    crate::orm::audit::CREATE,
+                    None,
+                    Some(&after),
+                    self.tx,
+                )
+                .await;
+            }
+        }
         if let Some(payload) = crate::signals::serialize_for_signal(&row, "post_save") {
             let table = T::TABLE;
             self.tx.push_pending_signal(Box::new(move || {

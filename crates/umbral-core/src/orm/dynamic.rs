@@ -2203,6 +2203,64 @@ impl<'a> DynQuerySet<'a> {
         Ok(out)
     }
 
+    /// Transaction-aware multi-row read: `SELECT <cols> ... ` for the
+    /// accumulated WHERE, run on the open `tx`, decoding every model column
+    /// into a JSON map per row. The multi-row sibling of
+    /// [`Self::fetch_one_json_in_tx`]; used by [`audit_snapshot_in_tx`] so an
+    /// audited write inside `on_tx()` reads its pre- and after-image through
+    /// the transaction (and therefore sees the tx's own uncommitted rows —
+    /// the correct image for a write happening inside the same tx).
+    pub async fn fetch_all_json_in_tx(
+        self,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
+        let mut q = Query::select();
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
+        for c in &self.meta.fields {
+            q.column(Alias::new(&c.name));
+        }
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        let out = match tx.backend_name() {
+            "sqlite" => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                let rows = sqlx::query_with(&sql, values)
+                    .fetch_all(&mut **inner)
+                    .await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
+                        entry.insert(col.name.clone(), decode_to_json(&row, col)?);
+                    }
+                    out.push(entry);
+                }
+                out
+            }
+            _ => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
+                let rows = sqlx::query_with(&sql, values)
+                    .fetch_all(&mut **inner)
+                    .await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
+                        entry.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
+                    }
+                    out.push(entry);
+                }
+                out
+            }
+        };
+        Ok(out)
+    }
+
     /// Terminal: INSERT one row from a JSON map. Auto-increment integer
     /// PKs are omitted when missing or null (the backend assigns).
     /// Returns the newly-inserted row as JSON (via RETURNING * on
@@ -4405,6 +4463,22 @@ pub(crate) async fn audit_snapshot(
         qs = qs.filter_condition(c.clone());
     }
     qs.fetch_as_json().await.unwrap_or_default()
+}
+
+/// Transaction-bound sibling of [`audit_snapshot`] (gaps6 #16): reads the
+/// matched rows through the open `tx`, so an audited write inside `on_tx()`
+/// snapshots its pre-image (and re-reads its after-image) against the tx's own
+/// uncommitted state — the correct image for a change made inside the tx.
+pub(crate) async fn audit_snapshot_in_tx(
+    meta: &crate::migrate::ModelMeta,
+    clauses: &[Condition],
+    tx: &mut crate::db::Transaction,
+) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    let mut qs = DynQuerySet::for_meta(meta);
+    for c in clauses {
+        qs = qs.filter_condition(c.clone());
+    }
+    qs.fetch_all_json_in_tx(tx).await.unwrap_or_default()
 }
 
 /// Pair each before-row with its after-row by primary key, for `record_many`.

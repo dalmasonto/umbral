@@ -41,9 +41,14 @@ The table is created for you: declaring any model `audited` registers `umbral_au
 An audit log that quietly misses writes is worse than no log, because it's the one you'd testify from. So this hooks the **ORM**, not a plugin or a UI layer:
 
 - `Model::objects().create/save/update_values/delete`
+- the same writes made inside a transaction via `Model::objects().on_tx(tx)`
 - REST — `POST` / `PATCH` / `DELETE`
 - the admin, including bulk actions
 - background tasks and CLI commands
+
+<Callout type="info">
+  **Transactional writes are audited atomically.** A write made inside `db::transaction(...)` through `on_tx(tx)` records its audit row **through the same transaction** — so the audit entry commits or rolls back with the change it describes. A transaction that rolls back leaves no audit trail for a write that never happened, and the update's after-image is read on the transaction's own connection, so it reflects the in-flight change rather than the stale pre-write value.
+</Callout>
 
 <Callout type="warning">
   **`AdminAuditLog` is not this.** The admin has a Django-style `LogEntry` that looks similar and isn't: it records only writes made *through the admin UI*, stores a free-text summary rather than a field-level diff, and produces **no row at all** for a write from REST, a task, or `objects().save()`. If you need a real history, use `#[umbral(audited)]`.
