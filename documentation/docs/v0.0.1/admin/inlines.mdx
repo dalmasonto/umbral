@@ -27,7 +27,7 @@ AdminPlugin::default().register(post)
 
 `"comment"` is the child SQL table. `"post"` is the FK column on `comment` - note that a `ForeignKey<Post>` field named `post` maps to a column named `post` (umbral does **not** append `_id`). `&["text", "rating"]` are the editable columns shown per row; the FK and primary key are managed for you and never rendered.
 
-The minimal struct form still works for back-compat - `InlineModel { model, fk_field, list_display }` constructs with the other knobs defaulted - but prefer the `::new(...)` constructor plus chainable setters.
+The struct-literal form still works - `InlineModel { model, fk_field, list_display, ..Default::default() }` sets the other knobs to their defaults - but prefer the `::new(...)` constructor plus chainable setters.
 
 <Callout type="info">
 The FK column is set to the parent automatically on every child write. You never put it in `list_display`, and a crafted POST can't reassign it.

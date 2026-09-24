@@ -274,7 +274,7 @@ Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating w
 This is the right shape for `request.user.profile.avatar`-style flows in Rust: one chainable method call, no need for the user to know the back-link convention. Because it returns a `Relation<Profile>`, you can keep traversing from it too — see [Relation traversal](./relation-traversal).
 
 <Callout type="warning">
-  **Template-side relation traversal is not implemented.** Writing `{{ user.profile.avatar }}` directly in a minijinja template does NOT work: neither for cross-crate reverse-OneToOne nor for reverse-FK collections nor for the plain FK forward direction. `user` in templates is the JSON-serialized AuthUser (via [user in templates](/v0.0.1/auth/user-in-templates)); relation accessors are Rust async methods that don't survive serialization, and minijinja is synchronous so it can't `.await` anyway.
+  **Template-side relation traversal is not implemented.** Writing `{{ user.profile.avatar }}` directly in a minijinja template does NOT work: neither for cross-crate reverse-OneToOne nor for reverse-FK collections nor for the plain FK forward direction. `user` in templates is the JSON-serialized AuthUser (via [user in templates](/docs/v0.0.1/auth/user-in-templates)); relation accessors are Rust async methods that don't survive serialization, and minijinja is synchronous so it can't `.await` anyway.
 
   **The workaround today**: resolve the relation in the handler and pass the value into the template context explicitly:
 
@@ -405,7 +405,7 @@ This means `{{ post.author.username }}` in a minijinja template renders correctl
 
 ### Nested traversal: `select_related("author__manager")`
 
-Chain FK hops with `__`. Each hop is one batched `IN (...)` query, so the budget is `1 + len(hops)` regardless of row count, never N+1. The full chain unpacks into `resolved()` slots at every depth:
+Chain FK hops with `__`. Each hop is one batched `IN (...)` query, so the budget is `1 + len(hops)` regardless of row count, never N+1. The full chain is cached at every depth, so the awaited accessor at each hop reads from that cache with no further query:
 
 ```rust
 // post.author.manager.manager: three hops in 4 queries total

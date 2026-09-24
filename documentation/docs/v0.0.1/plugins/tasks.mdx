@@ -609,11 +609,6 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
 
 ## What is NOT in v1
 
-- **`FOR UPDATE SKIP LOCKED`.** The worker uses a conditional UPDATE claim
-  that is correct on both SQLite and Postgres (a concurrent worker whose
-  UPDATE matches zero rows loses the race cleanly). `SELECT … FOR UPDATE
-  SKIP LOCKED` is a future optimization that avoids the wasted candidate
-  SELECT, not a correctness fix.
 - **Per-task backoff / timeout persistence.** `EnqueueOptions` accepts the fields
   but the worker applies worker-level defaults in v1 (see the callout above). #82.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,

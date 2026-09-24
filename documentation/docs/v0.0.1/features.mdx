@@ -17,7 +17,7 @@ Every official plugin implements the same [`Plugin`](/docs/v0.0.1/plugins/the-pl
 
 ## Official plugins
 
-21 of the 22 are published on crates.io alongside the [`umbral`](https://crates.io/crates/umbral) facade — `umbral-graphql` is newer than the last release and lands with the next one. The **Scaffolded** column marks the ones `umbral startproject` wires into `main.rs` for you; the rest are one line in `Cargo.toml` plus one `.plugin(...)` call away.
+All 22 are published on crates.io alongside the [`umbral`](https://crates.io/crates/umbral) facade, and version in lockstep. The **Scaffolded** column marks the ones `umbral startproject` wires into `main.rs` for you; the rest are one line in `Cargo.toml` plus one `.plugin(...)` call away.
 
 | Plugin | What you get | Mounts | Scaffolded |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Every official plugin implements the same [`Plugin`](/docs/v0.0.1/plugins/the-pl
 | [`umbral-logs`](/docs/v0.0.1/plugins/logs) | Non-blocking request logging into a `RequestLog` model, browsable in the admin. Optional OTel export. | layer + admin | Yes |
 | [`umbral-permissions`](/docs/v0.0.1/plugins/permissions) | Role-based access control: `ContentType`, `Permission`, `Group`, user↔group and user↔permission M2M, `has_perm` query layer. | — | Opt-in |
 | [`umbral-oauth`](/docs/v0.0.1/plugins/oauth) | Social login + account connection (Google, GitHub). Provider tokens stored encrypted with `Masked<T>`. | `/oauth/{provider}/callback` | Opt-in |
-| [`umbral-tasks`](/docs/v0.0.1/plugins/tasks) | DB-backed background task queue: define, enqueue, run with a worker process. | worker command | Opt-in |
+| [`umbral-tasks`](/docs/v0.0.1/plugins/tasks) | DB-backed background task queue: define, enqueue, run with a worker process. | `tasks-worker` / `tasks-beat` commands | Opt-in |
 | [`umbral-realtime`](/docs/v0.0.1/plugins/realtime) | SSE + WebSocket push, user- and room-targeted, over a pluggable broker. Model subscriptions and presence. | `/realtime` | Opt-in |
 | [`umbral-storage`](/docs/v0.0.1/plugins/storage) | One `Storage` trait for static-file serving and media uploads. Local FS + optional S3 backend. | `/static`, `/media` | Opt-in |
 | [`umbral-cache`](/docs/v0.0.1/plugins/cache) | One `Cache` handle over a swappable backend (memory, SQLite, Redis) plus `cache_page` middleware. | middleware | Opt-in |
@@ -57,7 +57,7 @@ These need no plugin. They live in `umbral-core` and reach you through the `umbr
 | [Templates](/docs/v0.0.1/templates/rendering-html) | Server-rendered HTML with autoescaping, custom tags, filters, [markdown + syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting). |
 | [Web](/docs/v0.0.1/web/routes) | Routing, middleware, forms, pagination, streaming, compression, request limits, error pages. |
 | [Backends](/docs/v0.0.1/backends/postgres) | Postgres-first, SQLite for tests. Boot-time system checks catch field/backend mismatches before prod. |
-| [CLI](/docs/v0.0.1/cli/startproject) | `startproject`, `startplugin`, `migrate`, `makemigrations`, `showmigrations`, `checkmigrations`, `inspectdb`, `createsuperuser`, `worker`, plus [per-plugin commands](/docs/v0.0.1/cli/management-commands). |
+| [CLI](/docs/v0.0.1/cli/startproject) | `startproject`, `startplugin`, `migrate`, `makemigrations`, `showmigrations`, `checkmigrations`, `inspectdb`, `createsuperuser`, `tasks-worker`, plus [per-plugin commands](/docs/v0.0.1/cli/management-commands). |
 | [Testing](/docs/v0.0.1/testing/test-client) | Test client + model factories. |
 
 ## Field types and attributes

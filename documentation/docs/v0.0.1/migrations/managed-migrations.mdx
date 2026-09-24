@@ -56,7 +56,7 @@ Diff every registered model against its latest snapshot and write one new file p
 cargo run -- makemigrations
 ```
 
-No flags. Returns `no changes detected` and exit 0 when every plugin's diff is empty. Output paths land at `migrations/<plugin>/<sequence>_<suffix>.json` - the sequence is zero-padded so lexical sort matches the apply order.
+Takes an optional `--empty <plugin>` flag to write a no-op migration you fill in by hand (see [data migrations](/docs/v0.0.1/migrations/data-migrations)); otherwise no flags. Returns `no changes detected` and exit 0 when every plugin's diff is empty. Output paths land at `migrations/<plugin>/<sequence>_<suffix>.json` - the sequence is zero-padded so lexical sort matches the apply order.
 
 ### `migrate`
 
@@ -159,20 +159,24 @@ When `makemigrations` sees a model disappear from the snapshot and a new model a
 # → makemigrations emits: RenameTable { from: "post", to: "blog_post" }
 ```
 
-**Second pass - column-shape match.** For models that are unpaired after the first pass (different struct names on both sides), the autodetector checks whether the column shapes are bit-identical (same column names, types, nullable, FK target). If they match, it emits `RenameTable` and prints a warning to stderr so you can verify the intent:
+**Second pass - column-shape match.** For models that are unpaired after the first pass (different struct names *and* table names on both sides), the autodetector can only compare column shapes. A dropped model and a new model with a *bit-identical* shape (same column names, types, nullable, FK target) is genuinely ambiguous - it could be a rename, or two unrelated models that happen to share a shape. Rather than guess, `makemigrations` **fails closed** with an `AmbiguousRename` error:
 
 ```
-umbral makemigrations: rename detected (column-shape match): `foo` -> `bar` - please verify this is a rename and not a coincidental column-shape match between two unrelated models
+umbral makemigrations: ambiguous rename — the dropped model `foo` and the new
+model `bar` have identical column shapes ... Resolve it: set
+UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume ... or =independent ...
 ```
 
-**No match.** If neither pass pairs a drop with a create, the autodetector falls back to plain `DropTable` + `CreateTable`.
+Resolve it with `UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume` (treat every shape match as a `RenameTable`) or `=independent` (plain `DropTable` + `CreateTable`, no rows moved). See [Renaming models](/docs/v0.0.1/migrations/renames) for the full walkthrough.
 
-Both passes produce the same DDL: `ALTER TABLE "from" RENAME TO "to"` on both SQLite and Postgres.
+**No match.** If the column shapes differ, there's no ambiguity: the autodetector emits plain `DropTable` + `CreateTable`.
+
+A `RenameTable` produces `ALTER TABLE "from" RENAME TO "to"` on both SQLite and Postgres.
 
 The migration tracking table records `(plugin, name)` of each applied migration - it is not affected by a table rename inside the migration itself.
 
 <Callout type="info">
-The second-pass warning is intentional: identical column shapes are a heuristic, not a guarantee. If two independent models happen to share the exact same set of columns, the autodetector will incorrectly emit a rename. Review the generated migration before applying it, and replace the `RenameTable` with `DropTable` + `CreateTable` if the intent is not a rename.
+Failing closed is intentional: identical column shapes are a heuristic, not a guarantee. Silently guessing "rename" would hand one model's rows to another and skip the intended drop; guessing "drop + create" would delete rows you meant to keep. You make the call explicitly, then review the generated migration before applying it.
 </Callout>
 
 ## What's next

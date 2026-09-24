@@ -80,10 +80,9 @@ environment = "Prod"
 log_level = "info"
 allowed_hosts = ["example.com", "www.example.com"]
 
-# Named secondary database URLs. NOTE: the framework does NOT open pools
-# from this map - each alias must be connected and registered on the
-# builder yourself (see below). Models route to an alias via
-# `#[umbral(database = "alias")]` or per-plugin via `Plugin::database()`.
+# Named secondary database URLs. App::build() opens a lazy pool for each
+# entry automatically (see the callout below); a model routes to an alias
+# via `#[umbral(database = "alias")]` or per-plugin via `Plugin::database()`.
 [databases]
 analytics = "postgres://analytics:pw@db-host/analytics"
 cache = "sqlite://cache.db?mode=rwc"

@@ -61,7 +61,7 @@ let software = user
     .developer()          // Relation<Developer>  (reverse O2O)
     .software_groups()    // QuerySet<SoftwareGroup>  (M2M)
     .software()           // QuerySet<Software>  (M2M)
-    .all()
+    .fetch()
     .await?;
 ```
 
@@ -72,7 +72,7 @@ let with_repeats = dev
     .software_groups()
     .software()
     .with_duplicates()
-    .all()
+    .fetch()
     .await?;
 ```
 

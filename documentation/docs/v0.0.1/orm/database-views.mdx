@@ -92,7 +92,7 @@ async fn refresh_standings() -> Result<(), TaskError> {
     Ok(())
 }
 
-TasksPlugin::new().periodic_task::<RefreshStandings>(Schedule::every_hours(1))
+TasksPlugin::default().periodic_task::<RefreshStandings>("refresh_standings", Schedule::cron("0 * * * *"), ())
 ```
 
 The two compose without either crate knowing the other exists. An attribute would have bought nothing but a dependency edge pointing inward. See [Background tasks](../plugins/tasks).

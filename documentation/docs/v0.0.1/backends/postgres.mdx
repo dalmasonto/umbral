@@ -10,7 +10,7 @@ PostgreSQL is umbral's first-class production backend. The plain `Article::objec
 
 ## Configure
 
-Point `DATABASE_URL` (env or `umbral.toml`) at a `postgres://` (or `postgresql://`) URL. `umbral::db::connect` dispatches on the URL scheme and returns the matching [`DbPool`] variant.
+Point umbral at a `postgres://` (or `postgresql://`) URL - set `UMBRAL_DATABASE_URL` in the environment, or `database_url` in `umbral.toml`. `umbral::db::connect` dispatches on the URL scheme and returns the matching [`DbPool`] variant.
 
 ```rust
 use umbral::prelude::*;
@@ -61,7 +61,7 @@ Verify the effective values in the `umbral: opening database pool` boot-log line
 
 ```bash
 cargo run -- makemigrations    # writes a JSON migration under migrations/<plugin>/
-cargo run -- migrate           # applies pending migrations against $DATABASE_URL
+cargo run -- migrate           # applies pending migrations against $UMBRAL_DATABASE_URL
 ```
 
 The engine renders Postgres DDL automatically:

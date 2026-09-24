@@ -7,21 +7,21 @@ tags: [web, middleware, plugins]
 
 # Request pipeline
 
-Every request `App::build` produces runs through a fixed stack of framework layers before it reaches your handler, and back out through them on the way to the response. Most of these layers are opt-in (they only mount when you enable the matching feature), but their *relative order* is fixed: security and transport concerns wrap the outside, your typed `Middleware` runs close to the handler, and a plugin's `wrap_router` layers sit innermost. This page is the map of that order, and how to see what's actually installed.
+Every request `App::build` produces runs through a fixed stack of framework layers before it reaches your handler, and back out through them on the way to the response. Several of these layers are opt-in (they only mount when you enable the matching feature), but their *relative order* is fixed: security and transport concerns wrap the outside, your typed `Middleware` runs close to the handler, and a plugin's `wrap_router` layers sit innermost. This page is the map of that order, and how to see what's actually installed.
 
 ## The layer stack, outer to inner
 
-Layers are listed outermost first — the outermost layer is the first to see an incoming request and the last to touch the outgoing response. Everything except the tracing span, the host guard, the typed middleware stack, and the plugin `wrap_router` pass is conditional: it mounts only when you enable the corresponding builder option or a plugin contributes it.
+Layers are listed outermost first — the outermost layer is the first to see an incoming request and the last to touch the outgoing response. The tracing span, the minimal security headers, the body-size limit and request timeout, the host-header guard, the 500-render/panic-catch layer, the typed middleware stack, and the plugin `wrap_router` pass are **on by default** (the host guard applies its blocking behaviour only in prod). The rest mount only when you enable the corresponding builder option or a plugin contributes it.
 
 ```text
    ┌─ Request tracing span (always)                         ← outermost
    │  Minimal security headers            (default on)
-   │  Body-size limit (413) + timeout (408)   (opt-in)
+   │  Body-size limit (413) + timeout (408)   (default on)
    │  Host-header validation (400, prod)  (default on)
    │  CORS — global, then path-scoped         (opt-in)
    │  Response compression (gzip/brotli)      (opt-in)
    │  Custom error-page render (403/429/…)    (opt-in)
-   │  500 render + panic catch                (opt-in)
+   │  500 render + panic catch                (default on)
    │  Route-context scope (DatabaseRouter)    (opt-in)
    │  Trailing-slash redirect                 (opt-in)
    │  Typed MiddlewareStack  ── your Middleware, sorted by order()

@@ -83,10 +83,16 @@ Cap the total number of live connections across **both** transports so a runaway
 RealtimePlugin::new().max_connections(10_000)
 ```
 
-The default is unlimited. Once the cap is reached, a new SSE or WebSocket handshake is refused with `503 Service Unavailable` instead of opening the stream; a disconnect frees a slot and the next connection is admitted immediately. `EventSource` treats the 503 as a transient error and retries on its own, so clients drain back in as capacity frees.
+The default is a **10,000-connection cap** (`DEFAULT_MAX_CONNECTIONS`). Once the cap is reached, a new SSE or WebSocket handshake is refused with `503 Service Unavailable` instead of opening the stream; a disconnect frees a slot and the next connection is admitted immediately. `EventSource` treats the 503 as a transient error and retries on its own, so clients drain back in as capacity frees.
+
+Raise or lower the cap with `.max_connections(n)`, or remove it entirely with `.unlimited_connections()`:
+
+```rust
+RealtimePlugin::new().unlimited_connections()
+```
 
 <Callout type="warning">
-Set `max_connections` in production. Unlimited is a dev-friendly default, not a deployment posture — without a cap, a handful of misbehaving clients can exhaust file descriptors for the whole process.
+Tune `max_connections` for your deployment. The 10,000 default is a safety rail, not a tuned figure — and `unlimited_connections()` removes the rail entirely, so without a cap a handful of misbehaving clients can exhaust file descriptors for the whole process.
 </Callout>
 
 ## Inbound message size (`ws_max_message_bytes`)
@@ -95,6 +101,14 @@ Inbound WebSocket messages (and frames) are capped at **1 MiB by default**, so a
 
 ```rust
 RealtimePlugin::new().ws_max_message_bytes(64 * 1024) // 64 KiB is plenty for chat
+```
+
+## Inbound message rate (`ws_max_messages_per_sec`)
+
+Each WebSocket connection's inbound message rate is capped at **100 messages/sec by default**. A client that sustains a higher rate is flooding, and its socket is closed. Tune it per app, or pass `0` to disable the cap:
+
+```rust
+RealtimePlugin::new().ws_max_messages_per_sec(500) // or 0 to turn the limit off
 ```
 
 ## WebSocket: two-way traffic

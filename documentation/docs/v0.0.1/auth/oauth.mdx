@@ -154,7 +154,7 @@ There are exactly two ways to run social login, and picking the wrong path is th
 <Tab title="Fullstack (same origin)">
 umbral serves both the app **and** the API on one origin. This is the happy path: the callback's `login_user_id(...)` sets the session cookie on that same origin, so there's **no `?next`, no fragment token, no BFF handoff**.
 
-Set `oauth_redirect_base`, `oauth_login_redirect`, the client id/secret, **and a mask keyring** — then just link to `/oauth/{provider}/login` and land on `login_redirect`.
+Set `oauth_redirect_base`, the client id/secret, **and a mask keyring**, and choose your post-login destination with the `.login_redirect("/dashboard")` builder (it defaults to `/`) — then just link to `/oauth/{provider}/login` and land there.
 </Tab>
 <Tab title="API + separate-origin SPA">
 umbral is the API; a Next/Vite SPA on a **different origin** owns the UI. Here you use **token mode**: allowlist the SPA origin, the SPA starts login with `?next=<spa-callback>`, the callback appends `#token=<bearer>` to that URL, and the SPA exchanges it for its own session. This is the flow documented below — every step matters, and skipping one fails silently.

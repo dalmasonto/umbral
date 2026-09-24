@@ -83,6 +83,7 @@ Every method below is a real trait method with a default impl (only `name()` is 
 | `dependencies` | `fn dependencies(&self) -> &'static [&'static str]` | `&[]` | Plugins that must load first. |
 | `models` | `fn models(&self) -> Vec<ModelMeta>` | empty | The plugin's models, the migration diff target. |
 | `routes` | `fn routes(&self) -> Router` | `Router::new()` | HTTP routes, merged flat into the app router. |
+| `routes_builder` | `fn routes_builder(&self) -> Option<Routes>` | `None` | Preferred alternative to `routes`/`route_paths`: return a `Routes` builder and umbral derives both the router **and** the declared paths from one source, so the two can't drift. |
 | `route_paths` | `fn route_paths(&self) -> Vec<RouteSpec>` | empty | Declared paths for the dev-mode 404 page (informational only). |
 | `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbral-openapi` merges into the spec. |
 | `system_checks` | `fn system_checks(&self) -> Vec<SystemCheck>` | empty | Boot-time invariants (phase 4). |
@@ -123,7 +124,7 @@ let app = App::builder()
 umbral_cli::dispatch(app).await
 ```
 
-`dispatch` fires the hooks for `serve` — after `auto_migrate_on_serve()` has applied migrations — and for every command that runs against live data (`createsuperuser`, `worker`, your own management commands). It **skips them entirely** for the schema commands (`migrate`, `makemigrations`, `showmigrations`, `inspectdb`, `typegen`, …).
+`dispatch` fires the hooks for `serve` — after `auto_migrate_on_serve()` has applied migrations — and for every command that runs against live data (`createsuperuser`, `tasks-worker`, your own management commands). It **skips them entirely** for the schema commands (`migrate`, `makemigrations`, `showmigrations`, `inspectdb`, `typegen`, …).
 
 <Callout type="warning">
   `App::build()` still fires `on_ready` itself, which is what you want in a test or when embedding umbral under your own axum tree. Handing *that* app to `dispatch` means the hooks ran before argv was even parsed — so `cargo run -- migrate` against a fresh database seeds tables it hasn't created yet. `dispatch` prints a warning when it sees this; the fix is one word, `build()` → `build_deferred()`.

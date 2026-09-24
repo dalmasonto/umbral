@@ -6,7 +6,7 @@ icon: database
 tags: [sqlite, backends, database]
 ---
 
-SQLite is umbral's default backend. The framework starts there because it gives you a working app with no installed services and no connection string to manage - the first `cargo run -- migrate` creates a file and writes the schema. Production workloads that outgrow SQLite move to [Postgres](./postgres) by changing the `DATABASE_URL`; the model definitions, QuerySet calls, and migration files all carry over unchanged.
+SQLite is umbral's default backend. The framework starts there because it gives you a working app with no installed services and no connection string to manage - the first `cargo run -- migrate` creates a file and writes the schema. Production workloads that outgrow SQLite move to [Postgres](./postgres) by changing `UMBRAL_DATABASE_URL`; the model definitions, QuerySet calls, and migration files all carry over unchanged.
 
 ## When to use it
 
@@ -23,7 +23,7 @@ Reach for [Postgres](./postgres) when you outgrow any of:
 - You want database-enforced per-row security (`umbral-rls`).
 - You want the standard "OLTP at scale" toolchain (logical replication, pgbouncer, point-in-time recovery, etc.).
 
-The migration files and `Model` impls don't change either way - the move is a `DATABASE_URL` swap plus a fresh `migrate` against the new database.
+The migration files and `Model` impls don't change either way - the move is a `UMBRAL_DATABASE_URL` swap plus a fresh `migrate` against the new database.
 
 ## Configure
 
@@ -41,7 +41,7 @@ use umbral::prelude::*;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_env()?;
-    // Default DATABASE_URL is `sqlite::memory:`; override with `sqlite://app.db?mode=rwc`
+    // Default UMBRAL_DATABASE_URL is `sqlite::memory:`; override with `sqlite://app.db?mode=rwc`
     // (or the env var) to get a file-backed pool that survives restarts.
     let pool = umbral::db::connect(&settings.database_url).await?;
 
@@ -93,7 +93,7 @@ The `UMBRAL_DB_*` knobs are read from the ambient settings, which `App::build()`
 
 ```bash
 cargo run -- makemigrations    # writes migrations/<plugin>/0001_…json
-cargo run -- migrate           # applies pending migrations against $DATABASE_URL
+cargo run -- migrate           # applies pending migrations against $UMBRAL_DATABASE_URL
 ```
 
 The engine renders SQLite-appropriate DDL automatically. Differences from the Postgres path:

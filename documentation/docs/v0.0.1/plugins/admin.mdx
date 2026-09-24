@@ -22,7 +22,7 @@ cargo add umbral-admin
 | `GET /admin/login` | Login form |
 | `POST /admin/login` | Authenticate, create session, redirect |
 | `GET /admin/logout` | Destroy session, redirect to login |
-| `GET /admin/` | Index - list every registered model |
+| `GET /admin/` | Dashboard - a widget grid (may redirect to the last-visited changelist) |
 | `GET /admin/<table>/` | Row list (paginated, default 25 rows/page, ordered by PK) |
 | `GET /admin/<table>/<id>` | Detail view for one row |
 | `GET /admin/<table>/new` | Create form |
@@ -281,16 +281,18 @@ AdminModel::new("note")
 
 Fields that appear on the create and edit form but render as `<input readonly>` so they cannot be changed. The field is visible to the operator but excluded from the INSERT and UPDATE SQL.
 
-### Deferred surfaces
+### Not yet implemented
+
+Inline related-model editors and paginated list views **have shipped** - see [Inlines](/docs/v0.0.1/admin/inlines) and the paginated row list above.
 
 <Callout type="info">
-**Phase 2+ only.** The following fields are stored on `AdminModel` but have no rendering path in phase 1:
+The Django-style form-layout conveniences are **not** part of the admin config yet - they are not stored on `AdminModel`:
 
-- **`inlines`** - inline related-model editors (`InlineModel { model, fk_field, list_display }`). Phase 2 renders them as collapsible sections on the edit form.
-- **`list_per_page`** - stored (default 25) but pagination is not yet rendered. Phase 2 adds the full paginator.
-- **`fieldsets`** - grouping fields into named sections on the edit form. Lands in phase 2 as `.fieldsets(vec![...])`.
-- **`prepopulated_fields`** - slug autofill from another field. Phase 3.
-- **`raw_id_fields`** - FK input as a raw integer. Phase 3.
+- **`fieldsets`** - grouping fields into named sections on the edit form.
+- **`prepopulated_fields`** - slug autofill from another field.
+- **`raw_id_fields`** - FK rendered as a raw id input instead of a picker.
+
+When you need that level of layout control today, model the page with a [custom view](/docs/v0.0.1/admin/custom-views).
 </Callout>
 
 ## Phase 2: changelist + sheet
@@ -579,21 +581,22 @@ models::log(
 use umbral_admin::{AdminPlugin, Widget, WidgetKind, WidgetDataFn, WidgetPayload, KpiPayload, Span};
 
 AdminPlugin::default()
-    .register_widget(Widget {
-        key:          "total_posts",
-        title:        "Total Posts".to_string(),
-        kind:         WidgetKind::Kpi,
-        default_span: Span { cols: 3, rows: 1 },
-        permission:   None,
-        data:         WidgetDataFn::new(|_user| async move {
-            WidgetPayload::Kpi(KpiPayload {
-                value:     "42".to_string(),
-                unit:      Some("posts".to_string()),
-                delta:     Some(12.5),
-                sparkline: None,
-            })
-        }),
-    })
+    .register_widget(
+        Widget::new(
+            "total_posts",
+            "Total Posts",
+            WidgetKind::Kpi,
+            WidgetDataFn::new(|_user| async move {
+                WidgetPayload::Kpi(KpiPayload {
+                    value:     "42".to_string(),
+                    unit:      Some("posts".to_string()),
+                    delta:     Some(12.5),
+                    sparkline: None,
+                })
+            }),
+        )
+        .with_span(3, 1),
+    )
 ```
 
 **Widget kinds and their payload shapes:**
@@ -619,7 +622,7 @@ The data endpoint returns JSON for API consumers and an HTML fragment for HTMX r
 
 **Two built-in widgets** ship as public functions you register where you want them (they used to be auto-prepended; now you place and size them yourself):
 
-- `builtin_total_models_widget()` → key `umbral_total_models` (KPI) - count of all registered models.
+- `builtin_total_models_widget()` → key `umbral_total_models` (Bar) - row counts across all registered models.
 - `builtin_recent_users_widget()` → key `umbral_recent_users` (Feed) - last 5 `auth_user` signups.
 
 ```rust

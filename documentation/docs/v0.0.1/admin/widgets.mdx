@@ -452,13 +452,6 @@ The runtime contract:
 
 The skeleton-first shape means the dashboard paints fast: every widget loads in parallel after the initial HTML lands.
 
-## Related
-
-- [Plugin trait](/v0.0.1/plugins/the-plugin-trait): `AdminPlugin` IS a plugin; widgets are how it exposes a customisation surface.
-- [Admin plugin](/v0.0.1/plugins/admin): the broader admin features (CRUD, filters, search, permissions).
-- [user in templates](/v0.0.1/auth/user-in-templates): widget headers can branch on `user.is_staff` for staff-only widgets.
-</content>
-
 ## Filters: making a widget answer a question
 
 A widget with no controls answers one fixed question. Declare filters and the admin renders controls in its header — on **any** widget kind, not just charts:
@@ -534,3 +527,9 @@ AdminPlugin::default().view(
 ```
 
 See [Custom views](/docs/v0.0.1/admin/custom-views) for the page itself.
+
+## Related
+
+- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait): `AdminPlugin` IS a plugin; widgets are how it exposes a customisation surface.
+- [Admin plugin](/docs/v0.0.1/plugins/admin): the broader admin features (CRUD, filters, search, permissions).
+- [user in templates](/docs/v0.0.1/auth/user-in-templates): widget headers can branch on `user.is_staff` for staff-only widgets.

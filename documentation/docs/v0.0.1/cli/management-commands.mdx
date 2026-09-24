@@ -11,9 +11,8 @@ binary**. Your `main.rs` hosts the commands via
 how you invoke them.
 
 This is a project-local entry point that runs your own project code,
-so the commands see your models and your plugins. The framework-global [`umbral`](./startproject) binary handles
-scaffolding (`startproject`, `startplugin`) and nothing else - it can't
-manage your database because it doesn't know about your models.
+so the commands see your models and your plugins. The framework-global [`umbral`](./startproject) binary handles the commands that don't need your models -
+scaffolding (`startproject`, `startplugin`, `startcommand`, `plugin add`) plus `maskkeygen` and `doctor`. It can't run `migrate` or the other model-aware commands, because it doesn't know about your models.
 
 ## Getting help and the version
 
@@ -46,6 +45,9 @@ work identically from inside a project.
   <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops, a CI gate before migrate." />
   <Card icon="file-code" title="typegen" description="Emit TypeScript interfaces and unions for every registered model. --out writes a file; --check exits non-zero when it has drifted from the models." />
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
+  <Card icon="git-merge" title="squashmigrations" description="Collapse a plugin's migration history into one file, preserving the current schema." />
+  <Card icon="copy" title="transferdata" description="Resumable PK/FK-preserving row copy from one umbral database to another." />
+  <Card icon="stethoscope" title="doctor" description="Diagnose common misconfigurations (settings, keys, pool, migration state) before you deploy." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
   <Card icon="table" title="importcsv" description="Load a CSV file into one table, coercing each cell to its column type through the validated write path. Inverse of the ?format=csv export." />
   <Card icon="key" title="maskkeygen" description="Generate an X25519 keypair for Masked<T> field encryption and print the two env-var lines to configure it." />
@@ -227,6 +229,8 @@ cargo run -- migrate --allow-drift
 | `--fake <plugin/name>` | - | Mark one migration as applied in the tracking table WITHOUT running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists outside umbral's control. |
 | `--fake-initial` | off | Per plugin: if the `0001_*` migration's target tables already exist in the database, mark it applied without running SQL. Use when onboarding a database bootstrapped by hand or by another tool. |
 | `--allow-drift` | off | Proceed even when some applied migrations are missing from disk. Logs a warning per missing file and applies the genuinely-pending ones. |
+| `--allow-destructive` | off | Apply a migration that contains destructive ops (`DROP TABLE` / `DROP COLUMN`). Without it, `migrate` refuses them - the guard that stops a missing `.model::<T>()` registration from silently dropping a table. |
+| `--allow-in-memory` | off | Permit `migrate` to run against an in-memory SQLite URL (`:memory:` / `mode=memory`). Off by default because an in-memory database is discarded at process exit, so migrating one is almost always a mistake. |
 
 Worked examples for each flag live in the [migration drift recovery guide](/docs/v0.0.1/migrations/migration-drift).
 
@@ -302,6 +306,7 @@ UMBRAL_DATABASE_URL=postgres://user:pass@localhost/legacy \
 |---|---|---|
 | `[database]` (positional) | app's ambient DB | The source to introspect: a `sqlite://` / `postgres://` URL, or a path to a SQLite file (opened read-only). Omit it to use `UMBRAL_DATABASE_URL`. |
 | `--framework <name>` | - (verbatim names) | Undo a source ORM's conventions. `django` strips `_id` off FK fields and `<app>_` off struct/table names, and maps `auth_user` to umbral-auth's `AuthUser`. |
+| `--with-table-names` | off | Strip an app-prefix off generated struct names (`blog_post` → `Post`) and preserve the real table with a `#[umbral(table = "...")]` macro. Off by default, struct names round-trip to their table verbatim (`BlogPost`). |
 | `--output <path>` | - (required) | Where `models.rs` and `migrations/app/0001_initial.json` land. The directory is created if it doesn't exist. |
 | `--mark-applied` | off | Record `0001_initial` in the `umbral_migrations` tracking table without running its SQL. Pass when the target DB already holds the introspected tables - without this flag, the next `migrate` would try to `CREATE TABLE` over them. |
 

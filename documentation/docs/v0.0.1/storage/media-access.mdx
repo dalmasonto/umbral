@@ -6,7 +6,7 @@ icon: shield-check
 tags: [storage, media, cache, security, authorization]
 ---
 
-`StoragePlugin::media_access_cached` gates who can fetch an uploaded file. You write one closure that inspects the caller and the file key and returns a [`Decision`](#decision); the wrapper checks the ambient [`TaggedCache`](/docs/v0.0.1/cache/tagged-invalidation) *before* running your closure, so a repeated request for the same (caller, key) pair is served from cache instead of re-running your DB lookups. The framework owns the cache key (`mediaacc:<file_key>:<caller_id>`) - you never supply one.
+`StoragePlugin::media_access_cached` gates who can fetch an uploaded file. You write one closure that inspects the caller and the file key and returns a [`Decision`](#decision); the wrapper checks the ambient [`TaggedCache`](/docs/v0.0.1/cache/tagged-invalidation) *before* running your closure, so a repeated request for the same (caller, key) pair is served from cache instead of re-running your DB lookups. The framework owns the cache key (it length-prefixes each component - `mediaacc:<len>:<file_key>:<len>:<caller_id>` - so two distinct pairs can never collide onto one string) - you never supply one.
 
 ## Example
 
@@ -46,7 +46,7 @@ The cached path still resolves the caller's `Identity` (session/auth lookup) on 
 </Callout>
 
 <Callout type="warning">
-**Cache keys are identity-keyed, not header-keyed.** The wrapper derives `mediaacc:{key}:{caller_id}` from the *resolved* `Identity` (`user_id()`, or `"anon"` for an unauthenticated caller) - never from raw request headers. If you need to gate and cache a non-session identity, such as an agent API key, don't reach for a raw-headers escape hatch: resolve that key to its own distinct `Identity` in a custom `Authentication` backend (see the auth extension seam, gaps4 #42), for example `user_id = "agent:<id>"`. That identity then flows through `MediaCaller` like any other and gets its own safe cache bucket - one agent key can never collide with, or be served, another caller's cached decision.
+**Cache keys are identity-keyed, not header-keyed.** The wrapper derives `mediaacc:{key.len()}:{key}:{caller_id.len()}:{caller_id}` from the *resolved* `Identity` (`user_id()`, or `"anon"` for an unauthenticated caller) - never from raw request headers. If you need to gate and cache a non-session identity, such as an agent API key, don't reach for a raw-headers escape hatch: resolve that key to its own distinct `Identity` in a custom `Authentication` backend (see the auth extension seam, gaps4 #42), for example `user_id = "agent:<id>"`. That identity then flows through `MediaCaller` like any other and gets its own safe cache bucket - one agent key can never collide with, or be served, another caller's cached decision.
 </Callout>
 
 ## Presets

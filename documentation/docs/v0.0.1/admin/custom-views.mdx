@@ -9,21 +9,25 @@ Custom views let you mount an arbitrary page inside the admin chrome - not tied 
 ## Register a custom view
 
 ```rust
+use umbral::prelude::*;
 use umbral_admin::{
-    AdminPlugin, AdminView, KpiPayload, Span, Widget,
+    AdminPlugin, AdminView, KpiPayload, Widget,
     WidgetDataFn, WidgetKind, WidgetPayload, WidgetSection,
 };
 
 fn revenue_widget() -> Widget {
-    Widget {
-        key: "reports_revenue",
-        title: "Total revenue".to_string(),
-        kind: WidgetKind::Kpi,
-        default_span: Span { cols: 3, rows: 1 },
-        permission: None,
-        default_period: None,
-        data: WidgetDataFn::new(|_user| async move {
-            let total = Order::objects().aggregate_sum("total").await.unwrap_or(0.0);
+    // `Widget` has no `Default`; build it with the constructor + chainable setters.
+    Widget::new(
+        "reports_revenue",
+        "Total revenue",
+        WidgetKind::Kpi,
+        WidgetDataFn::new(|_user| async move {
+            // `aggregate` returns a JSON object keyed by the aliases you ask for.
+            let row = Order::objects()
+                .aggregate(&[("total", Aggregate::sum("total"))])
+                .await
+                .unwrap_or_default();
+            let total = row.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
             WidgetPayload::Kpi(KpiPayload {
                 value: format!("${:.0}", total),
                 unit: None,
@@ -31,7 +35,8 @@ fn revenue_widget() -> Widget {
                 sparkline: None,
             })
         }),
-    }
+    )
+    .with_span(3, 1)
 }
 
 AdminPlugin::default()

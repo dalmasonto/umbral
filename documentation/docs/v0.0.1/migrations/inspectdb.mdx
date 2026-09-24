@@ -229,7 +229,7 @@ cargo run -- inspectdb --output plugins/imported --mark-applied
 
 The next `migrate` is a no-op until you actually change a model.
 
-`inspectdb` dispatches on the active backend: SQLite reads `sqlite_master` plus `PRAGMA table_info`, and Postgres reads `information_schema` (tables, columns, and the constraint joins that recover the primary key). Point the CLI at whichever backend `DATABASE_URL` resolves to; the same `--output` shape comes out either way. See the [Postgres backend page](/docs/v0.0.1/backends/postgres#inspectdb-postgres) for the Postgres specifics.
+`inspectdb` dispatches on the active backend: SQLite reads `sqlite_master` plus `PRAGMA table_info`, and Postgres reads `information_schema` (tables, columns, and the constraint joins that recover the primary key). Point the CLI at whichever backend `UMBRAL_DATABASE_URL` resolves to; the same `--output` shape comes out either way. See the [Postgres backend page](/docs/v0.0.1/backends/postgres#inspectdb-postgres) for the Postgres specifics.
 
 ## The SQLite type catalogue
 
@@ -244,11 +244,12 @@ The columns inspectdb's SQLite path knows about today (the Postgres path additio
   <Card icon="key" title="UUIDs" description="UUID → uuid::Uuid." />
 </CardGrid>
 
-A `JSON` / `JSONB`-declared column maps to `serde_json::Value` and a `BLOB` / `BYTEA` column maps to a bytes field. A SQL type still outside the catalogue (NUMERIC, custom types) makes `inspectdb` stop with an `UnsupportedColumnType` error naming the offending column. Either add a matching `SqlType` variant or edit the generated `models.rs` by hand.
+A `JSON` / `JSONB`-declared column maps to `serde_json::Value`, a `BLOB` / `BYTEA` column maps to a bytes field, and a `NUMERIC` / `DECIMAL` column maps to `rust_decimal::Decimal` on both backends. A SQL type still outside the catalogue (Postgres custom domains, exotic vendor types) makes `inspectdb` stop with an `UnsupportedColumnType` error naming the offending column. Either add a matching `SqlType` variant or edit the generated `models.rs` by hand.
 
 <Callout type="info">
-`umbral_migrations`, every `sqlite_*` internal table, and any table with an
-SQL type the catalogue doesn't know are excluded automatically.
+`umbral_migrations` and every `sqlite_*` internal table are skipped automatically.
+A table whose columns use an SQL type the catalogue doesn't know is **not** skipped -
+`inspectdb` stops with an `UnsupportedColumnType` error, so a table is never silently dropped from the output.
 </Callout>
 
 ## Still deferred

@@ -10,7 +10,9 @@ Every column constant `#[derive(Model)]` emits (`User::USERNAME`, `post::TITLE`,
 
 ```rust
 use umbral::prelude::*;
-use umbral_core::orm::post::post;
+// `#[derive(Model)]` on your `Post` generates the lowercase `post` column module
+// alongside it, so in your own crate you import it as:
+use crate::post;
 
 // `.name()` returns the same `&'static str` the token wraps.
 assert_eq!(post::TITLE.name(), "title");

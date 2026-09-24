@@ -22,8 +22,8 @@ One auth class is wired per `RestPlugin` (one plugin-wide backend, not per-resou
 ```rust
 App::builder()
     .authentication(ChainAuthentication::new(vec![
-        Box::new(SessionAuthentication::<AuthUser>::default()),
-        Box::new(BearerAuthentication::default()),
+        Arc::new(SessionAuthentication::default()),
+        Arc::new(BearerAuthentication::default()),
     ]))
     .plugin(RestPlugin::default())   // inherits it
     .plugin(GraphqlPlugin::new())    // inherits it

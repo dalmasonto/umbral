@@ -22,7 +22,7 @@ ORM signals use a `<event>:<table>` shape so the built-in set is namespaced away
 | `pre_update:<table>` | `Manager::save` (typed), before UPDATE **only** (never INSERT) | `{ previous, instance, actor }` |
 | `post_update:<table>` | `Manager::save` (typed), after UPDATE **only** (never INSERT) | `{ previous, instance, actor }` |
 | `pre_delete:<table>` | `Manager::delete_instance` (before) | `{ instance, actor }` |
-| `post_delete:<table>` | `Manager::delete_instance` (after) | `{ instance, actor }` |
+| `post_delete:<table>` | `Manager::delete_instance` (after), **and** per-row from `QuerySet::delete` / `DynQuerySet::delete` (full row when subscribed, else PK-only) | `{ instance, actor }` |
 | `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` (typed) **AND** `DynQuerySet::update_json` (dynamic) | `{ ids, created, actor }` |
 | `bulk_post_delete:<table>` | `QuerySet::delete` (typed) **AND** `DynQuerySet::delete` (dynamic) | `{ ids, actor }` |
 | `m2m_changed:<junction>` | `M2M::add`/`remove`/`set`/`clear` | `{ action, parent_id, added, removed, actor }` |
@@ -142,8 +142,8 @@ If a caller wants to identify itself independently of the ambient scope, an expl
 
 The framework deliberately splits row-level and bulk signal contracts:
 
-- **Per-row** signals (`pre_save:<t>`, `post_save:<t>`, `pre_delete:<t>`, `post_delete:<t>`) fire from `Manager::save` and `Manager::delete_instance`. Use these when the handler needs the full instance to do its work (slug auto-generation, cache key derivation, notification subject lines).
-- **Bulk** signals (`bulk_post_save:<t>`, `bulk_post_delete:<t>`) fire once per call from `bulk_create`, `update_values`, `update_expr`, and `QuerySet::delete` with the list of affected primary keys. Use these when the handler can work from just the PKs (audit logs, bulk cache invalidation, downstream re-indexing).
+- **Per-row** signals (`pre_save:<t>`, `post_save:<t>`, `pre_delete:<t>`, `post_delete:<t>`) fire from `Manager::save` and `Manager::delete_instance`. Use these when the handler needs the full instance to do its work (slug auto-generation, cache key derivation, notification subject lines). As of the delete-payload contract, `post_delete:<t>` **also** fires once per deleted row from `QuerySet::delete` and `DynQuerySet::delete` (REST/admin) - carrying the full row when a subscriber exists, PK-only otherwise (see the [Signals plugin](/docs/v0.0.1/plugins/signals) page for the exact shape).
+- **Bulk** signals (`bulk_post_save:<t>`, `bulk_post_delete:<t>`) fire once per call from `bulk_create`, `update_values`, `update_expr`, and `QuerySet::delete` with the list of affected primary keys. Use these when the handler can work from just the PKs (audit logs, bulk cache invalidation, downstream re-indexing). A bulk `QuerySet::delete` fires `bulk_post_delete` once **and** the per-row `post_delete` for each row.
 
 The split avoids fanning out N handler invocations on a 10k-row bulk import. A subscriber that needs more than the PKs from a bulk write can issue a single follow-up SELECT on the captured ids.
 
@@ -180,7 +180,7 @@ subscribe_async("post_update:product", |payload| async move {
 
 ### The old-row read is subscriber-gated
 
-Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists - checked via `umbral::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
+Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists - the engine checks this internally with `has_subscribers(name)` before snapshotting. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
 
 The snapshot is read just before the UPDATE, so a concurrent writer between the snapshot and the UPDATE is a best-effort TOCTOU window - `previous` reflects the row at snapshot time, not necessarily the exact row the UPDATE overwrote. For audit/cleanup use cases this is acceptable.
 

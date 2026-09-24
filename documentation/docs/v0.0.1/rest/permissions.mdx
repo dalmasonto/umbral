@@ -23,6 +23,7 @@ One permission class is attached **per resource** via `ResourceConfig::permissio
   <Card icon="user-check" title="IsAuthenticated" description="Require some identity. Anonymous gets 401, any authenticated user is allowed." />
   <Card icon="shield-check" title="IsStaff" description="Require identity AND is_staff. Anonymous gets 401, non-staff 403, staff allowed. Most admin-adjacent endpoints." />
   <Card icon="eye" title="ReadOnly" description="The default fallback. List / Retrieve open to everyone, Create / Update / Delete get 403. Public-read APIs." />
+  <Card icon="user-check" title="IsAuthenticatedOrReadOnly" description="DRF's read-for-all / write-for-authenticated preset. Safe (read) methods for anyone; anonymous writes get 401, authenticated writes pass." />
 </CardGrid>
 
 ```rust
@@ -46,7 +47,7 @@ let p = OrPermission::new(vec![Box::new(ReadOnly), Box::new(IsStaff)]);
 ResourceConfig::new("post").permission(p);
 ```
 
-`OrPermission` preserves the *strongest* error code from the failed children: a chain of `[IsAuthenticated, IsStaff]` on anonymous traffic surfaces as 401 (from `IsAuthenticated`) rather than 403 (from `IsStaff`). That matches the principle "tell the caller the more actionable thing first."
+`OrPermission` fails with the **last** child's error code (it tries each class in order and keeps the most recent failure). A chain of `[IsAuthenticated, IsStaff]` on anonymous traffic surfaces as 401 because *both* classes reject an anonymous caller with 401. Order the classes so the code you want the caller to see is last — put `IsAuthenticated` last when you'd rather return 401 "log in" than the preceding child's 403 "forbidden".
 
 ### AndPermission: pass only if all children pass
 

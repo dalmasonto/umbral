@@ -344,13 +344,15 @@ Under the hood `.on(...)` **does not open its own connection**. It loads the [re
   `group` is required and must match the group you `expose(...)`-d to. The realtime base path defaults to `/realtime`; override it with `new Umbral(url, { realtimePath: "/rt" })` if you remounted the plugin. `.on(...)` returns synchronously and is a **no-op during SSR** (no `document`), so a component can subscribe on mount and still render on the server.
 </Callout>
 
-## Hidden fields are write-only
+## Hidden fields are absent in both directions
 
-`hide(...)` is response-only, and the client mirrors that precisely:
+`hide(...)` removes a column from the REST surface entirely, and the client mirrors that precisely:
 
 - A hidden column (a `password_hash`, an internal `cost`) is **not** in the row type — the API never returns it, so the type never claims it.
 - It's **not** a filter or ordering key.
-- It **is** in the create/update body — a hidden field can be write-only: you set it, you just don't read it back.
+- It's **not** in the create/update body either — the server's mass-assignment guard strips a hidden column from every write, so a client can't set it. (See [Exposure](/docs/v0.0.1/rest/exposure).)
+
+If you want a field a caller can *set but never read back* — a genuinely write-only field, like a raw password on its way to hashing — reach for a `#[umbral(private)]` column, not `hide(...)`.
 
 Design rationale: `planning/gaps3.md` #38 and `planning/building/kikosi.md` #1.
 

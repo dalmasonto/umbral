@@ -162,7 +162,7 @@ Each returned `Value` is an object keyed by the requested column names, with val
 
 `values()` composes with `filter`, `exclude`, `order_by`, `limit`, `offset` exactly like the typed terminals. Unknown column names fail loudly with `sqlx::Error::Protocol` naming the offending column before any SQL runs.
 
-`.values("id", "title")` pins the projection to the named columns and returns JSON objects. The typed-tuple form (`values_list`) is deferred until a concrete consumer surfaces the need.
+`.values(&["id", "title"])` pins the projection to the named columns and returns JSON objects. The typed-tuple form (`values_list`) is deferred until a concrete consumer surfaces the need.
 
 ## DB-function helpers: `.lower()`, `.upper()`, `.length()`, `.trim()`, `.coalesce()`, `.concat()`, `.year()`, `.month()`, `.day()`
 

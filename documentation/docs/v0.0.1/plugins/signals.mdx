@@ -115,10 +115,11 @@ on_model::<AuthUser>().post_save(|user, created| async move {
     if created {
         let _ = enqueue(
             "send_welcome_email",
-            &WelcomeEmailPayload {
+            WelcomeEmailPayload {
                 user_id: user.id,
                 email: user.email.clone(),
             },
+            EnqueueOptions::default(),
         )
         .await;
     }

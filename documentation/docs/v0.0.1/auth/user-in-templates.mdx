@@ -55,7 +55,7 @@ Each request that touches a template pays one DB read (cookie to session to user
 
 ## What's happening under the hood
 
-`.with_user_in_templates()` flips a flag on the plugin. At build time, `AuthPlugin::wrap_router` (a [`Plugin::wrap_router`](/v0.0.1/plugins/the-plugin-trait) override) wraps the whole merged router in `axum::middleware::from_fn(user_context_layer)`:
+`.with_user_in_templates()` flips a flag on the plugin. At build time, `AuthPlugin::wrap_router` (a [`Plugin::wrap_router`](/docs/v0.0.1/plugins/the-plugin-trait) override) wraps the whole merged router in `axum::middleware::from_fn(user_context_layer)`:
 
 ```text
 Request → [user_context_layer]
@@ -192,6 +192,6 @@ Pages that include partials (the navbar in a wrapper, a sidebar everyone sees) a
 
 ## Related
 
-- [Login, logout, request.user](/v0.0.1/auth/login-and-request-user): extractors for handler-level user access
-- [Users and passwords](/v0.0.1/auth/users-and-passwords): the `AuthUser` model + password hashing
-- [Plugin trait](/v0.0.1/plugins/the-plugin-trait): what `wrap_router` is and how middleware is contributed
+- [Login, logout, request.user](/docs/v0.0.1/auth/login-and-request-user): extractors for handler-level user access
+- [Users and passwords](/docs/v0.0.1/auth/users-and-passwords): the `AuthUser` model + password hashing
+- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait): what `wrap_router` is and how middleware is contributed

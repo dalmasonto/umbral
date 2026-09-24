@@ -103,6 +103,35 @@ let allowed = has_perm_for_superuser(
 
 In practice you'd wrap this in a helper function on your app side.
 
+## Assigning groups and permissions in code
+
+`has_perm` / `user_perms` answer the read side. A set of free functions in `umbral_permissions` handles the write side - putting users in groups and granting or revoking permissions - without hand-writing SQL. Each takes the stringified user id, matching `has_perm`.
+
+```rust
+use umbral_permissions::{
+    add_user_to_group, remove_user_from_group, set_user_groups,
+    groups_for_user, group_ids_for_user, is_in_group,
+    grant_user_permission, revoke_user_permission,
+    direct_permissions_for_user, has_direct_user_permission,
+};
+
+// Group membership
+add_user_to_group(&user_id, &editors).await?;              // idempotent add
+remove_user_from_group(&user_id, &editors).await?;
+set_user_groups(&user_id, &[editors.id, authors.id]).await?; // replace the whole set
+let groups = groups_for_user(&user_id).await?;             // Vec<Group>
+let ids = group_ids_for_user(&user_id).await?;             // Vec<i64>
+let member = is_in_group(&user_id, editors.id).await?;     // bool
+
+// Direct (non-group) permission grants
+grant_user_permission(&user_id, &publish).await?;
+revoke_user_permission(&user_id, &publish).await?;
+let direct = direct_permissions_for_user(&user_id).await?;             // Vec<Permission>
+let has = has_direct_user_permission(&user_id, "publish_post").await?; // ignores groups
+```
+
+When you have the app label and codename as separate values, `has_perm_scoped(user_id, app_label, codename)` checks a grant without building the `"app.codename"` string yourself (use `has_perm` when you already have that combined form).
+
 ## Custom permissions
 
 Standard permissions auto-create. Custom ones (e.g., `"blog.feature_post"` for a non-CRUD action) need a manual INSERT, typically in a data migration:
@@ -274,7 +303,6 @@ In practice the single-layer form `permission_required_html(perm, login_url)` is
 - Built-in admin UI for editing group → permission and user → group assignments. The RBAC tables (`permissions_contenttype`, `permissions_permission`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission`, plus the framework-managed `permissions_group_permissions` M2M junction) are visible to the admin as standard models; an assignment-matrix UI (a permission-grid widget) lands in a follow-up.
 - `Meta.permissions = [...]` syntax for declaring custom perms on a model - custom perms ship via direct INSERT in a data migration today.
 - RLS predicate injection from permissions - that's `umbral-rls`'s responsibility.
-- Object-level permissions (per-row grants) - this would land as a follow-up crate.
 
 ## See also
 

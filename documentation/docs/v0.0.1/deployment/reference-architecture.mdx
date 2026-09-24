@@ -93,7 +93,7 @@ Everything topology 2 has, plus the external services the batteries-on plugins r
 
 Component by component:
 
-- **Postgres**: the system of record. Add read replicas and point `UMBRAL_REPLICA_URL` at them for read routing.
+- **Postgres**: the system of record. Add read replicas and route reads to them with a [`DatabaseRouter`](/docs/v0.0.1/orm/database-router) - register the replica as a named database pool and split reads from writes. (There is no `UMBRAL_REPLICA_URL` setting; the framework routes by named alias, not by a magic env var.)
 - **Redis** (`UMBRAL_REDIS_URL`): cache backend today. It is *also* the intended backend for distributed throttling and a task broker, both on the roadmap (see [Roadmap and honest gaps](#roadmap-and-honest-gaps)). Provision it now if you want cache; the other two land later.
 - **S3-compatible object storage**: static assets (`collectstatic --storage s3`) and user-uploaded media, via the storage plugin. Works with AWS S3, Cloudflare R2, MinIO, Backblaze B2, or any S3 API.
 - **OpenTelemetry collector**: receives OTLP/gRPC spans from every process (web, worker, beat). One trace per HTTP request out of the box under the `otel` feature.
@@ -442,7 +442,6 @@ umbral reads configuration from `UMBRAL_*` environment variables (Stage 2 keeps 
 | `UMBRAL_ENVIRONMENT` | `prod` / `dev`; controls autodetect-on-boot and secure defaults. |
 | `UMBRAL_SECRET_KEY` | Signing key for sessions, CSRF, signed URLs. Must be set, stable, and secret in prod. |
 | `UMBRAL_DATABASE_URL` | Primary Postgres DSN. |
-| `UMBRAL_REPLICA_URL` | Optional read-replica DSN for read routing. |
 | `UMBRAL_REDIS_URL` | Cache backend (and future throttle/broker). |
 | `UMBRAL_ALLOWED_HOSTS` | Comma-separated hostnames the app will answer to. |
 | `UMBRAL_BIND_ADDR` | Listen address (e.g. `0.0.0.0:8000` or `127.0.0.1:8000`). |
