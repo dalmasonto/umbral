@@ -1,0 +1,51 @@
+---
+title: Materialized (computed) fields
+description: Declare a column that the framework keeps fresh automatically whenever a source table changes - no manual recompute at every write site.
+sidebar_position: 27
+icon: refresh-cw
+tags: [orm, computed, denormalization, cache]
+---
+
+# Materialized (computed) fields
+
+Reach for a materialized field when a column's value is *derived* from another table - a cached total, a projected status, a denormalized count - and you don't want to remember to recompute it at every place that writes the source. You declare the dependency and the recompute once; the framework keeps the column current on every source insert, update, and delete.
+
+<Callout type="info">
+  **Not the same thing as a materialized view.** A "materialized field" (this page) is a per-row column on an ordinary table that the framework recomputes for you, declared via `App::builder().materialize(...)`. A Postgres "materialized view" (`#[umbral(materialized_view = "...")]`, see [Database views](/docs/v0.0.1/orm/database-views)) is a whole read-only table backed by a stored query, refreshed explicitly. Different mechanism, different trade-offs - don't confuse the two.
+</Callout>
+
+## Example
+
+```rust
+App::builder()
+    .model::<Booking>()
+    .model::<Rsvp>()
+    .materialize(
+        Materialized::<Booking>::field(booking::PAYMENT_TOTAL)
+            .from::<Rsvp, _, _>(|r: &Rsvp| Some(r.booking_id))   // a changed Rsvp → its Booking
+            .recompute_typed(|booking_id: i64| async move {      // the fresh value
+                let agg = Rsvp::objects()
+                    .filter(rsvp::BOOKING_ID.eq(booking_id))
+                    .aggregate(&[("total", Aggregate::sum("amount"))])
+                    .await.unwrap_or_default();
+                agg["total"].as_i64().unwrap_or(0)
+            }),
+    )
+    .build()?;
+```
+
+Now `Booking.payment_total` updates itself whenever an `Rsvp` is created, changed, or deleted - no code at the write sites.
+
+<Callout type="info">
+  **Eager, after-commit.** The recompute runs after the source write commits and reads the committed rows, so it's correct but slightly eventually-consistent within the same request. It fires nothing for a transaction that rolls back. The write-back goes through the ORM (`filter_pk_eq`, which coerces the target's primary key from `i64`, `String`, or `Uuid` alike), so it works on every backend and every primary-key type.
+</Callout>
+
+<Callout type="warning">
+  **v1 scope.** One computed column per declaration, stored in the target's own column, recomputed by your closure. Cached-aggregate integration, deferred (background-task) refresh, and cross-field cycle detection are deferred - a direct self-cascade is caught and stopped, but a multi-field cycle is out of scope. See the design spec for the full boundary.
+</Callout>
+
+## See also
+
+- Design + rationale: `docs/superpowers/specs/2026-09-24-materialized-computed-fields-design.md`
+- [Signals](/docs/v0.0.1/orm/signals) - the after-commit fan-out this builds on.
+- [Database views](/docs/v0.0.1/orm/database-views) - the DB-level "materialized view" feature, a different tool for a different shape of problem.
