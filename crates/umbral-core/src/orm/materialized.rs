@@ -110,6 +110,38 @@ impl<M: Model> Materialized<M> {
     }
 }
 
+tokio::task_local! {
+    static ACTIVE: std::cell::RefCell<std::collections::HashSet<(String, String)>>;
+}
+
+/// Run `fut` unless `(table, col)` is already being recomputed in this task
+/// (a self-cascade); a re-entry logs a warning and skips. Nested *different*
+/// keys run (legit multi-field cascade). Per-task, so independent requests
+/// never block each other.
+pub(crate) async fn guarded(table: String, col: String, fut: impl Future<Output = ()> + Send) {
+    let key = (table.clone(), col.clone());
+    let entered = ACTIVE.try_with(|set| set.borrow_mut().insert(key.clone()));
+    match entered {
+        Ok(true) => {
+            fut.await;
+            let _ = ACTIVE.try_with(|set| set.borrow_mut().remove(&key));
+        }
+        Ok(false) => {
+            tracing::warn!(
+                table = %table, column = %col,
+                "umbral: materialized field recompute re-entered the same field; \
+                 skipping to break a cycle",
+            );
+        }
+        Err(_) => {
+            // No scope yet — establish one for the top-level recompute.
+            let mut init = std::collections::HashSet::new();
+            init.insert(key);
+            ACTIVE.scope(std::cell::RefCell::new(init), fut).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! gaps6 #7 — the Materialized<M> builder erases M / S / Pk / V into a
@@ -134,10 +166,13 @@ mod tests {
     //! implementing `Model` directly against `crate::orm::Model` sidesteps
     //! the facade entirely and avoids the diamond.
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use serde::Deserialize;
     use serde_json::json;
 
-    use super::Materialized;
+    use super::{Materialized, guarded};
     use crate::orm::{FieldSpec, Model, SqlType};
 
     #[derive(Debug, Clone, Deserialize)]
@@ -221,5 +256,71 @@ mod tests {
         // recompute: pk JSON in → value JSON out
         let out = (spec.recompute)(json!(42)).await;
         assert_eq!(out, Some(json!(420)));
+    }
+
+    // gaps6 #7 — the materialized re-entrancy guard: a nested recompute of the
+    // SAME (table,col) is skipped (breaks self-cycles); a nested DIFFERENT key
+    // runs (legit cascade); two independent tasks never block each other.
+    //
+    // In-crate per the controller ruling for Task 3: `guarded` is `pub(crate)`,
+    // so an integration test under `tests/` (a separate crate) can't see it.
+
+    #[tokio::test]
+    async fn re_entry_of_the_same_key_is_skipped() {
+        let inner_ran = Arc::new(AtomicUsize::new(0));
+        let ran = inner_ran.clone();
+        guarded("t".into(), "c".into(), async move {
+            // re-enter the SAME key from within — must be skipped
+            let ran2 = ran.clone();
+            guarded("t".into(), "c".into(), async move {
+                ran2.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+        })
+        .await;
+        assert_eq!(inner_ran.load(Ordering::SeqCst), 0, "same-key re-entry must be skipped");
+    }
+
+    #[tokio::test]
+    async fn nested_different_key_runs() {
+        let inner_ran = Arc::new(AtomicUsize::new(0));
+        let ran = inner_ran.clone();
+        guarded("t".into(), "c".into(), async move {
+            let ran2 = ran.clone();
+            guarded("other".into(), "c".into(), async move {
+                ran2.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+        })
+        .await;
+        assert_eq!(inner_ran.load(Ordering::SeqCst), 1, "a different key nested under one must run");
+    }
+
+    #[tokio::test]
+    async fn guard_is_per_task_not_global() {
+        // Two independent tasks recomputing the same (table,col) concurrently must
+        // BOTH run — the guard is per-task, not a global lock.
+        let ran = Arc::new(AtomicUsize::new(0));
+        let a = {
+            let r = ran.clone();
+            tokio::spawn(async move {
+                guarded("t".into(), "c".into(), async move {
+                    r.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+            })
+        };
+        let b = {
+            let r = ran.clone();
+            tokio::spawn(async move {
+                guarded("t".into(), "c".into(), async move {
+                    r.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+            })
+        };
+        a.await.unwrap();
+        b.await.unwrap();
+        assert_eq!(ran.load(Ordering::SeqCst), 2, "independent tasks must not block each other");
     }
 }
