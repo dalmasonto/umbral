@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.12...umbral-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* AppBuilder::materialize wires after-commit computed-field refresh
+- *(core,cache)* TaggedCache ambient contract for cross-plugin tagged caching
+- *(core)* middleware registry — introspect active middleware by plugin and order
+- *(oauth)* SPA-login ergonomics + boot-time safety checks (gaps4 #93)
+- *(orm)* synchronous in-transaction after-create hooks (gaps4 #92)
+- *(orm)* #[derive(New)] partial insert shape + impl Into<T> on create (gaps4 #88)
+- *(orm-rest)* declarative relation-path owner scope. Closes gaps4 #78
+- *(orm)* prefetch_map — batched reverse-FK with no declared field. Closes gaps4 #75
+- *(orm)* re-export Relation and document the relation-trait scoping rule
+- *(orm)* Relation<T> handle with single forward-FK resolution
+
+### Other
+
+- Merge feat/orm-relation-traversal into main: consolidate all gaps4 work
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.11...umbral-v0.0.12) - 2026-08-16
 
 ### Added

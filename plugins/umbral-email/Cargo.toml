@@ -25,9 +25,9 @@ api = ["dep:reqwest"]
 auth = ["dep:umbral-auth"]
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.12" }
+umbral = { path = "../../crates/umbral", version = "0.0.13" }
 # Optional adapter target for `auth_mailer()`. See the `auth` feature above.
-umbral-auth = { path = "../umbral-auth", version = "0.0.12", optional = true, default-features = false }
+umbral-auth = { path = "../umbral-auth", version = "0.0.13", optional = true, default-features = false }
 # Powers the public `EmailBackend` trait (custom senders) and the `auth`
 # feature's `umbral_auth::AuthMailer` adapter.
 async-trait = "0.1"

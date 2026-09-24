@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.12...umbral-cli-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(cli)* unified help + --version, and `umbral plugin add`
+- *(cli)* startproject generates a Cargo workspace with [workspace.dependencies] (gaps4 #90)
+- *(core,cli)* umbral::sqlx re-export + umbral doctor (gaps4 #65)
+
+### Fixed
+
+- *(cli)* a bare `help` after a scaffold command shows help, not a plugin
+- *(cli)* dispatch scaffolders from the app-embedded CLI too
+- *(macros,auth)* single-source choices serde, guard m2m skip, add app_url
+- *(cli)* list the out-of-band scaffold commands in help
+
+### Other
+
+- *(cli)* remove the deprecated startapp command and scaffold_app
+- *(cli)* lock the help⟺dispatch command invariant
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.11...umbral-cli-v0.0.12) - 2026-08-16
 
 ### Added

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-cache-v0.0.12...umbral-cache-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(core,cache)* TaggedCache ambient contract for cross-plugin tagged caching
+- *(cache)* redis backend tag index + bust_tag
+- *(cache)* sqlite backend tag index + bust_tag
+- *(cache)* tagged get_or_compute + bust_tag primitive (memory backend)
+
+### Fixed
+
+- *(cache)* guard media-access store against a bust write-skew (gaps6 #12)
+- *(cache)* redis tag-index reverse-prune on delete/clear/retag (gaps6 #11)
+- *(cache)* sqlite tag-index pruning + swallow-with-warn parity
+- *(cache)* dedupe TTL calc + prune stale tag-index entries
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+- *(cache)* bound BustLog per-tag map to prevent unbounded growth (gaps6 #19)
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-cache-v0.0.11...umbral-cache-v0.0.12) - 2026-08-16
 
 ### Other

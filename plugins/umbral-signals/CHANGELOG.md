@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-signals-v0.0.12...umbral-signals-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* synchronous in-transaction after-create hooks (gaps4 #92)
+
+### Fixed
+
+- *(orm)* redact signal_skip fields from full-row post_delete payloads
+
+### Other
+
+- *(signals)* reconcile post_delete docs + tests with full-row payload
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-signals-v0.0.11...umbral-signals-v0.0.12) - 2026-08-16
 
 ### Other

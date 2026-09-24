@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.12...umbral-oauth-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(oauth)* SPA-login ergonomics + boot-time safety checks (gaps4 #93)
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.11...umbral-oauth-v0.0.12) - 2026-08-16
 
 ### Other
