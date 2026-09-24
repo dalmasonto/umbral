@@ -276,6 +276,8 @@ pub struct AppBuilder {
     /// fill it.
     route_paths: Vec<crate::routes::RouteSpec>,
     models: Vec<ModelMeta>,
+    /// gaps6 #7 — collected materialized-field specs; subscribed in `build()`.
+    materialized: Vec<crate::orm::MaterializedSpec>,
     /// gaps3 #46 — collect link-registered models at build time.
     auto_models: bool,
     /// gaps4 #42 — the app-wide default [`Authentication`] backend,
@@ -378,6 +380,7 @@ impl Default for AppBuilder {
             router: None,
             route_paths: Vec::new(),
             models: Vec::new(),
+            materialized: Vec::new(),
             auto_models: false,
             authentication: None,
             plugins: Vec::new(),
@@ -545,6 +548,14 @@ impl AppBuilder {
     /// `Plugin::models()` discovered through the plugin registry.
     pub fn model<T: Model>(mut self) -> Self {
         self.models.push(ModelMeta::for_::<T>());
+        self
+    }
+
+    /// Declare a materialized (computed) field: a column on `M` the framework
+    /// keeps fresh whenever a declared source table changes (gaps6 #7). See
+    /// [`crate::orm::Materialized`].
+    pub fn materialize(mut self, spec: crate::orm::MaterializedSpec) -> Self {
+        self.materialized.push(spec);
         self
     }
 
@@ -1950,6 +1961,12 @@ impl AppBuilder {
                 },
             ),
         );
+
+        // gaps6 #7 — subscribe every materialized field's after-commit
+        // recompute handlers. Validated first (see Task 5).
+        for spec in &self.materialized {
+            crate::orm::materialized::install(spec);
+        }
 
         // Phase 6 — `on_ready` USED to fire here. It doesn't any more: the hooks
         // seed content and backfill rows, and `build()` runs before the CLI has

@@ -142,6 +142,56 @@ pub(crate) async fn guarded(table: String, col: String, fut: impl Future<Output 
     }
 }
 
+/// Subscribe the after-commit recompute handlers for one spec. Called from
+/// `AppBuilder::build()`. Subscription is ambient (the signals registry is
+/// process-global), so no handle is threaded.
+pub(crate) fn install(spec: &MaterializedSpec) {
+    for source in &spec.sources {
+        let target_meta = spec.target_meta.clone();
+        let target_col = spec.target_col.clone();
+        let extract = source.extract.clone();
+        let recompute = spec.recompute.clone();
+
+        let handler = move |payload: &Value| {
+            let target_meta = target_meta.clone();
+            let target_col = target_col.clone();
+            let extract = extract.clone();
+            let recompute = recompute.clone();
+            // Delete payloads carry the full pre-delete row when a subscriber
+            // exists (gaps6 #14/#15) — which we are — so `instance` has the FK.
+            let instance = payload.get("instance").cloned().unwrap_or(Value::Null);
+            async move {
+                let Some(pk_json) = extract(&instance) else {
+                    return;
+                };
+                let table = target_meta.table.clone();
+                let col = target_col.clone();
+                guarded(table, col, async move {
+                    let Some(value) = recompute(pk_json.clone()).await else {
+                        return;
+                    };
+                    let mut body = serde_json::Map::new();
+                    body.insert(target_col.clone(), value);
+                    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&target_meta)
+                        .filter_pk_eq(&pk_json)
+                        .update_json(&body)
+                        .await
+                    {
+                        tracing::error!(
+                            table = %target_meta.table, column = %target_col,
+                            "umbral: materialized field write-back failed: {e:?}",
+                        );
+                    }
+                })
+                .await;
+            }
+        };
+
+        crate::signals::subscribe_async(&format!("post_save:{}", source.table), handler.clone());
+        crate::signals::subscribe_async(&format!("post_delete:{}", source.table), handler);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! gaps6 #7 — the Materialized<M> builder erases M / S / Pk / V into a
@@ -166,8 +216,8 @@ mod tests {
     //! implementing `Model` directly against `crate::orm::Model` sidesteps
     //! the facade entirely and avoids the diamond.
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde::Deserialize;
     use serde_json::json;
@@ -278,7 +328,11 @@ mod tests {
             .await;
         })
         .await;
-        assert_eq!(inner_ran.load(Ordering::SeqCst), 0, "same-key re-entry must be skipped");
+        assert_eq!(
+            inner_ran.load(Ordering::SeqCst),
+            0,
+            "same-key re-entry must be skipped"
+        );
     }
 
     #[tokio::test]
@@ -293,7 +347,11 @@ mod tests {
             .await;
         })
         .await;
-        assert_eq!(inner_ran.load(Ordering::SeqCst), 1, "a different key nested under one must run");
+        assert_eq!(
+            inner_ran.load(Ordering::SeqCst),
+            1,
+            "a different key nested under one must run"
+        );
     }
 
     #[tokio::test]
@@ -321,6 +379,10 @@ mod tests {
         };
         a.await.unwrap();
         b.await.unwrap();
-        assert_eq!(ran.load(Ordering::SeqCst), 2, "independent tasks must not block each other");
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            2,
+            "independent tasks must not block each other"
+        );
     }
 }
