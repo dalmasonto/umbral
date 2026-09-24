@@ -15,6 +15,15 @@ use crate::orm::Model;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Erased source-row -> affected-target-pk extractor. Aliased (rather than
+/// spelled out inline on `SourceReg::extract`) purely to keep
+/// `clippy::type_complexity` quiet; the type itself is unchanged.
+type ExtractFn = Arc<dyn Fn(&Value) -> Option<Value> + Send + Sync>;
+
+/// Erased target-pk -> recomputed-value closure. Aliased for the same
+/// `clippy::type_complexity` reason as [`ExtractFn`].
+type RecomputeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, Option<Value>> + Send + Sync>;
+
 /// One source table for a materialized field: its table name plus an erased
 /// extractor that decodes a source-row payload into the affected target pk.
 ///
@@ -25,7 +34,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// `tests` below) precisely so it can.
 pub struct SourceReg {
     pub(crate) table: String,
-    pub(crate) extract: Arc<dyn Fn(&Value) -> Option<Value> + Send + Sync>,
+    pub(crate) extract: ExtractFn,
 }
 
 /// The fully type-erased, collectible form of a materialized-field declaration.
@@ -39,7 +48,7 @@ pub struct MaterializedSpec {
     pub(crate) target_meta: ModelMeta,
     pub(crate) target_col: String,
     pub(crate) sources: Vec<SourceReg>,
-    pub(crate) recompute: Arc<dyn Fn(Value) -> BoxFuture<'static, Option<Value>> + Send + Sync>,
+    pub(crate) recompute: RecomputeFn,
 }
 
 /// Builder for a single computed column on target model `M`.

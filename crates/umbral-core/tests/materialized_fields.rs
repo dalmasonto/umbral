@@ -22,6 +22,26 @@ pub struct MfRsvp {
     pub amount: i64,
 }
 
+// A second, independent target/source pair whose `key_fn` genuinely returns
+// `None` for some rows (a nullable FK), used to exercise the handler's
+// `extract -> None` skip branch (materialized.rs: `let Some(pk_json) =
+// extract(&instance) else { return }`) — distinct from
+// `MfBooking`/`MfRsvp`, whose `key_fn` always returns `Some`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "mf_target2")]
+pub struct MfTarget2 {
+    pub id: i64,
+    pub cached: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "mf_source2")]
+pub struct MfSource2 {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub amount: i64,
+}
+
 #[derive(Debug)]
 struct Boom;
 impl std::fmt::Display for Boom {
@@ -68,6 +88,8 @@ async fn boot() -> sqlx::SqlitePool {
             .database("default", pool.clone())
             .model::<MfBooking>()
             .model::<MfRsvp>()
+            .model::<MfTarget2>()
+            .model::<MfSource2>()
             .materialize(
                 Materialized::<MfBooking>::field(mf_booking::PAYMENT_TOTAL)
                     .from::<MfRsvp, _, _>(|r: &MfRsvp| Some(r.booking_id))
@@ -78,6 +100,19 @@ async fn boot() -> sqlx::SqlitePool {
                             .await
                             .unwrap_or_default();
                         agg["total"].as_i64().unwrap_or(0)
+                    }),
+            )
+            // key_fn returns `s.parent_id` directly (already `Option<i64>`) —
+            // a source row with `parent_id: None` must never reach recompute.
+            .materialize(
+                Materialized::<MfTarget2>::field(mf_target2::CACHED)
+                    .from::<MfSource2, _, _>(|s: &MfSource2| s.parent_id)
+                    .recompute_typed(|_parent_id: i64| async move {
+                        // Never runs in the None-key test — the extract ->
+                        // None branch returns before recompute is called. A
+                        // sentinel value makes an accidental invocation
+                        // obvious if this assumption ever breaks.
+                        999_i64
                     }),
             )
             .build()
@@ -205,11 +240,47 @@ async fn a_rolled_back_source_write_does_not_refresh() {
 }
 
 #[tokio::test]
-async fn a_source_row_with_a_null_key_is_skipped() {
-    // key_fn here always returns Some, so simulate a null key by pointing at a
-    // booking id that doesn't exist: the recompute runs but updates zero rows —
-    // no panic, no error. (The null-FK Option::None path is unit-tested in
-    // materialized_spec.rs; this guards the write-back no-op.)
+async fn a_source_row_whose_key_fn_returns_none_triggers_no_refresh() {
+    // MfSource2::parent_id is `Option<i64>`, and `key_fn = |s| s.parent_id`,
+    // so a row with `parent_id: None` makes `extract(&instance)` return
+    // `None` — the handler's `let Some(pk_json) = extract(&instance) else {
+    // return }` branch. Prove the recompute never ran (not just "no panic"):
+    // seed the target with a known cached value, insert the null-key source
+    // row, and read the target back — it must be untouched, because a run
+    // would have overwritten it with the sentinel 999.
+    let _g = lock().lock().await;
+    let _pool = boot().await;
+    let t = MfTarget2::objects()
+        .create(MfTarget2 { id: 0, cached: 7 })
+        .await
+        .unwrap();
+
+    MfSource2::objects()
+        .create(MfSource2 {
+            id: 0,
+            parent_id: None,
+            amount: 5,
+        })
+        .await
+        .unwrap();
+
+    let refreshed = MfTarget2::objects()
+        .filter(mf_target2::ID.eq(t.id))
+        .get()
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed.cached, 7,
+        "a None key_fn result must skip the recompute entirely — cached value stays untouched"
+    );
+}
+
+#[tokio::test]
+async fn a_source_row_pointing_at_a_nonexistent_target_is_a_silent_no_op() {
+    // Here key_fn always returns Some, so simulate an orphaned FK by
+    // pointing at a booking id that doesn't exist: extract() succeeds,
+    // recompute runs, and the write-back matches zero rows via
+    // filter_pk_eq — no panic, no error, nothing asserted beyond that.
     let _g = lock().lock().await;
     let _pool = boot().await;
     MfRsvp::objects()
