@@ -90,4 +90,4 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # behavioral test. This is a dev-dependency, so it does NOT create a runtime
 # plugin→plugin dependency (umbral-storage never depends on umbral-cache at
 # runtime; both talk to the ambient contract in umbral::cache).
-umbral-cache = { path = "../umbral-cache", version = "0.0.13" }
+umbral-cache = { path = "../umbral-cache" }
