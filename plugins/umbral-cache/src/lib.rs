@@ -163,6 +163,12 @@ pub struct StoreSpec {
 
 // ── Cache handle ─────────────────────────────────────────────────────────────
 
+/// Upper bound on the number of per-tag entries `BustLog.last` keeps (gaps6
+/// #19). The map is compacted down to this many most-recently-busted tags once
+/// it grows past twice this, so a long-lived process with high-cardinality
+/// tags (`media:doc:<id>`) can't leak memory one-entry-per-tag-ever-busted.
+const BUST_LOG_CAP: usize = 8192;
+
 /// Process-wide bust bookkeeping shared by every clone of a [`Cache`] handle,
 /// used to detect a `bust_tag` that races a miss-compute (gaps6 #12). A single
 /// monotonic `counter` advances on each bust; `last` remembers, per tag, the
@@ -188,7 +194,20 @@ impl BustLog {
             .counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1;
-        self.last.lock().await.insert(tag.to_string(), e);
+        let mut last = self.last.lock().await;
+        last.insert(tag.to_string(), e);
+        // gaps6 #19: bound the map. Once it grows past twice the cap, keep only
+        // the `BUST_LOG_CAP` most-recently-busted tags (largest epochs). Dropping
+        // older entries can, in the astronomically unlikely worst case (a store
+        // whose compute window outlived `BUST_LOG_CAP` distinct busts), miss one
+        // invalidation — bounded by that decision's TTL, the documented backstop.
+        // Amortized O(1): one O(n) compaction per `BUST_LOG_CAP` inserts.
+        if last.len() > BUST_LOG_CAP * 2 {
+            let mut entries: Vec<(String, u64)> = last.drain().collect();
+            entries.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            entries.truncate(BUST_LOG_CAP);
+            *last = entries.into_iter().collect();
+        }
     }
 
     /// True if any of `tags` was busted at an epoch after `since`.
@@ -1123,5 +1142,48 @@ impl Plugin for CachePlugin {
             None => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod bust_log_tests {
+    use super::{BUST_LOG_CAP, BustLog};
+
+    /// gaps6 #19: `BustLog.last` must stay bounded no matter how many distinct
+    /// tags are ever busted — otherwise a long-lived process leaks one entry
+    /// per revoked `media:doc:<id>` forever.
+    #[tokio::test]
+    async fn bust_log_last_is_bounded_under_many_distinct_tags() {
+        let log = BustLog::default();
+        for i in 0..(BUST_LOG_CAP * 2 + 1) {
+            log.record(&format!("media:doc:{i}")).await;
+        }
+        let len = log.last.lock().await.len();
+        assert!(
+            len <= BUST_LOG_CAP,
+            "BustLog.last must compact to at most BUST_LOG_CAP ({BUST_LOG_CAP}); got {len}",
+        );
+    }
+
+    /// Compaction keeps the MOST-RECENTLY-busted tags (largest epochs): a tag
+    /// busted just before the compaction must still be detectable afterward.
+    #[tokio::test]
+    async fn compaction_retains_the_most_recent_busts() {
+        let log = BustLog::default();
+        // Fill to just under the compaction threshold.
+        for i in 0..(BUST_LOG_CAP * 2 - 1) {
+            log.record(&format!("old:{i}")).await;
+        }
+        let before = log.current();
+        // Bust a fresh tag, then push past the threshold to trigger compaction.
+        log.record("fresh:tag").await;
+        for i in 0..5 {
+            log.record(&format!("filler:{i}")).await;
+        }
+        // The fresh bust (epoch > `before`) must survive compaction.
+        assert!(
+            log.busted_since(&["fresh:tag".to_string()], before).await,
+            "a recent bust must not be evicted by compaction",
+        );
     }
 }
