@@ -7,8 +7,6 @@
 //! 3. /options/resolve?ids=1,2 returns labels.
 //! 4. Unauthenticated request is blocked (redirect or 403).
 
-#![allow(dead_code)]
-
 use axum::body::Body;
 
 use axum::http::{Request, StatusCode, header};

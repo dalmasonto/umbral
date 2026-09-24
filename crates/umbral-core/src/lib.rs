@@ -4,6 +4,8 @@
 //!
 //! Status: M0 shipped — Settings, db pool, web re-exports, App builder.
 
+#![allow(clippy::result_large_err)] // rich error enums; boxing every Result would be a wide API change
+
 pub mod api_error;
 pub mod app;
 pub mod auth_contract;

@@ -14,7 +14,7 @@ pub(crate) enum AdminError {
     Render(String),
     Sqlx(sqlx::Error),
     /// gaps2 #12: structured umbral-validator failure with per-field
-    /// + non-field error accessors. Lets `sanitise_form_error`
+    /// and non-field error accessors. Lets `sanitise_form_error`
     /// render the specific message (FK target missing, validator
     /// rule failure, required-field miss) instead of flattening
     /// every write-time failure to "database error".

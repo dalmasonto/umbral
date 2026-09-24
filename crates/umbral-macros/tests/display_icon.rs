@@ -99,6 +99,7 @@ struct SiteSettings {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)] // asserting the derive-generated const is the point
 fn singleton_attribute_flips_const() {
     assert!(
         <SiteSettings as Model>::SINGLETON,
@@ -112,6 +113,7 @@ fn singleton_attribute_flips_const() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)] // asserting the derive-generated const is the point
 fn singleton_defaults_to_false_when_unset() {
     assert!(
         !<BlogPost as Model>::SINGLETON,

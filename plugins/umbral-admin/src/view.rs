@@ -750,15 +750,12 @@ pub(crate) async fn form_m2m_fields_for(
         } else {
             vec![child_pk_col.name.clone(), label_col_name.clone()]
         };
-        let candidate_rows = match umbral::orm::DynQuerySet::for_meta(&target)
+        let candidate_rows = umbral::orm::DynQuerySet::for_meta(&target)
             .select_cols(&select_cols)
             .limit(M2M_OPTION_CAP)
             .fetch_as_strings()
             .await
-        {
-            Ok(rows) => rows,
-            Err(_) => Vec::new(),
-        };
+            .unwrap_or_default();
         let mut candidates: Vec<M2MCandidate> = candidate_rows
             .into_iter()
             .filter_map(|row| {
@@ -788,17 +785,14 @@ pub(crate) async fn form_m2m_fields_for(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                match umbral::orm::load_junction_selection(
+                umbral::orm::load_junction_selection(
                     &junction_table,
                     parent_value,
                     child_pk_col.ty,
                     Some(parent.name.as_str()),
                 )
                 .await
-                {
-                    Ok(v) => v,
-                    Err(_) => Vec::new(),
-                }
+                .unwrap_or_default()
             }
             _ => Vec::new(),
         };

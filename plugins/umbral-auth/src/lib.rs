@@ -88,6 +88,8 @@
 //! which depends on `umbral-auth`, so the reverse `umbral-auth -> umbral-tasks`
 //! edge would cycle).
 
+#![allow(clippy::result_large_err)] // rich error enums; boxing every Result would be a wide API change
+
 pub mod auth_routes;
 pub mod bearer_auth;
 pub mod challenge;
@@ -1923,6 +1925,7 @@ fn validate_email_input(v: &str) -> Result<(), String> {
 /// `validate` gates every source: a flag/env value that fails it is a
 /// hard error (scripts must not half-succeed), while the interactive
 /// prompt prints the reason and asks again.
+#[allow(clippy::type_complexity)] // `validate` is an optional validator fn; clear as-is
 fn resolve_or_prompt(
     cli_value: Option<String>,
     label: &str,

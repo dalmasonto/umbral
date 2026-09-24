@@ -8,8 +8,6 @@
 //! 4. Unknown action key returns 404.
 //! 5. delete_selected action deletes the row and returns Toast trigger.
 
-#![allow(dead_code)]
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;

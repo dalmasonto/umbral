@@ -493,6 +493,7 @@ async fn resolve_widget_params(
     // Without this, clicking "30d" on a widget filtered to status=paid would
     // navigate to `?period=30d` alone and silently drop the status — the filter
     // strip would lie about what the user is looking at.
+    #[allow(clippy::type_complexity)] // a flat tuple row; a named type wouldn't read clearer
     let snapshot: Vec<(String, Option<String>, Option<String>, Option<String>)> = filters
         .iter()
         .map(|f| {

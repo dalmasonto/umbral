@@ -272,7 +272,6 @@ async fn ensure_standard_permissions(_pool: &umbral::db::DbPool) -> Result<(), s
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use umbral::migrate::ModelMeta;
 
     /// gaps2 #80g: the app_label used for permission codenames now comes

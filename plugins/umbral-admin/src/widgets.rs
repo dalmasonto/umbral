@@ -68,8 +68,8 @@ impl Default for Span {
 pub enum WidgetKind {
     /// Simple single-value KPI (legacy, kept for backwards compat).
     Kpi,
-    /// Shop-style summary card: title + icon + small unit / subtitle
-    /// + large humanized value + optional growth-vs-previous-period.
+    /// Shop-style summary card: title + icon + small unit / subtitle,
+    /// a large humanized value, and optional growth-vs-previous-period.
     /// The everyday "Total sales / Orders / Customers" tile.
     Card,
     Line,

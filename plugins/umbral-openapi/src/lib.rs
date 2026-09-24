@@ -1616,6 +1616,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the caps emphasises the negative assertion
     fn noedit_does_NOT_render_as_read_only() {
         // Decoupled from API contract: `noedit` is purely an admin
         // EDIT-form hint. The field stays writable in the spec so a

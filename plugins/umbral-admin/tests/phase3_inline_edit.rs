@@ -7,8 +7,6 @@
 //! 3. Read-only field returns 403.
 //! 4. POST for a nonexistent row returns OK or 404 (UPDATE affects 0 rows but no server error).
 
-#![allow(dead_code)]
-
 use axum::body::Body;
 
 use axum::http::{Request, StatusCode, header};

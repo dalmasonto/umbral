@@ -46,6 +46,8 @@
 //!   `umbral-tasks` periodic job, or a `clearsessions` management
 //!   command, lands when one or the other is real.
 
+#![allow(clippy::result_large_err)] // rich error enums; boxing every Result would be a wide API change
+
 pub mod cookie_store;
 #[cfg(feature = "redis")]
 pub mod redis_store;

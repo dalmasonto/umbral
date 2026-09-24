@@ -15,6 +15,8 @@
 //! `(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())` — hands the raw database error
 //! to the browser. The ugly page was steering people into an information leak.
 
+#![allow(clippy::result_large_err)] // ApiError is a rich enum; not worth boxing in a test
+
 use umbral::web::ApiError;
 
 /// `?` on a template error must compile and become an opaque 500. This test is mostly a

@@ -49,6 +49,8 @@
 //!
 //! Nullable fields skip the `required` attribute.
 
+#![allow(clippy::result_large_err)] // rich error enums; boxing every Result would be a wide API change
+
 pub mod config;
 pub mod models;
 pub mod registry;

@@ -176,7 +176,7 @@ pub struct Group {
     /// Set of permissions this group grants. Backed by the
     /// auto-generated junction table `permissions_group_permissions`
     /// — see [`Self`]'s docstring above. The field is `#[sqlx(skip)]`
-    /// + `#[serde(skip)]` because it has no column on `permissions_group`:
+    /// and `#[serde(skip)]` because it has no column on `permissions_group`:
     /// the junction lives in its own table and the framework hydrates
     /// `parent_id` + `junction_table` on every row materialised through
     /// `Group::objects().fetch()` / `.create()` etc.
@@ -250,7 +250,7 @@ pub struct UserGroup {
 pub struct UserPermission {
     pub id: i64,
     /// The `UserModel::id()` of the user, stringified. Same `String`
-    /// + `max_length = 64` shape as `UserGroup.user_id` — keeps the
+    /// with `max_length = 64` shape as `UserGroup.user_id` — keeps the
     /// plugin PK-agnostic. Indexed for the `has_perm` direct-grant
     /// path (`WHERE user_id = ?`), the step-1 query of every
     /// permission check.

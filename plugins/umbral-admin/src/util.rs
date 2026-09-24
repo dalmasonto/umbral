@@ -134,10 +134,9 @@ pub(crate) fn apply_write_error_to_fields(
 ///   - **UNIQUE constraint violations** translate to "A record with
 ///     this `<col>` already exists." so OneToOne / unique-field
 ///     duplicates surface a real error instead of "database error".
-///     Parses both backends:
-///       SQLite — "UNIQUE constraint failed: table.col"
-///       Postgres — "duplicate key value violates unique constraint"
-///                  + `Key (col)=(value) already exists.` in detail
+///     Parses both backends: SQLite ("UNIQUE constraint failed:
+///     table.col") and Postgres ("duplicate key value violates unique
+///     constraint" with `Key (col)=(value) already exists.` in detail).
 ///   - Everything else falls back to the generic "database error" so
 ///     no schema details leak (same posture as the original).
 pub(crate) fn sanitise_form_error(e: &AdminError) -> String {

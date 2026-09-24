@@ -5434,6 +5434,7 @@ fn parse_action_route(
 // sea-query-binder. Identifier escaping is the queryset's job, not ours.
 // =========================================================================
 
+#[allow(clippy::too_many_arguments)] // the query builder genuinely needs each piece
 async fn fetch_rows(
     model: &ModelMeta,
     where_clause: Option<(&str, &str)>,
@@ -5557,6 +5558,7 @@ fn parse_include(raw: Option<&str>, model: &ModelMeta) -> Result<Vec<String>, Ap
         // a silent drop, which hides typos).
         let mut current_table: String = model.table.clone();
         let mut hop_idx = 0;
+        #[allow(clippy::explicit_counter_loop)] // hop_idx also gates the first-hop branch
         for hop in &hops {
             let meta_owned: Option<ModelMeta>;
             let meta_ref: &ModelMeta = if hop_idx == 0 {

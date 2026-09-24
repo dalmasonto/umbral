@@ -204,7 +204,7 @@ impl BustLog {
         // Amortized O(1): one O(n) compaction per `BUST_LOG_CAP` inserts.
         if last.len() > BUST_LOG_CAP * 2 {
             let mut entries: Vec<(String, u64)> = last.drain().collect();
-            entries.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            entries.sort_unstable_by_key(|e| std::cmp::Reverse(e.1));
             entries.truncate(BUST_LOG_CAP);
             *last = entries.into_iter().collect();
         }

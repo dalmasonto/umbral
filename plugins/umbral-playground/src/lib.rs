@@ -45,7 +45,7 @@ pub(crate) const PLACEHOLDER_HTML: &str = include_str!("placeholder.html");
 ///
 /// Scoped per app: every umbral app that wires the playground passes
 /// a unique `app_name`, which the frontend reads (via a `<meta>` tag
-/// + `window.__UMBRAL_PLAYGROUND_APP__` global injected into the
+/// plus a `window.__UMBRAL_PLAYGROUND_APP__` global injected into the
 /// shell) and uses to namespace every browser-side storage key:
 /// the Dexie database, every `localStorage` key (theme, settings,
 /// selected operation), and the legacy history key carried over from
