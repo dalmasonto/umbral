@@ -412,6 +412,10 @@ fn materialized_renders_only_on_postgres() {
 fn the_derive_carries_the_sql_onto_the_trait() {
     use umbral::orm::Model;
     assert_eq!(DvCustomerTotal::VIEW, Some(TOTALS_SQL));
-    assert!(!DvCustomerTotal::MATERIALIZED);
+    // Asserting a derive-generated const is the point of this test.
+    #[allow(clippy::assertions_on_constants)]
+    {
+        assert!(!DvCustomerTotal::MATERIALIZED);
+    }
     assert_eq!(DvOrder::VIEW, None);
 }

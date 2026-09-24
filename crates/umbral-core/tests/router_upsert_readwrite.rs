@@ -32,10 +32,9 @@ impl DatabaseRouter for SplitRouter {
 }
 
 async fn make_pool() -> sqlx::SqlitePool {
-    let pool = umbral_core::db::connect_sqlite("sqlite::memory:")
+    umbral_core::db::connect_sqlite("sqlite::memory:")
         .await
-        .expect("in-memory sqlite");
-    pool
+        .expect("in-memory sqlite")
 }
 
 #[tokio::test(flavor = "multi_thread")]

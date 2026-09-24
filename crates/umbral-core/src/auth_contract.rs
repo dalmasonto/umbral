@@ -286,6 +286,9 @@ impl Authentication for NoAuthentication {
 /// fighting lifetimes.
 #[derive(Clone)]
 pub struct FnAuthentication {
+    // A boxed async closure — inherently a mouthful of a type; a `type` alias
+    // wouldn't read any clearer for a single private field.
+    #[allow(clippy::type_complexity)]
     f: Arc<
         dyn Fn(HeaderMap) -> Pin<Box<dyn std::future::Future<Output = Option<Identity>> + Send>>
             + Send

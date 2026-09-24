@@ -35,7 +35,8 @@ async fn mk_pool(name: &str) -> sqlx::SqlitePool {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join(format!("{name}.sqlite"));
     std::mem::forget(tmp);
-    let pool = SqlitePoolOptions::new()
+
+    SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
             SqliteConnectOptions::new()
@@ -44,8 +45,7 @@ async fn mk_pool(name: &str) -> sqlx::SqlitePool {
                 .create_if_missing(true),
         )
         .await
-        .expect("pool");
-    pool
+        .expect("pool")
 }
 
 async fn count(pool: &sqlx::SqlitePool) -> i64 {

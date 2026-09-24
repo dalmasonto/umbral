@@ -229,7 +229,7 @@ pub async fn validate_multi_fk_exists(
     // single round-trip, never M (no N+1). The set-difference below
     // finds the missing ids.
     let rows = match crate::orm::dynamic::DynQuerySet::for_meta(&meta)
-        .select_cols(&[pk_col.clone()])
+        .select_cols(std::slice::from_ref(&pk_col))
         .filter_in_strings(&pk_col, ids)
         .fetch_as_json()
         .await

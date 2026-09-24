@@ -232,7 +232,6 @@ fn keyring() -> Result<Option<&'static MaskKeyring>, &'static MaskError> {
         })
         .as_ref()
         .map(|opt| opt.as_ref())
-        .map_err(|e| e)
 }
 
 /// Boot-time probe: is a mask keyring available for `Masked<T>` seal/reveal?

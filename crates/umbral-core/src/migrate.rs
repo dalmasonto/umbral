@@ -7368,6 +7368,7 @@ mod tests {
         // Safe-to-alter changes: each must surface as an `AlterColumn`.
         // (`nullable` here is false→true — a *loosening*, which is safe;
         // the tightening direction is guarded separately below.)
+        #[allow(clippy::type_complexity)]
         let safe_mutations: Vec<(&str, fn(&mut Column))> = vec![
             ("default", |c| c.default = "hello".into()),
             ("choices", |c| {
@@ -7462,7 +7463,8 @@ mod tests {
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
         let mut new = baseline.clone();
         new.unique = true;
-        let stmts = render_alter_column_postgres("m", "x", &[new], Some(&[baseline.clone()]));
+        let stmts =
+            render_alter_column_postgres("m", "x", &[new], Some(std::slice::from_ref(&baseline)));
         let joined = stmts.join("\n");
         assert!(
             joined.contains("ADD CONSTRAINT") && joined.contains("UNIQUE"),
@@ -7474,8 +7476,12 @@ mod tests {
             unique: true,
             ..baseline.clone()
         };
-        let stmts =
-            render_alter_column_postgres("m", "x", &[baseline.clone()], Some(&[prev_unique]));
+        let stmts = render_alter_column_postgres(
+            "m",
+            "x",
+            std::slice::from_ref(&baseline),
+            Some(&[prev_unique]),
+        );
         let joined = stmts.join("\n");
         assert!(
             joined.contains("DROP CONSTRAINT IF EXISTS"),
@@ -7485,7 +7491,8 @@ mod tests {
         // default empty → "hello": SET DEFAULT 'hello'
         let mut new = baseline.clone();
         new.default = "hello".into();
-        let stmts = render_alter_column_postgres("m", "x", &[new], Some(&[baseline.clone()]));
+        let stmts =
+            render_alter_column_postgres("m", "x", &[new], Some(std::slice::from_ref(&baseline)));
         let joined = stmts.join("\n");
         assert!(
             joined.contains("SET DEFAULT 'hello'"),
@@ -7497,8 +7504,12 @@ mod tests {
             default: "hello".into(),
             ..baseline.clone()
         };
-        let stmts =
-            render_alter_column_postgres("m", "x", &[baseline.clone()], Some(&[prev_default]));
+        let stmts = render_alter_column_postgres(
+            "m",
+            "x",
+            std::slice::from_ref(&baseline),
+            Some(&[prev_default]),
+        );
         let joined = stmts.join("\n");
         assert!(
             joined.contains("DROP DEFAULT"),

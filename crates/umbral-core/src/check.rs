@@ -85,6 +85,7 @@ pub struct SystemCheck {
     pub id: &'static str,
     /// The check closure. Invoked once per `run_all`; may capture owned
     /// plugin state.
+    #[allow(clippy::type_complexity)]
     pub run: Box<dyn Fn(&CheckContext<'_>) -> Vec<SystemCheckFinding> + Send + Sync>,
 }
 

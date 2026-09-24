@@ -1116,6 +1116,9 @@ impl<T> Form<T> {
     }
 
     /// Move the wrapped `Result` out. Handlers branch on this.
+    // `FormErrors` is deliberately owned (not boxed) — it's the common form
+    // path and callers pattern-match it directly.
+    #[allow(clippy::result_large_err)]
     pub fn into_result(self) -> Result<T, FormErrors> {
         self.inner
     }

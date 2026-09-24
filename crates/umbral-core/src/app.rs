@@ -343,7 +343,7 @@ pub struct AppBuilder {
     /// `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
     /// `Referrer-Policy: strict-origin-when-cross-origin` — set ONLY if not
     /// already present, so `SecurityPlugin` (which owns the configurable values
-    /// + CSRF + HSTS) wins when mounted. Default `true`; opt out via
+    /// along with CSRF + HSTS) wins when mounted. Default `true`; opt out via
     /// [`AppBuilder::default_security_headers`].
     default_security_headers: bool,
     /// App-level framework middleware (feature #68), prepended to the
@@ -2223,7 +2223,8 @@ fn toposort(
     // model is true; dependencies (declared + FK-derived) still outrank it.
     let mut ready: BTreeSet<(usize, &'static str)> = remaining_deps
         .iter()
-        .filter_map(|(name, deps)| deps.is_empty().then(|| (rank[name], *name)))
+        .filter(|&(_name, deps)| deps.is_empty())
+        .map(|(name, _deps)| (rank[name], *name))
         .collect();
 
     let mut order: Vec<&'static str> = Vec::with_capacity(remaining_deps.len());

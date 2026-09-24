@@ -6472,13 +6472,13 @@ enum SoftOrHardStatement {
 //   - Hand each parent its M2M buckets via set_m2m_resolved_json.
 // =========================================================================
 
-fn dedup_decode_sqlite<T: Model + HydrateRelated>(
+fn dedup_decode_sqlite<T>(
     raw_rows: &[sqlx::sqlite::SqliteRow],
     fk_join_fields: &[String],
     m2m_join_fields: &[String],
 ) -> Result<Vec<T>, sqlx::Error>
 where
-    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+    T: Model + HydrateRelated + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
 {
     // PK-agnostic dedup: read the parent PK back through the shape-aware
     // decoder (using the parent model's PK SqlType) and key by `pk_key`,
@@ -6565,13 +6565,13 @@ where
     Ok(typed)
 }
 
-fn dedup_decode_pg<T: Model + HydrateRelated>(
+fn dedup_decode_pg<T>(
     raw_rows: &[sqlx::postgres::PgRow],
     fk_join_fields: &[String],
     m2m_join_fields: &[String],
 ) -> Result<Vec<T>, sqlx::Error>
 where
-    T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    T: Model + HydrateRelated + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
 {
     // PK-agnostic dedup — see the SQLite variant.
     let parent_pk_col = crate::migrate::ModelMeta::for_::<T>()

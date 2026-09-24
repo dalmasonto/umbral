@@ -71,8 +71,13 @@ async fn boot() {
 #[tokio::test]
 async fn soft_delete_const_is_set_from_macro_attr() {
     boot().await;
-    assert!(<SoftPost as umbral::orm::Model>::SOFT_DELETE);
-    assert!(!<HardPost as umbral::orm::Model>::SOFT_DELETE);
+    // These assert on a derive-generated associated const (compile-time), which
+    // is exactly what we're verifying — the const's value IS the behavior.
+    #[allow(clippy::assertions_on_constants)]
+    {
+        assert!(<SoftPost as umbral::orm::Model>::SOFT_DELETE);
+        assert!(!<HardPost as umbral::orm::Model>::SOFT_DELETE);
+    }
 }
 
 #[tokio::test]
