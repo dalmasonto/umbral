@@ -879,6 +879,22 @@ impl Transaction {
         }
     }
 
+    /// Run a raw transaction-control statement (`SAVEPOINT` / `RELEASE
+    /// SAVEPOINT` / `ROLLBACK TO SAVEPOINT`) on the inner connection.
+    ///
+    /// This is the narrow tx-control escape hatch: the ORM models row-level
+    /// operations, not savepoints, so a savepoint has to be issued as raw SQL
+    /// (both backends speak the same `SAVEPOINT` grammar). Used by the
+    /// in-transaction audit path (gaps6 #18) to isolate a failed audit insert
+    /// so it can't abort the caller's Postgres transaction (`25P02`). `name`
+    /// must be a trusted, static identifier — never caller-supplied text.
+    pub(crate) async fn exec_control(&mut self, sql: &str) -> Result<(), sqlx::Error> {
+        match &mut self.inner {
+            TransactionInner::Sqlite(tx) => sqlx::query(sql).execute(&mut **tx).await.map(|_| ()),
+            TransactionInner::Postgres(tx) => sqlx::query(sql).execute(&mut **tx).await.map(|_| ()),
+        }
+    }
+
     /// Commit the transaction explicitly.
     ///
     /// The closure-based helpers ([`transaction`] / [`transaction_sqlite`] /

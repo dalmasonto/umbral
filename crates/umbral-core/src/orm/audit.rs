@@ -169,16 +169,43 @@ pub async fn record_in_tx(
         return;
     };
     let audit = audit_meta();
-    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&audit)
+
+    // gaps6 #18: isolate the audit insert in a savepoint. On Postgres a failed
+    // statement aborts the whole transaction (25P02), so an audit insert that
+    // errored would take the caller's business write down with it — the exact
+    // opposite of the "don't fail the business write for a lost audit row"
+    // posture. The savepoint scopes the failure to the audit statement so the
+    // business write survives. (SQLite tolerates a failed statement mid-tx, so
+    // the savepoint is a no-op safety belt there; the fix is for Postgres.) The
+    // savepoint name is a trusted literal, never caller data.
+    const SP: &str = "SAVEPOINT umbral_audit_sp";
+    const RELEASE: &str = "RELEASE SAVEPOINT umbral_audit_sp";
+    const ROLLBACK: &str = "ROLLBACK TO SAVEPOINT umbral_audit_sp";
+
+    if tx.exec_control(SP).await.is_err() {
+        // Couldn't even open the savepoint — skip auditing rather than risk
+        // leaving the caller's transaction in an unknown state.
+        return;
+    }
+    match crate::orm::dynamic::DynQuerySet::for_meta(&audit)
         .insert_json_in_tx(&body, tx)
         .await
     {
-        tracing::error!(
-            table = %meta.table,
-            row_pk = %row_pk,
-            action = %action,
-            "umbral: failed to write audit row (in tx): {e:?}",
-        );
+        Ok(_) => {
+            let _ = tx.exec_control(RELEASE).await;
+        }
+        Err(e) => {
+            // Undo only the failed audit statement; the business write in the
+            // same transaction stays intact and committable.
+            let _ = tx.exec_control(ROLLBACK).await;
+            let _ = tx.exec_control(RELEASE).await;
+            tracing::error!(
+                table = %meta.table,
+                row_pk = %row_pk,
+                action = %action,
+                "umbral: failed to write audit row (in tx); rolled back to savepoint: {e:?}",
+            );
+        }
     }
 }
 
