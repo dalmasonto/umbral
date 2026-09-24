@@ -1532,6 +1532,12 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
 /// recompiling, and discovering the next.
 fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
+    // The generated column-token module inherits the model's visibility so its
+    // `pub const FIELD` tokens aren't "more public than" a non-`pub` model
+    // (`clippy::private_interfaces`). A `pub` model → `pub mod` (unchanged); a
+    // private test fixture → a private module whose consts are reachable only
+    // where the model is.
+    let struct_vis = &input.vis;
 
     // Only named-field structs are valid models. Enums, unions, tuple
     // structs, and unit structs all fail with the same message so the
@@ -3830,7 +3836,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         #relations_impls
 
         #[allow(clippy::module_inception)]
-        pub mod #module_name {
+        #struct_vis mod #module_name {
             use super::#struct_name;
 
             #(#column_consts)*

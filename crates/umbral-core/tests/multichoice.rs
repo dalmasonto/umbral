@@ -16,7 +16,7 @@
 use umbral::orm::{ChoiceField, Model, MultiChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tag {
+pub enum Tag {
     Design,
     Frontend,
     Backend,
