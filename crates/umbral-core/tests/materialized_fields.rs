@@ -332,3 +332,114 @@ async fn a_source_row_pointing_at_a_nonexistent_target_is_a_silent_no_op() {
     // No booking 999999 exists → nothing to assert beyond "no panic"; a prior
     // booking's total is untouched.
 }
+
+/// gaps6 #17: a SET-BASED bulk update of source rows
+/// (`Source::objects().filter(...).update_values(...)`) fires only
+/// `bulk_post_save` (pk ids, no instances). The materialized field must still
+/// refresh — the handler re-fetches each changed id, runs `key_fn`, and
+/// recomputes the affected target(s).
+#[tokio::test]
+async fn a_bulk_update_of_source_rows_refreshes_the_target() {
+    let _g = lock().lock().await;
+    let _pool = boot().await;
+    let b = MfBooking::objects()
+        .create(MfBooking {
+            id: 0,
+            payment_total: 0,
+        })
+        .await
+        .unwrap();
+    MfRsvp::objects()
+        .create(MfRsvp {
+            id: 0,
+            booking_id: b.id,
+            amount: 10,
+        })
+        .await
+        .unwrap();
+    MfRsvp::objects()
+        .create(MfRsvp {
+            id: 0,
+            booking_id: b.id,
+            amount: 20,
+        })
+        .await
+        .unwrap();
+    assert_eq!(payment_total(b.id).await, 30);
+
+    // Set-based bulk update: both rsvps → amount 100. Emits ONLY
+    // bulk_post_save:mf_rsvp, no per-row post_save.
+    MfRsvp::objects()
+        .filter(mf_rsvp::BOOKING_ID.eq(b.id))
+        .update_values(
+            serde_json::json!({"amount": 100})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        payment_total(b.id).await,
+        200,
+        "a set-based bulk update of source rows must refresh the materialized target",
+    );
+}
+
+/// gaps6 #17: one set-based bulk update whose predicate spans rows belonging to
+/// TWO different targets must refresh BOTH targets (the bulk handler maps each
+/// changed id to its target and dedups per target).
+#[tokio::test]
+async fn a_bulk_update_spanning_two_targets_refreshes_both() {
+    let _g = lock().lock().await;
+    let _pool = boot().await;
+    let b1 = MfBooking::objects()
+        .create(MfBooking {
+            id: 0,
+            payment_total: 0,
+        })
+        .await
+        .unwrap();
+    let b2 = MfBooking::objects()
+        .create(MfBooking {
+            id: 0,
+            payment_total: 0,
+        })
+        .await
+        .unwrap();
+    // one rsvp per booking, both with the sentinel amount 5
+    MfRsvp::objects()
+        .create(MfRsvp {
+            id: 0,
+            booking_id: b1.id,
+            amount: 5,
+        })
+        .await
+        .unwrap();
+    MfRsvp::objects()
+        .create(MfRsvp {
+            id: 0,
+            booking_id: b2.id,
+            amount: 5,
+        })
+        .await
+        .unwrap();
+    assert_eq!(payment_total(b1.id).await, 5);
+    assert_eq!(payment_total(b2.id).await, 5);
+
+    // Bulk update every amount-5 rsvp to 50 — matches one row under each booking.
+    MfRsvp::objects()
+        .filter(mf_rsvp::AMOUNT.eq(5))
+        .update_values(
+            serde_json::json!({"amount": 50})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(payment_total(b1.id).await, 50, "booking 1 refreshed");
+    assert_eq!(payment_total(b2.id).await, 50, "booking 2 refreshed");
+}

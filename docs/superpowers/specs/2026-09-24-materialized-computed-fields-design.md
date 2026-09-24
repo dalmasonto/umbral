@@ -89,7 +89,7 @@ For a `post_save`/`post_delete` on a registered source `S`:
 
 Errors in steps 3–4 are logged loudly and do **not** propagate (an async signal handler cannot fail the already-committed source write). Losing one refresh is bad; the TTL-free nature means the next source write re-refreshes, and the boot check plus tests guard the happy path.
 
-**v1 coverage is per-row only.** `install` subscribes to `post_save:<S>` / `post_delete:<S>`, which `create`, `Manager::save`, and a per-row `delete()` fire. A **set-based** source update or delete — `Source::objects().filter(...).update_values(...)`, `.update_expr(...)` — emits only `bulk_post_save:<S>` / `bulk_post_delete:<S>` (matched pks, no row instances), which the handler does not listen to, so the target silently goes stale after a bulk source write. The bulk payload has no `instance` for `key_fn` to run against, so closing this gap needs either a bulk-aware handler that re-fetches the affected source rows by id, or a different extractor shape that accepts a pk list. Deferred — tracked as a follow-up (see §9 and gaps6 #17).
+**Coverage.** `install` subscribes to `post_save:<S>` / `post_delete:<S>` (per-row: `create`, `Manager::save`, per-row `delete()` incl. `filter().delete()`) AND, as of gaps6 #17, `bulk_post_save:<S>` (set-based `update_values`/`update_expr` and `bulk_create`). The bulk payload carries only matched pks, so the bulk handler re-fetches each changed source row by id (`DynQuerySet::filter_pk_eq`), runs `key_fn`, and refreshes each affected target once (deduped). Remaining gap: a **soft delete** of a source (rewrites to an UPDATE, fires only `bulk_post_delete`) is not yet handled.
 
 ## 7. Loop guard
 
@@ -115,7 +115,7 @@ This breaks direct self-loops and caps depth at one for a given target field wit
 
 ## 9. Deferred (later gaps entries)
 
-- **Set-based source updates (`update_values`/`update_expr`) are not covered** — v1 triggers only on per-row `post_save`/`post_delete` (create, `.save()`, per-row delete); a bulk update/delete on a source table emits only `bulk_post_save`/`bulk_post_delete` (ids, no instances), which the handler doesn't subscribe to, so the target isn't refreshed. Tracked as gaps6 #17.
+- **Set-based source updates (`update_values`/`update_expr`) — SHIPPED (gaps6 #17).** The bulk handler subscribes to `bulk_post_save:<S>` and re-fetches each changed id to run `key_fn`. Still open: soft-deleted sources (`bulk_post_delete` only).
 - Cached-aggregate / `annotate_*` integration with the heavy-relations epic (`docs/specs/orm-heavy-relations-epic.md`) — a cached `annotate_count` is one instance of this same problem.
 - Deferred refresh via `umbral-tasks::enqueue` (per-field eager|deferred choice).
 - Partial / incremental recompute for aggregates over large source sets.

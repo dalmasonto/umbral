@@ -34,6 +34,9 @@ type RecomputeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, Option<Value>> + Send
 /// `tests` below) precisely so it can.
 pub struct SourceReg {
     pub(crate) table: String,
+    /// The source model's meta, kept so the bulk handler (gaps6 #17) can
+    /// re-fetch a changed row by pk when a set-based write delivers only ids.
+    pub(crate) source_meta: ModelMeta,
     pub(crate) extract: ExtractFn,
 }
 
@@ -87,6 +90,7 @@ impl<M: Model> Materialized<M> {
         });
         self.sources.push(SourceReg {
             table: S::TABLE.to_owned(),
+            source_meta: ModelMeta::for_::<S>(),
             extract,
         });
         self
@@ -181,49 +185,129 @@ pub(crate) fn validate(spec: &MaterializedSpec) -> Result<(), String> {
 /// process-global), so no handle is threaded.
 pub(crate) fn install(spec: &MaterializedSpec) {
     for source in &spec.sources {
-        let target_meta = spec.target_meta.clone();
-        let target_col = spec.target_col.clone();
-        let extract = source.extract.clone();
-        let recompute = spec.recompute.clone();
+        // Per-row handler: `post_save` (create / `.save()`) and `post_delete`
+        // (incl. `filter().delete()`) carry the full instance under `instance`,
+        // so `extract` can run `key_fn` directly.
+        {
+            let target_meta = spec.target_meta.clone();
+            let target_col = spec.target_col.clone();
+            let extract = source.extract.clone();
+            let recompute = spec.recompute.clone();
 
-        let handler = move |payload: &Value| {
-            let target_meta = target_meta.clone();
-            let target_col = target_col.clone();
-            let extract = extract.clone();
-            let recompute = recompute.clone();
-            // Delete payloads carry the full pre-delete row when a subscriber
-            // exists (gaps6 #14/#15) — which we are — so `instance` has the FK.
-            let instance = payload.get("instance").cloned().unwrap_or(Value::Null);
-            async move {
-                let Some(pk_json) = extract(&instance) else {
-                    return;
-                };
-                let table = target_meta.table.clone();
-                let col = target_col.clone();
-                guarded(table, col, async move {
-                    let Some(value) = recompute(pk_json.clone()).await else {
-                        return;
-                    };
-                    let mut body = serde_json::Map::new();
-                    body.insert(target_col.clone(), value);
-                    if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&target_meta)
-                        .filter_pk_eq(&pk_json)
-                        .update_json(&body)
-                        .await
-                    {
-                        tracing::error!(
-                            table = %target_meta.table, column = %target_col,
-                            "umbral: materialized field write-back failed: {e:?}",
-                        );
+            let handler = move |payload: &Value| {
+                let target_meta = target_meta.clone();
+                let target_col = target_col.clone();
+                let extract = extract.clone();
+                let recompute = recompute.clone();
+                // Delete payloads carry the full pre-delete row when a
+                // subscriber exists (gaps6 #14/#15) — which we are.
+                let instance = payload.get("instance").cloned().unwrap_or(Value::Null);
+                async move {
+                    if let Some(pk_json) = extract(&instance) {
+                        refresh_one(target_meta, target_col, recompute, pk_json).await;
                     }
-                })
-                .await;
-            }
-        };
+                }
+            };
 
-        crate::signals::subscribe_async(&format!("post_save:{}", source.table), handler.clone());
-        crate::signals::subscribe_async(&format!("post_delete:{}", source.table), handler);
+            crate::signals::subscribe_async(
+                &format!("post_save:{}", source.table),
+                handler.clone(),
+            );
+            crate::signals::subscribe_async(&format!("post_delete:{}", source.table), handler);
+        }
+
+        // gaps6 #17 — set-based bulk writes (`update_values` / `update_expr` /
+        // `bulk_create`) emit `bulk_post_save` with pk `ids` only, no
+        // instances. Re-fetch each changed source row by id, run `key_fn`, and
+        // refresh the affected target(s) — deduped, since many source rows can
+        // map to the same target. (Bulk DELETES don't need a handler here: a
+        // `filter().delete()` on a subscribed table also fires the per-row
+        // `post_delete` above, with the full row.)
+        {
+            let source_meta = source.source_meta.clone();
+            let target_meta = spec.target_meta.clone();
+            let target_col = spec.target_col.clone();
+            let extract = source.extract.clone();
+            let recompute = spec.recompute.clone();
+
+            let bulk_handler = move |payload: &Value| {
+                let source_meta = source_meta.clone();
+                let target_meta = target_meta.clone();
+                let target_col = target_col.clone();
+                let extract = extract.clone();
+                let recompute = recompute.clone();
+                let ids: Vec<Value> = payload
+                    .get("ids")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                async move {
+                    // Dedup affected target pks: N updated source rows for one
+                    // target must recompute that target once, not N times.
+                    let mut seen = std::collections::HashSet::new();
+                    for id in ids {
+                        let rows = crate::orm::dynamic::DynQuerySet::for_meta(&source_meta)
+                            .filter_pk_eq(&id)
+                            .fetch_as_json()
+                            .await
+                            .unwrap_or_default();
+                        let Some(row) = rows.into_iter().next() else {
+                            continue; // row gone (e.g. deleted after the signal) — skip
+                        };
+                        let Some(pk_json) = extract(&Value::Object(row)) else {
+                            continue; // key_fn returned None (e.g. null FK)
+                        };
+                        if !seen.insert(pk_json.to_string()) {
+                            continue;
+                        }
+                        refresh_one(
+                            target_meta.clone(),
+                            target_col.clone(),
+                            recompute.clone(),
+                            pk_json,
+                        )
+                        .await;
+                    }
+                }
+            };
+
+            crate::signals::subscribe_async(
+                &format!("bulk_post_save:{}", source.table),
+                bulk_handler,
+            );
+        }
     }
+}
+
+/// Recompute one target row and write the fresh value back, guarded against a
+/// same-field self-cascade (gaps6 #7). Shared by the per-row and bulk (#17)
+/// source handlers so both paths write back identically.
+async fn refresh_one(
+    target_meta: ModelMeta,
+    target_col: String,
+    recompute: RecomputeFn,
+    pk_json: Value,
+) {
+    let table = target_meta.table.clone();
+    let col = target_col.clone();
+    guarded(table, col, async move {
+        let Some(value) = recompute(pk_json.clone()).await else {
+            return;
+        };
+        let mut body = serde_json::Map::new();
+        body.insert(target_col.clone(), value);
+        if let Err(e) = crate::orm::dynamic::DynQuerySet::for_meta(&target_meta)
+            .filter_pk_eq(&pk_json)
+            .update_json(&body)
+            .await
+        {
+            tracing::error!(
+                table = %target_meta.table, column = %target_col,
+                "umbral: materialized field write-back failed: {e:?}",
+            );
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]
