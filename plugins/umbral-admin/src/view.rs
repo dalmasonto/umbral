@@ -185,7 +185,7 @@ pub(crate) async fn accessible_widget_sections_json(
                 // must be in `allowed` (every widget permission is in `codes`).
                 .filter(|w| {
                     w.permission
-                        .map_or(true, |code| allowed.get(code).copied().unwrap_or(false))
+                        .is_none_or(|code| allowed.get(code).copied().unwrap_or(false))
                 })
                 .map(|w| {
                     serde_json::json!({
@@ -595,10 +595,8 @@ pub(crate) fn validate_form(
                     );
                 }
             }
-            "select" => {
-                if !field.choices.iter().any(|c| c.value == value) {
-                    errors.insert(field.name.clone(), "Select a valid option.".to_string());
-                }
+            "select" if !field.choices.iter().any(|c| c.value == value) => {
+                errors.insert(field.name.clone(), "Select a valid option.".to_string());
             }
             _ => {}
         }

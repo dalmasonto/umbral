@@ -884,7 +884,7 @@ impl RestPlugin {
             crate::resource::ScopeDecision::RestrictIn(col, values) => {
                 // Empty membership refuses every create, exactly as it
                 // returns no rows on the read side.
-                let Some(got) = body.get(&col).and_then(|v| json_pk_to_string(v)) else {
+                let Some(got) = body.get(&col).and_then(json_pk_to_string) else {
                     return Err(deny(&col));
                 };
                 // Normalize the allowed set the same way the read filter

@@ -415,9 +415,16 @@ pub(crate) async fn sheet_create(
                     apply_write_error_to_fields(we, &mut fields)
                 }
                 AdminError::Sqlx(sqlx_err) => {
-                    match parse_unique_violation_column(&sqlx_err.to_string())
-                        .and_then(|col| fields.iter_mut().find(|f| f.name == col).map(|f| (col, f)))
-                    {
+                    // NOT `Option::zip`: `col` is bound by this `and_then` and
+                    // used inside `find`'s predicate, so clippy's `.zip(...)`
+                    // rewrite (which moves `find` out of the closure) doesn't
+                    // compile. A false positive.
+                    #[allow(clippy::manual_option_zip)]
+                    let matched =
+                        parse_unique_violation_column(&sqlx_err.to_string()).and_then(|col| {
+                            fields.iter_mut().find(|f| f.name == col).map(|f| (col, f))
+                        });
+                    match matched {
                         Some((col, f)) => {
                             f.error = format!("A record with this `{col}` already exists.");
                             String::new()

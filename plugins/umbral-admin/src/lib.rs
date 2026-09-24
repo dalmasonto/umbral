@@ -139,9 +139,10 @@ use umbral::web::post;
 /// to pick a curated subset, or [`Self::Hidden`] to drop the
 /// section entirely (e.g. when the operator's primary view is
 /// purely widget-driven).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum DashboardModelsConfig {
     /// Default — show a card for every registered model.
+    #[default]
     All,
     /// Hide the section entirely. The dashboard becomes:
     /// greeting → quick stats → widgets, no model grid.
@@ -151,12 +152,6 @@ pub enum DashboardModelsConfig {
     /// plugin you reference is unregistered the rest still
     /// render).
     Only(Vec<String>),
-}
-
-impl Default for DashboardModelsConfig {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -969,50 +964,44 @@ impl Plugin for AdminPlugin {
         let gpd = || vec!["GET", "POST", "DELETE"];
         let gput = || vec!["GET", "PUT"];
         let mut specs = vec![
-            RouteSpec::new(&route("", &self.base_path), g()),
-            RouteSpec::new(&route("/", &self.base_path), g()),
-            RouteSpec::new(&route("/login", &self.base_path), gp()),
-            RouteSpec::new(&route("/logout", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/new", &self.base_path), gp()),
-            RouteSpec::new(&route("/{table}/action", &self.base_path), p()),
-            RouteSpec::new(&route("/{table}/rows", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/filter-dialog", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/new-sheet", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/create", &self.base_path), p()),
-            RouteSpec::new(&route("/{table}/{id}", &self.base_path), gpd()),
-            RouteSpec::new(&route("/{table}/{id}/edit", &self.base_path), gp()),
-            RouteSpec::new(&route("/{table}/{id}/edit-sheet", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/{id}/sheet", &self.base_path), g()),
-            RouteSpec::new(&route("/{table}/{id}/delete", &self.base_path), p()),
+            RouteSpec::new(route("", &self.base_path), g()),
+            RouteSpec::new(route("/", &self.base_path), g()),
+            RouteSpec::new(route("/login", &self.base_path), gp()),
+            RouteSpec::new(route("/logout", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/new", &self.base_path), gp()),
+            RouteSpec::new(route("/{table}/action", &self.base_path), p()),
+            RouteSpec::new(route("/{table}/rows", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/filter-dialog", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/new-sheet", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/create", &self.base_path), p()),
+            RouteSpec::new(route("/{table}/{id}", &self.base_path), gpd()),
+            RouteSpec::new(route("/{table}/{id}/edit", &self.base_path), gp()),
+            RouteSpec::new(route("/{table}/{id}/edit-sheet", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/{id}/sheet", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/{id}/delete", &self.base_path), p()),
+            RouteSpec::new(route("/{table}/{id}/_confirm-delete", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/{id}/history", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/{id}/change-password", &self.base_path), p()),
+            RouteSpec::new(route("/{table}/{id}/cell/{field}", &self.base_path), p()),
             RouteSpec::new(
-                &route("/{table}/{id}/_confirm-delete", &self.base_path),
+                route("/{table}/{id}/cell/{field}/edit", &self.base_path),
                 g(),
             ),
-            RouteSpec::new(&route("/{table}/{id}/history", &self.base_path), g()),
+            RouteSpec::new(route("/{table}/actions/{key}", &self.base_path), p()),
+            RouteSpec::new(route("/api/{table}/{field}/options", &self.base_path), g()),
             RouteSpec::new(
-                &route("/{table}/{id}/change-password", &self.base_path),
-                p(),
-            ),
-            RouteSpec::new(&route("/{table}/{id}/cell/{field}", &self.base_path), p()),
-            RouteSpec::new(
-                &route("/{table}/{id}/cell/{field}/edit", &self.base_path),
+                route("/api/{table}/{field}/options/resolve", &self.base_path),
                 g(),
             ),
-            RouteSpec::new(&route("/{table}/actions/{key}", &self.base_path), p()),
-            RouteSpec::new(&route("/api/{table}/{field}/options", &self.base_path), g()),
+            RouteSpec::new(route("/api/prefs", &self.base_path), gput()),
+            RouteSpec::new(route("/upload-image", &self.base_path), p()),
+            RouteSpec::new(route("/api/palette", &self.base_path), g()),
+            RouteSpec::new(route("/api/palette/search", &self.base_path), g()),
+            RouteSpec::new(route("/api/dashboard/catalog", &self.base_path), g()),
+            RouteSpec::new(route("/api/dashboard/layout", &self.base_path), gput()),
             RouteSpec::new(
-                &route("/api/{table}/{field}/options/resolve", &self.base_path),
-                g(),
-            ),
-            RouteSpec::new(&route("/api/prefs", &self.base_path), gput()),
-            RouteSpec::new(&route("/upload-image", &self.base_path), p()),
-            RouteSpec::new(&route("/api/palette", &self.base_path), g()),
-            RouteSpec::new(&route("/api/palette/search", &self.base_path), g()),
-            RouteSpec::new(&route("/api/dashboard/catalog", &self.base_path), g()),
-            RouteSpec::new(&route("/api/dashboard/layout", &self.base_path), gput()),
-            RouteSpec::new(
-                &route("/api/dashboard/widgets/{key}/data", &self.base_path),
+                route("/api/dashboard/widgets/{key}/data", &self.base_path),
                 g(),
             ),
         ];
@@ -1020,7 +1009,7 @@ impl Plugin for AdminPlugin {
         // mounted in `routes()` as `GET {base}/{view.path}`.
         for v in &self.resolved_custom_views() {
             specs.push(RouteSpec::new(
-                &format!("{}/custom-views/{}/", self.base_path, v.path()),
+                format!("{}/custom-views/{}/", self.base_path, v.path()),
                 g(),
             ));
         }

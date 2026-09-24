@@ -171,7 +171,7 @@ pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
             // database: ..."). Surface the inner message if it
             // looks like a constraint message users can act on.
             if msg.starts_with("error returned from database:") {
-                if let Some(tail) = msg.splitn(2, ':').nth(1) {
+                if let Some(tail) = msg.split_once(':').map(|x| x.1) {
                     let trimmed = tail.trim();
                     if !trimmed.is_empty() {
                         return trimmed.to_string();
@@ -296,7 +296,7 @@ pub(crate) fn parse_unique_violation_column(msg: &str) -> Option<String> {
             .next()
             .unwrap_or(tail)
             .trim()
-            .trim_end_matches(|c: char| c == ')' || c == '"' || c == '\'');
+            .trim_end_matches([')', '"', '\'']);
         // `table.col` → `col`. `col` (no dot) → `col` verbatim.
         let bare = first.rsplit('.').next().unwrap_or(first);
         if !bare.is_empty() {
