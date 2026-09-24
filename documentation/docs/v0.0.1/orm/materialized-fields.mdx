@@ -8,7 +8,7 @@ tags: [orm, computed, denormalization, cache]
 
 # Materialized (computed) fields
 
-Reach for a materialized field when a column's value is *derived* from another table - a cached total, a projected status, a denormalized count - and you don't want to remember to recompute it at every place that writes the source. You declare the dependency and the recompute once; the framework keeps the column current on every source insert, update, and delete.
+Reach for a materialized field when a column's value is *derived* from another table - a cached total, a projected status, a denormalized count - and you don't want to remember to recompute it at every place that writes the source. You declare the dependency and the recompute once; the framework keeps the column current on every **per-row** source write - a create, a `.save()`, and a delete (including `filter().delete()`).
 
 <Callout type="info">
   **Not the same thing as a materialized view.** A "materialized field" (this page) is a per-row column on an ordinary table that the framework recomputes for you, declared via `App::builder().materialize(...)`. A Postgres "materialized view" (`#[umbral(materialized_view = "...")]`, see [Database views](/docs/v0.0.1/orm/database-views)) is a whole read-only table backed by a stored query, refreshed explicitly. Different mechanism, different trade-offs - don't confuse the two.
@@ -34,10 +34,14 @@ App::builder()
     .build()?;
 ```
 
-Now `Booking.payment_total` updates itself whenever an `Rsvp` is created, changed, or deleted - no code at the write sites.
+Now `Booking.payment_total` updates itself whenever an `Rsvp` row is created, changed via a per-row write (`.save()`), or deleted - no code at the write sites.
 
 <Callout type="info">
   **Eager, after-commit.** The recompute runs after the source write commits and reads the committed rows, so it's correct but slightly eventually-consistent within the same request. It fires nothing for a transaction that rolls back. The write-back goes through the ORM (`filter_pk_eq`, which coerces the target's primary key from `i64`, `String`, or `Uuid` alike), so it works on every backend and every primary-key type.
+</Callout>
+
+<Callout type="warning">
+  **Set-based bulk updates on a source are NOT covered in v1.** The handler subscribes to per-row `post_save` / `post_delete`, which `create`, `.save()`, and a per-row `delete()` fire. A **set-based** update on the source - `Source::objects().filter(...).update_values(...)` or `.update_expr(...)` - emits only the bulk signal (`bulk_post_save`, which carries matched pks but no row instances), so the recompute handler never runs and the target silently goes stale. If you bulk-update a source table, recompute the affected targets explicitly afterward. A bulk-aware handler is a tracked follow-up (see the design spec).
 </Callout>
 
 <Callout type="warning">

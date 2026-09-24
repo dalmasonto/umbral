@@ -89,6 +89,8 @@ For a `post_save`/`post_delete` on a registered source `S`:
 
 Errors in steps 3–4 are logged loudly and do **not** propagate (an async signal handler cannot fail the already-committed source write). Losing one refresh is bad; the TTL-free nature means the next source write re-refreshes, and the boot check plus tests guard the happy path.
 
+**v1 coverage is per-row only.** `install` subscribes to `post_save:<S>` / `post_delete:<S>`, which `create`, `Manager::save`, and a per-row `delete()` fire. A **set-based** source update or delete — `Source::objects().filter(...).update_values(...)`, `.update_expr(...)` — emits only `bulk_post_save:<S>` / `bulk_post_delete:<S>` (matched pks, no row instances), which the handler does not listen to, so the target silently goes stale after a bulk source write. The bulk payload has no `instance` for `key_fn` to run against, so closing this gap needs either a bulk-aware handler that re-fetches the affected source rows by id, or a different extractor shape that accepts a pk list. Deferred — tracked as a follow-up (see §9 and gaps6 #17).
+
 ## 7. Loop guard
 
 The write-back is an UPDATE on `M`, which fires `post_save:<M>` / `bulk_post_save:<M>`. To prevent a self-cascade (e.g. `M` also registered as a source whose recompute updates `M`), the handler brackets its write-back with a **task-local re-entrancy set** keyed by `(target_table, target_column)`:
@@ -113,6 +115,7 @@ This breaks direct self-loops and caps depth at one for a given target field wit
 
 ## 9. Deferred (later gaps entries)
 
+- **Set-based source updates (`update_values`/`update_expr`) are not covered** — v1 triggers only on per-row `post_save`/`post_delete` (create, `.save()`, per-row delete); a bulk update/delete on a source table emits only `bulk_post_save`/`bulk_post_delete` (ids, no instances), which the handler doesn't subscribe to, so the target isn't refreshed. Tracked as gaps6 #17.
 - Cached-aggregate / `annotate_*` integration with the heavy-relations epic (`docs/specs/orm-heavy-relations-epic.md`) — a cached `annotate_count` is one instance of this same problem.
 - Deferred refresh via `umbral-tasks::enqueue` (per-field eager|deferred choice).
 - Partial / incremental recompute for aggregates over large source sets.

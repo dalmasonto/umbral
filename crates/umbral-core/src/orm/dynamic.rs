@@ -2234,6 +2234,14 @@ impl<'a> DynQuerySet<'a> {
     ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
         let mut q = Query::select();
         q.from(crate::db::router::schema_qualified_table(&self.meta.table));
+        // Intentionally SELECTs every model column (unlike `fetch_as_json`'s
+        // `visible_select_cols()`, which trims the SELECT LIST up front): the
+        // audit snapshot needs to detect a change on ANY column and this path
+        // has no external reader to redact for. The per-column `may_serialize`
+        // filter below still gates what lands in the returned JSON, so the
+        // final shape matches the non-tx `audit_snapshot`/`fetch_as_json`
+        // path column-for-column — this is not a redaction regression, just a
+        // wider in-memory SELECT for an audit-only, non-reader-facing read.
         for c in &self.meta.fields {
             q.column(Alias::new(&c.name));
         }

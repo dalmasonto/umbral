@@ -205,6 +205,44 @@ async fn delete_of_a_source_row_refreshes_the_target() {
 }
 
 #[tokio::test]
+async fn updating_a_source_row_per_row_refreshes_the_target() {
+    // gaps6 #7 final-review fix: prove the per-row update path (spec §8.3).
+    // `Manager::save(instance)` fires per-row `post_save:<table>` (created:
+    // false) — unlike a set-based `filter(...).update_values(...)`, which
+    // fires only `bulk_post_save:<table>` (pk ids, no instance) and is NOT
+    // covered by the materialized-field handler. This test exercises the
+    // per-row `save()` path specifically.
+    let _g = lock().lock().await;
+    let _pool = boot().await;
+    let b = MfBooking::objects()
+        .create(MfBooking {
+            id: 0,
+            payment_total: 0,
+        })
+        .await
+        .unwrap();
+    let r = MfRsvp::objects()
+        .create(MfRsvp {
+            id: 0,
+            booking_id: b.id,
+            amount: 30,
+        })
+        .await
+        .unwrap();
+    assert_eq!(payment_total(b.id).await, 30);
+
+    let mut updated = r.clone();
+    updated.amount = 100;
+    MfRsvp::objects().save(updated).await.unwrap();
+
+    assert_eq!(
+        payment_total(b.id).await,
+        100,
+        "a per-row save() of a source row refreshes the target"
+    );
+}
+
+#[tokio::test]
 async fn a_rolled_back_source_write_does_not_refresh() {
     let _g = lock().lock().await;
     let pool = boot().await;
