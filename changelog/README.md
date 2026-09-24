@@ -6,6 +6,7 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 | Version | Date | Theme |
 |---|---|---|
+| [0.0.13](./0.0.13.md) | 2026-09-24 | Relations & authorization - chainable relation traversal served from cache with zero queries (replaces `.resolved()`), multi-hop aggregates, self-refreshing materialized fields, object-level (IDOR) authorization with a boot check, cache-first role-aware media access, signals + audit on transactional writes, plus a big DX batch (`#[umbral::main]`, `#[model(base=…)]`, `#[derive(New)]`, `umbral plugin add`/`doctor`) and an admin redesign |
 | [0.0.12](./0.0.12.md) | 2026-08-17 | Database porting - a full `inspectdb → migrate → transferdata` pipeline (introspect an existing database into models, copy the data PK-preserving), plus the field types a foreign schema needs: `NaiveDateTime`, a foreign key that is a primary key, PostGIS geometry, and arbitrary-precision decimals |
 | [0.0.11](./0.0.11.md) | 2026-08-02 | Plugin ergonomics & private media - model/task autodiscovery, app-wide authentication, owner-only + signed-URL media gates, a gated proxy for S3/custom backends (closes gaps4 #32–#58) |
 | [0.0.10](./0.0.10.md) | 2026-07-15 | Security-hardening sweep (review_3) - row-level GraphQL mutations, per-request context across SSE/WS, reverse-FK windowing, analytics path scrubber, `umbral startcommand` |
@@ -21,6 +22,6 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 ## Upcoming
 
-`0.0.13` is next. Add its notes as `changelog/0.0.13.md` when it ships.
+`0.0.14` is next. Add its notes as `changelog/0.0.14.md` when it ships.
 
 > Longer-term, these notes are intended to be served from the app (tracked in the database) so releases can be browsed in-product; the files here are the source of truth until then.
