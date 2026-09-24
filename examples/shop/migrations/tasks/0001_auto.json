@@ -1,0 +1,535 @@
+{
+  "id": "0001_auto",
+  "plugin": "tasks",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "CreateTable",
+      "table": "periodic_task",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "name",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true
+        },
+        {
+          "name": "task",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "payload",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "schedule",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "next_run",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "last_run",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "enabled",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "updated_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ]
+    },
+    {
+      "kind": "CreateTable",
+      "table": "task_row",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "name",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "payload",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "status",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "attempts",
+          "ty": "BigInt",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "max_attempts",
+          "ty": "BigInt",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "scheduled_for",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "run_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "started_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "completed_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "error",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "result",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "priority",
+          "ty": "Integer",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ],
+      "indexes": [
+        [
+          "status",
+          "run_at"
+        ]
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "PeriodicTask",
+        "table": "periodic_task",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "unique": true
+          },
+          {
+            "name": "task",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "payload",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "schedule",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "next_run",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "last_run",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "enabled",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "PeriodicTask",
+        "icon": "database",
+        "app_label": "app"
+      },
+      {
+        "name": "TaskRow",
+        "table": "task_row",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "payload",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "attempts",
+            "ty": "BigInt",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "max_attempts",
+            "ty": "BigInt",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "scheduled_for",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "run_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "started_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "completed_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "error",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "result",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "priority",
+            "ty": "Integer",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "TaskRow",
+        "icon": "database",
+        "indexes": [
+          [
+            "status",
+            "run_at"
+          ]
+        ],
+        "app_label": "app"
+      }
+    ]
+  }
+}
