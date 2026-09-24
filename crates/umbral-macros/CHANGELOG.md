@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.12...umbral-macros-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* [**breaking**] remove ergonomic .resolved(); the awaited accessor is the single access path
+- *(orm)* cache-aware to-many accessors — serve prefetch_related with zero queries
+- *(orm)* cache-aware to-one accessor — serves select_related with zero queries
+- *(orm)* model-level presentation/query metadata shared across plugins (gaps4 #95)
+- *(orm)* #[umbral(str = "{a} {b}")] per-instance display template (model __str__)
+- *(macros)* multi-base composition for #[model(base = A, B, …)] (gaps4 #89)
+- *(orm)* #[derive(New)] partial insert shape + impl Into<T> on create (gaps4 #88)
+- *(orm)* #[model(base = X)] attribute macro for flat base embedding
+- *(orm)* auto-emit Default/new() on #[derive(ModelBase)] bases
+- *(macros)* add #[umbral::main] + umbral::Result (gaps4 #60)
+
+### Fixed
+
+- *(macros,auth)* single-source choices serde, guard m2m skip, add app_url
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+- *(macros)* generated column-token module inherits model visibility
+- Merge feat/orm-relation-traversal into main: consolidate all gaps4 work
+- *(gaps4)* close #83 (choices/serde changelog+doc) + #84 (sqlx-skip guard message)
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.11...umbral-macros-v0.0.12) - 2026-08-16
 
 ### Added

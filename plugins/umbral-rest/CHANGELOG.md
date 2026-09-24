@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.12...umbral-rest-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* model-level presentation/query metadata shared across plugins (gaps4 #95)
+- *(orm)* lift nested-tree UPDATE reconciliation to umbral::orm::nested (gaps4 #91)
+- *(rest)* read-side expand for reverse-FK + M2M relations. Closes gaps4 #72
+- *(orm-rest)* declarative relation-path owner scope. Closes gaps4 #78
+
+### Fixed
+
+- *(rest)* object_scope check flags auto-exposed writable models
+- *(merge)* derive Clone on nested_validation_errors FK-target models
+- *(orm)* nested writes collect + drill down validation errors by path
+- *(orm)* REST validation returns all field errors at once, not first-only
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+- *(clippy)* auto-fix needless_borrow and misc across plugins
+- Merge branch 'main' into feat/orm-heavy-relations
+- Merge branch 'task/322-idor-object-scope'
+- Merge feat/orm-relation-traversal into main: consolidate all gaps4 work
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.11...umbral-rest-v0.0.12) - 2026-08-16
 
 ### Added

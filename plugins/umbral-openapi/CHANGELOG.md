@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.12...umbral-openapi-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* cache-aware to-one accessor — serves select_related with zero queries
+- *(orm)* model-level presentation/query metadata shared across plugins (gaps4 #95)
+- *(orm)* #[umbral(str = "{a} {b}")] per-instance display template (model __str__)
+- *(rest,openapi)* action_by — natural-key detail actions (gaps4 #80)
+
+### Fixed
+
+- *(macros,auth)* single-source choices serde, guard m2m skip, add app_url
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.11...umbral-openapi-v0.0.12) - 2026-08-16
 
 ### Added

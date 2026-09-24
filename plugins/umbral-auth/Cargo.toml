@@ -15,7 +15,7 @@ rust-version.workspace = true
 [dependencies]
 # The umbral facade. Plugin crates depend on the facade only, never on
 # umbral-core internals.
-umbral = { path = "../../crates/umbral", version = "0.0.12" }
+umbral = { path = "../../crates/umbral", version = "0.0.13" }
 argon2 = { version = "0.5", features = ["std"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -67,7 +67,7 @@ tracing = "0.1"
 # aware helpers); after the de-coupling those helpers live here,
 # calling into umbral-sessions for the row + cookie primitives. No
 # cycle: sessions is now user-agnostic.
-umbral-sessions = { path = "../umbral-sessions", version = "0.0.12" }
+umbral-sessions = { path = "../umbral-sessions", version = "0.0.13" }
 # NOTE (gaps4 #82): umbral-auth deliberately takes NO optional dependency on
 # either umbral-tasks or umbral-email, even feature-gated. umbral-email is
 # excluded on purpose — a REST API that never sends auth mail must not

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-graphql-v0.0.12...umbral-graphql-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(security)* boot check flags unscoped write surfaces (REST/GraphQL/storage) + ack markers
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-graphql-v0.0.11...umbral-graphql-v0.0.12) - 2026-08-16
 
 ### Other

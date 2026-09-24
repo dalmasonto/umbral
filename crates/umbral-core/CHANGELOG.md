@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.12...umbral-core-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* refresh materialized fields on set-based bulk source updates (gaps6 #17)
+- *(orm)* boot-time validation of materialized-field declarations
+- *(orm)* AppBuilder::materialize wires after-commit computed-field refresh
+- *(orm)* task-local re-entrancy guard for materialized recompute
+- *(orm)* DynQuerySet::filter_pk_eq for generic-pk single-row filter
+- *(orm)* materialized-field builder (Materialized<M>) with type erasure
+- *(orm)* fire audit-log on the on_tx() write path (gaps6 #16)
+- *(orm)* fire on_tx() write signals after transaction commit
+- *(core,cache)* TaggedCache ambient contract for cross-plugin tagged caching
+- *(orm)* expose typed column names via .name()/AsRef/Display
+- *(orm)* model exposure contract — derived views on ModelMeta
+- *(orm)* [**breaking**] remove ergonomic .resolved(); the awaited accessor is the single access path
+- *(orm)* multi-hop aggregates over relation paths (heavy-relations epic, Plan B Task 3)
+- *(orm)* cache-aware to-many accessors — serve prefetch_related with zero queries
+- *(orm)* cache-aware to-one accessor — serves select_related with zero queries
+- *(orm)* RelPath::from_path + unified walk_joins (heavy-relations epic, Plan A Tasks 1-3)
+- *(orm)* model-level presentation/query metadata shared across plugins (gaps4 #95)
+- *(oauth)* SPA-login ergonomics + boot-time safety checks (gaps4 #93)
+- *(orm)* synchronous in-transaction after-create hooks (gaps4 #92)
+- *(orm)* #[umbral(str = "{a} {b}")] per-instance display template (model __str__)
+- *(macros)* multi-base composition for #[model(base = A, B, …)] (gaps4 #89)
+- *(orm)* #[derive(New)] partial insert shape + impl Into<T> on create (gaps4 #88)
+- *(orm)* lift nested-tree UPDATE reconciliation to umbral::orm::nested (gaps4 #91)
+- *(orm-rest)* declarative relation-path owner scope. Closes gaps4 #78
+- *(orm)* prefetch_map — batched reverse-FK with no declared field. Closes gaps4 #75
+- *(orm)* forward FK/O2O `__` traversal on the filter side. Closes gaps4 #76
+- *(orm)* re-export Relation and document the relation-trait scoping rule
+- *(macros)* generate chainable relation accessors per model
+- *(orm)* resolve to-many relation chains to the leaf, DISTINCT by PK
+- *(orm)* chainable QuerySet from an M2M relation via junction subquery
+- *(orm)* resolve all-to-one relation chains in one JOIN query
+- *(orm)* Relation<T> handle with single forward-FK resolution
+
+### Fixed
+
+- *(orm)* savepoint the on_tx() audit insert to not poison a PG tx (gaps6 #18)
+- *(orm)* honest materialized-field update contract + missing per-row test
+- *(orm)* exercise the real null-key skip path, alias materialized field types
+- *(orm)* keep MaterializedSpec/SourceReg fields pub(crate); test in-crate
+- *(cache)* guard media-access store against a bust write-skew (gaps6 #12)
+- *(orm)* redact signal_skip fields from full-row post_delete payloads
+- *(orm)* DynQuerySet::delete() fires per-row post_delete with full row
+- *(orm)* typed QuerySet::delete() emits full-row post_delete when subscribed
+- *(orm)* LIMIT after filter_annotation, deep-hop soft-delete, dedup decode resolver
+- *(orm)* re-apply ORDER BY to the outer filter_annotation wrap (PG-correctness)
+- *(orm)* panic loudly on ambiguous back_fk_column reverse resolution
+- *(orm)* junction join must never go RIGHT under an M2M walk_joins hop
+- *(orm)* filter_annotation + limit/offset, retire Op for Cmp, soft-delete + secret-column gaps
+- *(orm)* bind M2M junction ids by referenced PK type, not JSON shape (gaps4 #94)
+- *(orm)* enforce poison/DISTINCT contract on _pg terminals; fix stale doc
+- *(macros)* unify reverse-O2O + Task-5 parent-side accessor
+- *(orm)* wire the QuerySet poison check into write/scan terminals too
+- *(orm)* poison, don't panic, a deep to-many chain in to_many_hop
+- *(orm)* deep relation resolve errors (not panics) without a booted App
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+- *(clippy)* clear pre-existing umbral-core lint warnings
+- *(macros)* generated column-token module inherits model visibility
+- *(orm)* rustfmt materialized_validation.rs (Task 5 fmt miss)
+- *(orm)* string-pk materialized target + docs(orm): materialized-fields page
+- *(cli)* remove the deprecated startapp command and scaffold_app
+- Merge branch 'main' into feat/orm-heavy-relations
+- *(orm)* prove schema-qualification on M2M & reverse-FK JOIN arms
+- *(orm)* rebuild apply_join_related on the unified walk_joins
+- *(orm)* prove the prefetch-cache ORDERING gate re-queries for ordered targets
+- *(orm)* round-trip walk_joins SQL tests + tone down schema-qualification doc claim
+- Merge feat/orm-relation-traversal into main: consolidate all gaps4 work
+- *(orm)* behavioral suite for relation traversal — per-kind + 5-hop mixed chain
+- *(orm)* extract shared forward-JOIN walk in relation_resolve
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.11...umbral-core-v0.0.12) - 2026-08-16
 
 ### Added

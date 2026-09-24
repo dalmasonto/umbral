@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.12...umbral-storage-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(storage)* media_invalidate_on — signal-driven cache busting
+- *(storage)* media_access_staff + media_access_roles presets
+- *(storage)* media_access_cached — cache-first per-caller decision
+- *(storage)* Decision type for cached media access
+- *(storage)* MediaCaller resolved from ambient auth
+- *(security)* boot check flags unscoped write surfaces (REST/GraphQL/storage) + ack markers
+
+### Fixed
+
+- *(cache)* guard media-access store against a bust write-skew (gaps6 #12)
+- *(orm)* typed QuerySet::delete() emits full-row post_delete when subscribed
+- *(storage)* injective media-access cache key (gaps6 #13)
+
+### Other
+
+- *(storage)* media-access review follow-ups (identity/roles/bulk notes, delete test, gaps #12/#13)
+- *(storage)* e2e media-access caching through the real GET route
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.11...umbral-storage-v0.0.12) - 2026-08-16
 
 ### Fixed

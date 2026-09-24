@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.12...umbral-admin-v0.0.13) - 2026-09-24
+
+### Added
+
+- *(orm)* cache-aware to-one accessor — serves select_related with zero queries
+- *(admin)* drag-resizable changelist columns + palette label polish (gaps4 #61, pass 7)
+- *(admin)* dashboard labels match the rest of the admin (gaps4 #61, pass 6)
+- *(admin)* tokenize legacy form/detail, de-duplicate form widgets (gaps4 #61, pass 5)
+- *(admin)* cleaner record form + detail read-view (gaps4 #61, pass 4)
+- *(admin)* changelist reads as a table editor (gaps4 #61, pass 3)
+- *(orm)* model-level presentation/query metadata shared across plugins (gaps4 #95)
+- *(orm)* #[umbral(str = "{a} {b}")] per-instance display template (model __str__)
+- *(admin)* shell refinement — visible active nav + aligned topbar (gaps4 #61, pass 2)
+- *(admin)* 'umbra dusk' cool-slate token refinement (gaps4 #61, pass 1)
+
+### Fixed
+
+- *(admin)* deterministic reflected nav URL in datatable rows fragment
+- *(admin)* search-as-you-type replaces history instead of pushing (gaps4 #96)
+- *(admin)* align theme palette tests with the cool-slate 'umbra dusk' values
+- *(macros)* unify reverse-O2O + Task-5 parent-side accessor
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+- *(clippy)* auto-fix needless_borrow and misc across plugins
+- Merge feat/orm-relation-traversal into main: consolidate all gaps4 work
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.11...umbral-admin-v0.0.12) - 2026-08-16
 
 ### Added

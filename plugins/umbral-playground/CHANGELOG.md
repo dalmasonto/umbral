@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.12...umbral-playground-v0.0.13) - 2026-09-24
+
+### Other
+
+- *(clippy)* clear remaining pre-existing warnings across the workspace
+
 ## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.11...umbral-playground-v0.0.12) - 2026-08-16
 
 ### Other
