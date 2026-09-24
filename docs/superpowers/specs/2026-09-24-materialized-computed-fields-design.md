@@ -29,7 +29,7 @@ The framework should own the refresh so **the declaration site is the only place
 |---|---|---|
 | v1 shape | Single-model computed field; value stored in `M`'s own column | Covers the web3clubs case; simplest shippable unit; extensible. |
 | Refresh timing | Eager, **after-commit** | Reuses gaps6 #15's after-commit signal delivery; source rows are committed and visible before recompute reads them; no `umbral-tasks` dependency. Slightly eventually-consistent within the triggering request, which the consumer accepted. |
-| Declaration surface | Builder registration: `App::builder().materialize(Materialized::<M>::field(col).from::<S>(key_fn).recompute(f))` | The recompute is a closure and cannot live in a `const` derive attribute. No derive-macro change; the column stays an ordinary typed field. |
+| Declaration surface | Builder registration: `App::builder().materialize(Materialized::<M>::field(col).from::<S>(key_fn).recompute_typed(f))` | The recompute is a closure and cannot live in a `const` derive attribute. No derive-macro change; the column stays an ordinary typed field. |
 | Write-back | Framework owns it | Closure stays pure (returns the value); single choke point through the ORM; framework can apply the re-entrancy guard. |
 | Location | `umbral-core`, exposed via the `umbral` facade | The builder is `AppBuilder` (core); the wiring uses core signals + the ambient ORM pool. Not a separate plugin in v1. |
 
@@ -45,7 +45,7 @@ App::builder()
     .materialize(
         Materialized::<Booking>::field(booking::PAYMENT_TOTAL)   // target model + column
             .from::<Rsvp>(|r: &Rsvp| Some(r.booking_id))         // source → affected target pk
-            .recompute(|booking_id: i64| async move {            // fresh value for that target row
+            .recompute_typed(|booking_id: i64| async move {            // fresh value for that target row
                 let agg = Rsvp::objects()
                     .filter(rsvp::BOOKING_ID.eq(booking_id))
                     .filter(rsvp::PAID.eq(true))
@@ -61,9 +61,9 @@ App::builder()
 ### 4.1 Types
 
 - `Materialized<M: Model>` — the spec builder.
-  - `Materialized::<M>::field(col)` — `col` is any column token implementing the `ColName` surface (`.name() -> &'static str`, gaps6 #1). Fixes the target model `M`, the target column name, and (via `M`) the target pk column + type. Returns a builder awaiting `.from(...)` and `.recompute(...)`.
+  - `Materialized::<M>::field(col)` — `col` is any column token implementing the `ColName` surface (`.name() -> &'static str`, gaps6 #1). Fixes the target model `M`, the target column name, and (via `M`) the target pk column + type. Returns a builder awaiting `.from(...)` and `.recompute_typed(...)`.
   - `.from::<S: Model>(key_fn)` where `key_fn: Fn(&S) -> Option<Pk> + Send + Sync + 'static`. `Pk` is the target pk value type (`i64` / `String` / `Uuid`). Returning `None` skips this source event (e.g. a null FK). May be called more than once for multiple source models; every source shares the one `recompute`.
-  - `.recompute(f)` where `f: Fn(Pk) -> Fut + Send + Sync + 'static`, `Fut: Future<Output = V> + Send`, `V: Serialize + Send`. Terminal-ish: yields the finished `MaterializedSpec` (type-erased) that `AppBuilder::materialize` accepts.
+  - `.recompute_typed(f)` where `f: Fn(Pk) -> Fut + Send + Sync + 'static`, `Fut: Future<Output = V> + Send`, `V: Serialize + Send`. Terminal-ish: yields the finished `MaterializedSpec` (type-erased) that `AppBuilder::materialize` accepts.
 - `AppBuilder::materialize(spec: impl Into<MaterializedSpec>) -> Self` — collects the spec; the actual signal subscriptions happen in `build()`.
 
 ### 4.2 Type erasure
