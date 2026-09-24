@@ -1962,8 +1962,14 @@ impl AppBuilder {
             ),
         );
 
-        // gaps6 #7 — subscribe every materialized field's after-commit
-        // recompute handlers. Validated first (see Task 5).
+        // gaps6 #7 — validate every materialized-field spec before subscribing
+        // any of them: an unknown target column, a missing single-column pk, or
+        // a target column that IS the pk aborts build() with a clear error
+        // instead of silently never refreshing (Task 5).
+        for spec in &self.materialized {
+            crate::orm::materialized::validate(spec).map_err(BuildError::Materialized)?;
+        }
+        // Subscribe every materialized field's after-commit recompute handlers.
         for spec in &self.materialized {
             crate::orm::materialized::install(spec);
         }
@@ -2462,6 +2468,8 @@ pub enum BuildError {
     /// (which records the permission), or drop the strict flag if a route is
     /// intentionally public.
     UngatedMutatingRoutes { routes: Vec<String> },
+    /// A materialized-field declaration failed validation (gaps6 #7).
+    Materialized(String),
 }
 
 impl std::fmt::Display for BuildError {
@@ -2587,6 +2595,7 @@ impl std::fmt::Display for BuildError {
                 routes.len(),
                 routes.join(", ")
             ),
+            BuildError::Materialized(m) => write!(f, "materialized field: {m}"),
         }
     }
 }

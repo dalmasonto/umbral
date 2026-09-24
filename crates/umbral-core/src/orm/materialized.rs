@@ -151,6 +151,31 @@ pub(crate) async fn guarded(table: String, col: String, fut: impl Future<Output 
     }
 }
 
+/// Validate a spec at boot: the target column must exist, the model must have a
+/// single-column pk, and the target column must not be that pk.
+pub(crate) fn validate(spec: &MaterializedSpec) -> Result<(), String> {
+    let m = &spec.target_meta;
+    let Some(pk) = m.pk_column() else {
+        return Err(format!(
+            "materialized field on `{}`: model has no single-column primary key",
+            m.table
+        ));
+    };
+    if !m.fields.iter().any(|c| c.name == spec.target_col) {
+        return Err(format!(
+            "materialized field `{}.{}`: no such column on the model",
+            m.table, spec.target_col
+        ));
+    }
+    if pk.name == spec.target_col {
+        return Err(format!(
+            "materialized field `{}.{}`: the target column cannot be the primary key",
+            m.table, spec.target_col
+        ));
+    }
+    Ok(())
+}
+
 /// Subscribe the after-commit recompute handlers for one spec. Called from
 /// `AppBuilder::build()`. Subscription is ambient (the signals registry is
 /// process-global), so no handle is threaded.
