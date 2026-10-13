@@ -30,7 +30,7 @@ The spec implies conditions no task's tests fully exercise. Each is listed here 
 1. **k6 exhausts host file descriptors at high VU counts, and it looks like a server failure.** The challenge expects ~15,000 concurrent connections. A client-side `EMFILE` produces failed requests, which k6 reports as `http_req_failed` — indistinguishable in the summary from the server rejecting load. Expected: the runner checks and reports `ulimit -n` before a run, and a result records it. → Task 7.
 2. **The container is OOM-killed and it looks like a latency failure.** `--memory=4g --memory-swap=4g` means no swap, so exceeding 4 GB kills the process rather than degrading. A dead server mid-hold and a slow server both produce failed requests. Expected: the runner distinguishes them and the result records which happened. → Task 6.
 3. **A SQLite WAL checkpoint stall shows up as an umbral p99 spike.** A long read under a write burst can trigger a checkpoint that blocks readers. The user sees "umbral got slower"; the truth is the storage layer. Expected: it is recorded, not averaged away. → Task 8.
-4. **Session cookies expire mid-hold.** A 5-minute hold plus a 2–3 minute cooldown plus a limit search can span 90 minutes. If the session pool is built with a short lifetime, requests start failing partway through and the failure is attributed to load. Expected: the pool outlives the longest plausible run, and a result records the session max-age used. → Task 5.
+4. **Session cookies expire mid-hold.** A 5-minute hold plus a 2–3 minute cooldown plus a limit search can span 90 minutes, so a short-lived pool would start failing partway through and the failure would be attributed to load. Verified as **not a risk at the default**: the login cookie carries `Max-Age=1209600` — 14 days (`DEFAULT_TTL_SECONDS`, `plugins/umbral-sessions/src/lib.rs:153`), and there is no builder to shorten the login TTL. It becomes a risk only if someone adds `.max_session_age(secs)` to `bench-prod`, which caps *server-side* session age independently of the cookie. Expected: the result records the session max-age in force, so a future change to it shows up in the data rather than being inferred from a mid-run failure. → Task 5.
 5. **A wrong `created_at` format silently breaks feed ordering without erroring.** The feed orders by `created_at DESC`; SQLite stores it as TEXT. A seed that writes a format which does not sort lexicographically returns a plausible-looking but wrong feed, and no test of status codes would catch it. Expected: the seed's timestamp format is asserted to sort correctly. → Task 5.
 
 ---
@@ -618,7 +618,7 @@ use serde_json::Value;
 
 use umbral::prelude::*;
 use umbral::web::{ApiError, Json, Path, Query};
-use umbral_auth::CurrentUser;
+use umbral_auth::OptionalIdentity;
 
 use umbral_bench::domain;
 
@@ -654,7 +654,7 @@ pub async fn profile(Path(id): Path<i64>) -> Result<Json<Value>, ApiError> {
 }
 
 pub async fn create_post(
-    user: CurrentUser,
+    user: OptionalIdentity,
     Json(input): Json<CreatePost>,
 ) -> Result<Json<Value>, ApiError> {
     let u = user.ok_or_else(|| ApiError::unauthorized("authentication required"))?;
@@ -663,7 +663,7 @@ pub async fn create_post(
 }
 
 pub async fn like_post(
-    user: CurrentUser,
+    user: OptionalIdentity,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     let u = user.ok_or_else(|| ApiError::unauthorized("authentication required"))?;
@@ -671,7 +671,7 @@ pub async fn like_post(
 }
 
 pub async fn follow_user(
-    user: CurrentUser,
+    user: OptionalIdentity,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     let u = user.ok_or_else(|| ApiError::unauthorized("authentication required"))?;
@@ -682,14 +682,18 @@ pub async fn follow_user(
 }
 ```
 
-**`CurrentUser` is a guess at the extractor's name and must be verified, not trusted.** Run:
+**The extractor is `OptionalIdentity`** — verified, not guessed. `plugins/umbral-auth/src/auth_routes.rs:911-939` uses it on `/api/auth/me` to resolve an identity session-first and then from a bearer token, which is exactly what this app needs: a browser sends `umbral_session`, and an API client could send `Authorization: Bearer`. It filters on `is_active = true`.
+
+Confirm its accessor before wiring, since the exact method name is not asserted here:
 
 ```bash
-grep -rn 'pub struct CurrentUser\|pub struct AuthUser\|impl.*FromRequestParts' \
-  plugins/umbral-auth/src/extractors.rs crates/umbral-core/src/auth_contract.rs | head -20
+grep -rn 'impl OptionalIdentity\|fn id(\|fn user_id(\|fn identity(' \
+  plugins/umbral-auth/src/*.rs | head -20
 ```
 
-and use the real extractor that yields an optional authenticated identity. If no such extractor exists, that is a framework gap: report it and stop rather than hand-rolling a session lookup in the handler, because hand-rolling it in the benchmark would make the benchmark measure something the framework does not actually provide.
+Use whatever it actually exposes. If the identity does not give the user id as an `i64`, change `domain::create_post`'s parameter type to match rather than casting at the call site. **Do not hand-roll a session lookup in the handler** — a benchmark that measures a session read the framework does not actually provide is worse than no benchmark at all.
+
+Two further verified facts this task depends on: the login cookie is valid for **14 days** (`DEFAULT_TTL_SECONDS`, `plugins/umbral-sessions/src/lib.rs:153`), which comfortably outlives a 90-minute search; and `SecurityPlugin`'s CSRF middleware requires a `umbral_csrf_token` cookie plus an `X-CSRF-Token` header on unsafe methods **unless the path is exempt**. `bench-prod` exempts `["/api"]`, so the `/api/*` writes need no CSRF header — but if the exemption is ever narrowed, k6's writes will start returning `403` and it will look like a load failure rather than a configuration mistake.
 
 - [ ] **Step 3: Confirm the write handlers' `id()` accessor**
 
@@ -757,16 +761,18 @@ git commit -m "feat(bench): add bench-prod, the measured application"
 - Consumes: `POST {prefix}/login` with `{"username","password"}` → `{user, token}` + `Set-Cookie: umbral_session=...`.
 - Produces: `harness/bench/session_pool.json` — a JSON array of cookie values, loadable by k6 `SharedArray`.
 
-- [ ] **Step 1: Find the real password-setting API**
+- [ ] **Step 1: Use the verified credential API**
 
-Do not guess. Run:
+No guessing needed — this was verified against the working tree. The seed uses `umbral_auth::create_user` (`plugins/umbral-auth/src/lib.rs:1533`):
 
-```bash
-grep -rn 'fn set_password\|fn hash_password\|fn create_user\|PasswordHasher\|argon2' \
-  plugins/umbral-auth/src/*.rs | head -20
+```rust
+pub async fn create_user(username: &str, email: &str, plaintext: &str)
+    -> Result<AuthUser, AuthError>
 ```
 
-Record the exact function name and signature. Every later step in this task uses it.
+It hashes with argon2id (`Params::new(19_456, 2, 1, None)`), sets `is_active = true` — which is the **only** flag that gates login (`lib.rs:1655-1659`) — and normalises username and email to trim+lowercase. It is **deliberately non-validating** against the password-strength policy (`lib.rs:1574-1585`), unlike the `/api/auth/register` route, so the bench password needs no special shape. This is the same call the repo's own tests use (`plugins/umbral-auth/tests/integration.rs:140`).
+
+The field is `password_hash`; the rotate-an-existing-user path is `umbral_auth::set_password<U: UserModel>(user: &mut U, plaintext: &str)` (`lib.rs:1690`).
 
 - [ ] **Step 2: Verify the seeded timestamp format sorts correctly**
 
@@ -876,7 +882,9 @@ mv "$tmp" "$OUT"
 echo "wrote $ok sessions to $OUT"
 ```
 
-Note: the login path prefix must be confirmed against `AuthPlugin::with_default_routes()`'s actual prefix — it is `/api/auth` for the API route set based on `auth_routes.rs:419`, but verify before running rather than assuming.
+The login path is **`POST /api/auth/login`** — verified. `with_default_routes()` resolves its prefix to `{api_base()}/auth` at build time (`plugins/umbral-auth/src/lib.rs:813-821`), and `api_base()` defaults to `/api`. Both `/api/auth/login` and `/api/auth/login/` are registered (`auth_routes.rs:426-427`). It accepts JSON (anything that is not `application/x-www-form-urlencoded` is parsed as JSON, `auth_routes.rs:70-95`) and returns `{user, token}` with the session cookie.
+
+One throttle to know about: failed logins are limited to **5 per IP+username per 5 minutes** (`plugins/umbral-auth/src/throttle.rs:158-159`), and the counter is forgiven on success (`auth_routes.rs:856`). Each pool user is attempted once, so a clean run never trips it — but if Step 6 reports `429`s, the pool was seeded against a binary without those users and the retries are what tripped the throttle, not load.
 
 - [ ] **Step 6: Build the pool end to end**
 
@@ -1567,6 +1575,6 @@ git commit -m "feat(bench): saturation test for the RPS ceiling"
 
 **Placeholder scan.** No "TBD"/"TODO". The three `_____` cells in `workload.md` are deliberate: the mix is the operator's decision and Step 1 of Task 7 says so explicitly and tells the operator how to fill them from `hold.js`.
 
-**Deliberately unverified APIs.** Task 4 and Task 5 name `CurrentUser`, `Settings.bind_addr` mutability, the login prefix, and the password-setting function with explicit verification steps rather than from memory. This is intentional and flagged in-line: guessing a framework API in a plan that a fresh engineer executes would be worse than the extra grep, and two of these (the auth extractor, a command surface) may turn out to be genuine framework gaps that must be reported rather than worked around.
+**Verified vs. still-unverified APIs.** The whole credential chain was verified against the working tree after the plan was first drafted, and the plan now carries the real names: `umbral_auth::create_user` / `set_password` (Task 5 Step 1), the `POST /api/auth/login` prefix and its JSON/`Throttle` behaviour (Task 5 Step 6), the `umbral_session` cookie and its 14-day `Max-Age` (Review Focus 4), and the `OptionalIdentity` extractor as the thing `bench-prod` should use (Task 4 Step 2). Two details remain explicitly flagged for in-situ confirmation rather than asserted from memory: `Settings.bind_addr` mutability, and `OptionalIdentity`'s exact accessor name and return type. Both are one `grep` each and neither is load-bearing for the design. If `OptionalIdentity` turns out not to expose a user id at all, that is a **genuine framework gap** to report rather than work around — the plan says so in place.
 
 **Type consistency.** `domain::`'s signatures are declared once in Task 3's Interfaces block and used identically in Tasks 3 and 4. `clamp_body`, `create_post`, `like_post`, `follow_user` all take `user_id: i64` in both. `buildOptions({vus, duration, scored, ramp})` is defined in Task 7 Step 3 and called with those exact keys in Steps 2 and 4.
