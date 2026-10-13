@@ -267,8 +267,11 @@ It is filled in Task 3; this step only makes the crate compile.
 - [ ] **Step 4: Move `main.rs` to `src/bin/bench-instrumented.rs`**
 
 ```bash
+mkdir -p harness/backend/src/bin
 git mv harness/backend/src/main.rs harness/backend/src/bin/bench-instrumented.rs
 ```
+
+(`git mv` requires the destination directory to exist.)
 
 Then edit `src/bin/bench-instrumented.rs`: **delete** its `mod` declarations (the library now owns them) and replace each `crate::` path with `umbral_bench::`. Specifically delete lines 28–35 (`mod api; mod lab; ... mod views;`) and change the `use crate::{...}` block at lines 44–48 to `use umbral_bench::{...}`.
 
@@ -1189,7 +1192,7 @@ Create `harness/bench/k6/lib.js` so warm-up, hold and saturation cannot drift ap
 // feed with occasional engagement writes), extended with an HTML page so the
 // template-render path is exercised — a dimension the challenge has none of.
 import http from "k6/http";
-import { check } from "k6";
+import { check, sleep } from "k6";
 import { Trend } from "k6/metrics";
 
 export const BASE = __ENV.BASE || "http://127.0.0.1:8114";
@@ -1221,8 +1224,6 @@ function think(minMs, maxMs) {
   if (hi <= 0) return;
   sleep((lo + Math.random() * (hi - lo)) / 1000);
 }
-
-import { sleep } from "k6";
 
 function jar(session) {
   // Every VU is pinned to one pooled session, so its requests are a single
@@ -1396,12 +1397,30 @@ git commit -m "feat(bench): k6 warm-up and 5-minute hold, with the mix in one pl
 
 - [ ] **Step 3: Verify the comparator**
 
+Build a synthetic pair first so this step is self-contained (no real run needed yet):
+
 ```bash
-# Same file twice: must be a no-op, exit 0.
-harness/bench/results/compare.sh /tmp/a.json /tmp/a.json; echo "exit=$?"
+mkdir -p /tmp/cmp && cd /tmp/cmp
+cat > a.json <<'JSON'
+{"git_sha":"aaa","rps":1000,"p99_ms":200,"dataset_scale":20000,
+ "cpuset":"0,2,4,6","mix":{"LIKE_P":0.15,"POST_P":0.02,"PAGE_P":0.10}}
+JSON
+cp a.json same.json
+python3 - <<'PY'
+import json
+d = json.load(open("a.json"))
+d["rps"] = 600            # -40%, beyond the 10% regression threshold
+json.dump(d, open("regressed.json", "w"))
+d2 = json.load(open("a.json")); d2["dataset_scale"] = 50000
+json.dump(d2, open("rescaled.json", "w"))
+PY
+
+harness/bench/results/compare.sh a.json same.json ; echo "identical -> exit=$? (expect 0)"
+harness/bench/results/compare.sh a.json regressed.json; echo "regressed -> exit=$? (expect non-zero, names rps)"
+harness/bench/results/compare.sh a.json rescaled.json; echo "rescaled  -> exit=$? (expect non-zero, refuses)"
 ```
 
-Expected: `exit=0`, "no change". Then hand-edit a copy's `rps` down 30% and confirm it exits non-zero and names `rps`.
+(Adjust the field names in the heredocs to whatever `record.sh` actually writes — the point is that all three behaviours are exercised.)
 
 - [ ] **Step 4: Commit**
 
