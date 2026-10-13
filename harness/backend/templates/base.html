@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}umbral bench{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #fafafa; --fg: #18181b; --muted: #71717a; --border: #e4e4e7;
+      --card: #ffffff; --accent: #b45309; --accent-soft: #fef3c7;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #131316; --fg: #f4f4f5; --muted: #a1a1aa; --border: #2e2e33;
+              --card: #1c1c20; --accent: #f59e0b; --accent-soft: #3b2f10; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+           font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    a { color: inherit; }
+    header { border-bottom: 1px solid var(--border); background: var(--card); }
+    .wrap { max-width: 44rem; margin: 0 auto; padding: 0 1rem; }
+    .bar { display: flex; align-items: center; gap: 1rem; height: 3.25rem;
+           max-width: 44rem; margin: 0 auto; padding: 0 1rem; }
+    .brand { font-weight: 650; letter-spacing: -0.01em; }
+    .brand em { color: var(--muted); font-style: normal; font-weight: 400; }
+    nav a { color: var(--muted); text-decoration: none; margin-right: .9rem; font-size: .9rem; }
+    nav a:hover { color: var(--fg); }
+    main { padding: 1.5rem 0 3rem; }
+    h1 { font-size: 1.25rem; letter-spacing: -0.01em; margin: 0 0 .25rem; }
+    .sub { color: var(--muted); font-size: .875rem; margin: 0 0 1.25rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+    .post { padding: .9rem 1rem; border-bottom: 1px solid var(--border); }
+    .post:last-child { border-bottom: 0; }
+    .post .meta { color: var(--muted); font-size: .8rem; font-family: var(--mono);
+                  display: flex; gap: 1rem; margin-top: .4rem; }
+    .post .who { font-weight: 600; font-size: .9rem; }
+    .post .who a { text-decoration: none; }
+    .post .who a:hover { text-decoration: underline; }
+    .post a.body { display: block; margin-top: .3rem; text-decoration: none; }
+    .stats { display: flex; gap: 1.5rem; margin: 1rem 0 1.25rem; }
+    .stat b { font-family: var(--mono); font-size: 1.2rem; display: block; }
+    .stat span { color: var(--muted); font-size: .78rem; }
+    .chip { display: inline-block; font-family: var(--mono); font-size: .72rem;
+            border: 1px solid var(--border); border-radius: 6px; padding: .15rem .45rem;
+            color: var(--muted); }
+    footer { color: var(--muted); font-size: .78rem; padding: 1.5rem 0 2.5rem; }
+    footer code { font-family: var(--mono); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <span class="brand">umbral <em>bench</em></span>
+      <nav>
+        <a href="/">feed</a>
+        <a href="/api/feed">api</a>
+        <a href="/api/bench/telemetry">telemetry</a>
+        <a href="http://localhost:5173/bench">frontend</a>
+      </nav>
+      <span class="chip" style="margin-left:auto">profile the layer, not the guess</span>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="wrap">
+    Every response carries a <code>Server-Timing</code> header and the request
+    lands in <code>traces/requests.jsonl</code> — see
+    <code>GET /api/bench/telemetry</code>.
+  </footer>
+</body>
+</html>

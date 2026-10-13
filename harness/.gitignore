@@ -1,0 +1,13 @@
+# Build + runtime artefacts of the bench harness.
+target/
+node_modules/
+dist/
+
+# Runtime data: traces, run records, the bench database.
+traces/
+bench.db
+bench.db-shm
+bench.db-wal
+
+# Local operator overrides.
+.env

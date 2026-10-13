@@ -1,0 +1,51 @@
+[package]
+name = "umbral-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# harness/backend — the umbral benchmark & profiling harness app.
+# STANDALONE project (excluded from the framework workspace): path-deps the
+# local umbral crates. Run from this directory:
+#   cargo run -- migrate     # create the bench schema
+#   cargo run -- serve       # boot the app (seed runs on serve)
+# Real numbers: `cargo build --release` then `cargo run --release -- serve`.
+
+[dependencies]
+# Framework core + CLI (dispatch, migrate, makemigrations, ...).
+umbral = { path = "../../crates/umbral" }
+umbral-cli = { path = "../../crates/umbral-cli" }
+
+# Plugins under measurement. Each contributes real wrap_router layers that
+# the telemetry probes bracket (see src/probes.rs).
+umbral-auth = { path = "../../plugins/umbral-auth" }
+umbral-sessions = { path = "../../plugins/umbral-sessions" }
+umbral-security = { path = "../../plugins/umbral-security" }
+umbral-health = { path = "../../plugins/umbral-health" }
+
+# HTTP substrate: the SSE endpoint and the bench middleware impls need the
+# axum types directly (umbral re-exports most of them; Sse is app-level).
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Telemetry: custom tracing layer (captures sqlx events per request) + fmt.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Load generator HTTP client (loopback against this same server).
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+# Models use `#[derive(sqlx::FromRow)]`; the derive needs the macros feature.
+sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio"] }
+
+# Disk discipline: without this the debug build embeds full DWARF and the
+# harness target dir balloons (see the workspace Cargo.toml's profile note).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

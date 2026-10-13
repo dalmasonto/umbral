@@ -1,0 +1,71 @@
+<bench-app-header></bench-app-header>
+
+<main class="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">Where is the time actually going?</h1>
+    <p class="mt-1 text-sm text-muted-foreground">
+      Decomposed from per-layer timings captured by the query profiler; every bar is the same request path measured twice.
+    </p>
+  </div>
+
+  <bench-layer-ledger></bench-layer-ledger>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+      <div>
+        <h2 class="text-base font-semibold tracking-tight">Slowest statements</h2>
+        <p class="text-sm text-muted-foreground">Fingerprinted over the whole run; bound values collapse into one row.</p>
+      </div>
+      <span class="text-xs font-mono text-muted-foreground">threshold 20 ms · r-248</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[36rem] text-sm">
+        <thead>
+          <tr class="text-xs text-muted-foreground">
+            <th class="py-2 pr-3 text-left font-medium">Statement</th>
+            <th class="py-2 pr-3 text-right font-medium">Calls</th>
+            <th class="py-2 pr-3 text-right font-medium">p95</th>
+            <th class="py-2 text-right font-medium">Backends</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-mono text-xs">SELECT posts + authors WHERE feed fanout ORDER BY created_at LIMIT 25</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">612k</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">18.4 ms</td>
+            <td class="py-2 text-right"><span class="inline-flex items-center gap-1.5 font-mono text-xs"><span class="h-2 w-2 rounded-sm bg-chart-1"></span><span class="h-2 w-2 rounded-sm bg-chart-2"></span></span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-mono text-xs">INSERT INTO posts … RETURNING *</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">49k</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">31.2 ms</td>
+            <td class="py-2 text-right"><span class="inline-flex items-center gap-1.5 font-mono text-xs"><span class="h-2 w-2 rounded-sm bg-chart-2"></span></span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-mono text-xs">SELECT count(*) FROM likes WHERE post_id = ?</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">1.2M</td>
+            <td class="py-2 pr-3 text-right font-mono tabular-nums">4.1 ms</td>
+            <td class="py-2 text-right"><span class="inline-flex items-center gap-1.5 font-mono text-xs"><span class="h-2 w-2 rounded-sm bg-chart-1"></span><span class="h-2 w-2 rounded-sm bg-chart-2"></span></span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+      <h2 class="text-base font-semibold tracking-tight">N+1 fingerprints</h2>
+      <span class="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-mono text-destructive">1 flagged</span>
+    </div>
+    <div class="flex items-start gap-3 rounded-md border border-border/60 p-3">
+      <span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-sm bg-destructive"></span>
+      <div class="min-w-0 text-sm">
+        <p class="font-mono text-xs">GET /dashboard → SELECT * FROM orders WHERE user_id = ? <span class="text-muted-foreground">(repeated 214×, same fingerprint)</span></p>
+        <p class="mt-1 text-muted-foreground">Probable N+1: the dashboard loops orders instead of one IN-query. Candidate fix: <span class="font-mono">select_related</span> / batch load. Seen on both backends; Postgres pays more per round-trip.</p>
+      </div>
+    </div>
+    <p class="mt-3 text-xs text-muted-foreground">The detector reuses the same statement-counting seam as the test harness, so a fingerprint here matches a failing test there.</p>
+  </section>
+
+  <p class="pb-2 text-xs text-muted-foreground">Sample data for the interface design — layer timings are captured per run and stored with the run record.</p>
+</main>

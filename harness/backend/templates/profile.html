@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ username }} — umbral bench{% endblock %}
+{% block content %}
+  <h1>@{{ username }}</h1>
+  <p class="sub">user #{{ user_id }} · the heavy aggregate: follower/following/post counts inline</p>
+  <div class="stats">
+    <div class="stat"><b>{{ followers }}</b><span>followers</span></div>
+    <div class="stat"><b>{{ following }}</b><span>following</span></div>
+    <div class="stat"><b>{{ post_count }}</b><span>posts</span></div>
+  </div>
+  <div class="card">
+    {% for p in posts %}
+      <article class="post">
+        <a class="body" href="/posts/{{ p.id }}">{{ p.body }}</a>
+        <div class="meta"><span>{{ p.created_at }}</span></div>
+      </article>
+    {% else %}
+      <article class="post"><span class="sub">No posts by this user.</span></article>
+    {% endfor %}
+  </div>
+{% endblock %}

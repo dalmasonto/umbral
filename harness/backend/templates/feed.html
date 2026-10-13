@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}feed — umbral bench{% endblock %}
+{% block content %}
+  <h1>Feed</h1>
+  <p class="sub">Newest posts first · server-rendered through minijinja (the `render` bucket in the ledger)</p>
+  <div class="card">
+    {% for p in posts %}
+      <article class="post">
+        <div class="who"><a href="/u/{{ p.author_id }}">{{ p.author }}</a></div>
+        <a class="body" href="/posts/{{ p.id }}">{{ p.body }}</a>
+        <div class="meta">
+          <span>{{ p.created_at }}</span>
+          <span>{{ p.likes }} likes</span>
+          <span>{{ p.comments }} comments</span>
+        </div>
+      </article>
+    {% else %}
+      <article class="post"><span class="sub">No posts yet — seed by running `cargo run -- serve`.</span></article>
+    {% endfor %}
+  </div>
+{% endblock %}
