@@ -1033,14 +1033,48 @@ VOLUME ["/data"]
 # exactly this drift from a different cause (no plugin registered to own the
 # bench migrations) and it cost a diagnosis cycle there.
 
-ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db" \
-    UMBRAL_BIND="0.0.0.0:8114" \
+# Two of these are REQUIRED and were not in the first draft of this plan. Both
+# were found the hard way — each produces a boot failure that reads as something
+# else entirely — so do not "tidy" them away:
+#
+#   `?mode=rwc` — sqlx opens a file-backed SQLite URL read-only unless told to
+#   create (`crates/umbral-core/src/db.rs:714-720`; `settings.rs:41-44` documents
+#   it). `bench/data/` is empty by design, so this container is always the cold
+#   start that creates the file. Without it, boot dies in `connect()` with
+#   `SqliteError { code: 14, "unable to open database file" }`.
+#
+#   `UMBRAL_SECRET_KEY` — `Environment`'s default is build-dependent
+#   (`settings.rs:630-642`): a DEBUG build defaults to `Dev`, a RELEASE build to
+#   `Prod`. This image runs a release binary with no `umbral.toml`, so it is
+#   `Prod`, and in `Prod` the framework refuses to boot while `secret_key` is the
+#   built-in dev default. The value is a FIXTURE for a loopback-only container,
+#   not a deployment secret, and it is fixed **on purpose** — a per-boot random
+#   key would invalidate every session whenever the container is recreated, and
+#   Task 9's pool must survive that.
+#
+# `UMBRAL_BIND` is this binary's own knob, not the framework's (which is
+# `UMBRAL_BIND_ADDR`, `settings.rs:190,445`). `bench-prod.rs:73-80` implements it
+# because a near-miss name lands silently in `#[serde(flatten)] extra` with no
+# error and no warning. It is bound to **loopback**, not `0.0.0.0`: k6 runs on the
+# same host and reaches loopback directly, so listening on every interface buys
+# nothing and would expose a container carrying a committed key to whatever
+# network the laptop is on.
+ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db?mode=rwc" \
+    UMBRAL_BIND="127.0.0.1:8114" \
+    UMBRAL_SECRET_KEY="bench-silo-fixture-key-not-for-deployment-0001" \
     RUST_LOG="warn"
 
 EXPOSE 8114
 ENTRYPOINT ["/app/umbral-bench-prod"]
 CMD ["serve"]
 ```
+
+**⚠️ The silo runs `Prod`; every host-side run so far ran `Dev`.** `harness/backend/umbral.toml:10` sets `environment = "Dev"` and is *not* copied into the image, so Tasks 4 and 5's host verification exercised a different environment from the one this container serves. That difference is material and was confirmed rather than assumed: in `Dev`, `dev_mode_active()` rebuilds the minijinja environment from disk on **every render** (`crates/umbral-core/src/templates.rs:1090-1099`) — a dev-only cost on exactly the HTML-weighted paths the workload exercises — and the prod host-guard, prod error pages and the HSTS/CSP posture apply only in the silo.
+
+The container deliberately stays `Prod`. Forcing `Dev` to make the two agree would inflate the page-path numbers with a cost no real deployment pays, which is the opposite of what this rig is for. **Two consequences to carry forward:**
+
+- **No host number is comparable to a silo number.** A figure measured against a host-side binary, in any task, is not a smaller or larger version of the silo's — it is a different measurement. Task 9 must not mix them, and neither may any later comparison.
+- **The baseline must not claim "real security headers" without naming what is off.** `bench-prod.rs` mounts `SecurityPlugin::new().csrf_exempt(["/api"])` with no `.with_hsts(true)` and no CSP, so the framework emits two warnings per boot in `Prod`. They are correct — the framework is telling the truth — but the baseline write-up must say HSTS and CSP are disabled rather than implying the full production posture was measured.
 
 - [ ] **Step 3: Write the .dockerignore**
 
@@ -1560,6 +1594,20 @@ Expected `201` (or `200`). A `401` means the users, the sessions, and the served
 ```bash
 harness/bench/run.sh build && harness/bench/run.sh serve
 harness/bench/run.sh verify          # envelope MUST match before proceeding
+```
+
+**Wait for the seed to settle, not just for the server to answer.** `run.sh`'s readiness probe hits `/api/ping`, but boot also runs the seed top-up, and on a 20,000-user dataset that can still be running when the probe passes. A hold started then measures the seed's writes competing with the workload — a number that is wrong in a way nothing in the output would reveal. Wait for the seed's own completion line instead:
+
+```bash
+until docker logs umbral-bench 2>&1 | grep -q '\[bench-seed\] done:'; do
+  sleep 5
+done
+echo "seed settled"
+```
+
+Then run the warm-up:
+
+```bash
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
   harness/bench/k6/warmup.js
 ```
