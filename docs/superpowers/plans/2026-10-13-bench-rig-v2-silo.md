@@ -1629,9 +1629,14 @@ echo "seed settled"
 Then run the warm-up:
 
 ```bash
+SCALE=20000            # MUST equal UMBRAL_BENCH_USERS from Step 1
+POSTS=$((SCALE * 10))
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   harness/bench/k6/warmup.js
 ```
+
+The warm-up needs the id ranges for the same reason the holds do — `preflight()` checks them against the served dataset and **aborts** rather than letting a wrongly-scaled run proceed. `SCALE` is defined here and reused by Steps 3 and 4, so all four runs describe the same dataset.
 
 - [ ] **Step 3: Run the first hold**
 
