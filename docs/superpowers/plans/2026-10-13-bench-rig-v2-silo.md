@@ -1166,6 +1166,8 @@ harness/bench/run.sh serve
 
 Expected: image builds, container starts, `ready on 8114`.
 
+**This is also the project's first cold start, and it is the only one.** `bench/data/` is empty, so the container boots against a fresh `sqlite:///data/bench-run.db` and `auto_migrate_on_serve()` has to create the whole schema from the copied `migrations/`. Task 4's prod binary was only ever booted against the *already-seeded* `bench.db`, so the cross-plugin ordering that a fresh schema depends on — derived from FK edges rather than declared — is sound on paper but unexercised until this step. If boot fails, read the log; a `DriftDetected` here means the `migrations/` COPY is missing, and any other failure is a real ordering bug worth reporting rather than working around.
+
 - [ ] **Step 6: Verify the envelope is real**
 
 ```bash
