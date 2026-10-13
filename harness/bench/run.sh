@@ -96,10 +96,28 @@ case "${1:-serve}" in
       echo "         the default scale. No number from this container is the baseline." >&2
     fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true
+    # File descriptors. Docker's default is 1024, and the workload needs far
+    # more: every keep-alive connection is one descriptor, the reference
+    # benchmark runs on the order of 15,000 concurrent connections, and the
+    # plan's limit search doubles from 2,500 toward 40,000. At the default the
+    # container held ~1,000 and the server logged `accept error: Too many open
+    # files` — with p95/p99 still clean, so it did not even look like
+    # saturation. Every hold above ~1,000 VUs would have measured Docker's
+    # default and reported it as umbral's ceiling.
+    #
+    # 524288:524288 is the largest this host can grant, measured rather than
+    # guessed: the invoking shell's limit is 1048576, but the container's rlimit
+    # is set by the daemon, and dockerd's own hard limit is 524288
+    # (`grep 'Max open files' /proc/$(pgrep -x dockerd)/limits`) — asking for
+    # more makes `docker run` fail outright. At 524288 the silo's descriptor
+    # limit cannot be what stops a run: 13x the 40,000-VU cap the search
+    # targets, 35x the reference workload's connection count. Do not tidy this
+    # back to the default.
     docker run -d --name "$NAME" \
       --cpuset-cpus=0,2,4,6 \
       --cpus=4 \
       --memory=4g --memory-swap=4g \
+      --ulimit nofile=524288:524288 \
       --network host \
       -v "$DATA:/data" \
       -e "$DB_ENV" \
@@ -181,13 +199,25 @@ case "${1:-serve}" in
       nproc_in="$(docker exec "$NAME" nproc)"
       mem_max="$(docker exec "$NAME" cat /sys/fs/cgroup/memory.max)"
       swap_max="$(docker exec "$NAME" cat /sys/fs/cgroup/memory.swap.max)"
+      # The app's OWN limit (pid 1's), not an exec shell's — this is the number
+      # that decides whether a high-VU hold can keep its connections. At
+      # Docker's default (1024) the server logs "Too many open files" while
+      # p95/p99 stay clean, which reads as a mystery rather than a ceiling.
+      nofile_in="$(docker exec "$NAME" awk '/Max open files/{print $4}' /proc/1/limits)"
       meminfo="$(docker exec "$NAME" grep MemTotal /proc/meminfo)"
     else
       nproc_in="<not running>"
       mem_max="<not running>"
       swap_max="<not running>"
+      nofile_in="<not running>"
       meminfo="<not running>"
     fi
+
+    # The client side has a limit of its own, and a client-side EMFILE is
+    # indistinguishable in a k6 summary from the server rejecting load — which
+    # is why the plan records `ulimit -n` with every result. A k6 started from
+    # this shell inherits this number.
+    host_nofile="$(ulimit -n)"
 
     echo "=== requested by run.sh (docker inspect) ==="
     echo "cpuset-cpus        $cpuset"
@@ -198,11 +228,14 @@ case "${1:-serve}" in
     echo "nproc              $nproc_in"
     echo "memory.max         $mem_max"
     echo "memory.swap.max    $swap_max"
+    echo "nofile (soft)      $nofile_in"
     # /proc/meminfo is NOT namespaced by cgroup: it reports the HOST's RAM on
     # any runtime without lxcfs, so it is informational only and the cgroup
     # file above is the value that binds.
     echo "MemTotal           $meminfo   (host RAM, not the limit)"
     echo "OOMKilled          $oom"
+    echo "=== on the host (inherited by k6) ==="
+    echo "ulimit -n          $host_nofile"
     echo "=== assertions ==="
     check "cpuset-cpus" "0,2,4,6" "$cpuset"
     check "cpu cap (CPUs)" "4" "$cpus"
@@ -213,8 +246,24 @@ case "${1:-serve}" in
     # 0 inside the cgroup is the mechanism behind `--memory-swap=4g`: with no
     # swap to fall back on, an over-budget run is killed rather than degraded.
     check "cgroup memory.swap.max inside the container" "0" "$swap_max"
+    # Must match the --ulimit on `docker run`: a hold above ~1,000 VUs needs
+    # more descriptors than Docker's 1024 default, and the failure it causes
+    # does not look like saturation.
+    check "container nofile limit (soft)" "524288" "$nofile_in"
     check "OOMKilled" "false" "$oom"
     check "container running" "true" "$running"
+
+    case "$host_nofile" in
+      *[!0-9]*) ;; # `unlimited` and friends: never the binding constraint
+      *)
+        if [ "$host_nofile" -lt 20000 ]; then
+          echo "WARNING: the host nofile limit ($host_nofile) is below the ~20000 a" >&2
+          echo "         high-VU hold needs. k6 would fail client-side with EMFILE, which" >&2
+          echo "         a k6 summary reports the same way as the server rejecting load." >&2
+          echo "         Raise it in the shell you run k6 from: ulimit -n 65535" >&2
+        fi
+        ;;
+    esac
 
     if [ "$fail" -ne 0 ]; then
       echo "ENVELOPE MISMATCH: every number from this container is invalid. Fix the envelope before running anything." >&2
