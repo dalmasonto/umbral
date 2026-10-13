@@ -6,7 +6,7 @@
 //!
 //! ```bash
 //! UMBRAL_BENCH_USERS=50000 UMBRAL_BENCH_POSTS_PER_USER=10 \
-//! UMBRAL_BENCH_LIKES_PER_USER=25 cargo run -- serve   # 50k users / 500k posts
+//! UMBRAL_BENCH_LIKES_PER_USER=25 cargo run --bin umbral-bench-instrumented -- serve   # 50k users / 500k posts
 //! ```
 //!
 //! Defaults are modest (2k users / 20k posts) so a first boot is quick; set

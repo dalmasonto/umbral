@@ -2,8 +2,8 @@
 //!
 //! Run from `harness/backend/`:
 //! ```bash
-//! cargo run -- migrate      # create the schema
-//! cargo run -- serve        # boot (seeds on first serve; port 8113)
+//! cargo run --bin umbral-bench-instrumented -- migrate   # create the schema
+//! cargo run --bin umbral-bench-instrumented -- serve     # boot (seeds on first serve; port 8113)
 //! ```
 //!
 //! What it is: a realistic social-feed umbral app (users, follows, posts,
@@ -25,15 +25,6 @@
 //! Scenarios authenticate as a user via the `x-bench-user: <id>` header
 //! (a bench-only identity middleware — see `probes.rs::DevAuth`).
 
-mod api;
-mod lab;
-mod loadgen;
-mod models;
-mod probes;
-mod seed;
-mod telemetry;
-mod views;
-
 use umbral::cors::CorsConfig;
 use umbral::prelude::*;
 use umbral_auth::AuthPlugin;
@@ -41,11 +32,12 @@ use umbral_health::HealthPlugin;
 use umbral_security::SecurityPlugin;
 use umbral_sessions::{CookieStore, SessionsPlugin};
 
-use crate::probes::{
+use umbral_bench::probes::{
     DevAuth, HarnessPlugin, PROBE_AFTER_SECURITY, PROBE_AFTER_SESSIONS, PROBE_INNER, PROBE_OUTER,
     ProbePlugin,
 };
-use crate::telemetry::{RequestLog, ResponseStamp, TraceRoot};
+use umbral_bench::telemetry::{RequestLog, ResponseStamp, TraceRoot};
+use umbral_bench::{api, lab, loadgen, seed, telemetry, views};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

@@ -34,8 +34,8 @@ The measurement seams (and their limits) are documented in `backend/src/telemetr
 
 ```bash
 cd harness/backend
-cargo run -- migrate          # schema
-cargo run -- serve            # boots on 127.0.0.1:8113, seeds on first run
+cargo run --bin umbral-bench-instrumented -- migrate   # schema
+cargo run --bin umbral-bench-instrumented -- serve     # boots on 127.0.0.1:8113, seeds on first run
 
 # in another terminal — watch the layers:
 curl -s localhost:8113/api/feed | head -c 400
@@ -54,7 +54,7 @@ cd ../frontend && npm install && npm run dev   # the UI at :5173
 Load-test the OTHER backend by pointing the same harness at Postgres:
 
 ```bash
-UMBRAL_DATABASE_URL=postgres://localhost/umbral_bench cargo run -- serve
+UMBRAL_DATABASE_URL=postgres://localhost/umbral_bench cargo run --bin umbral-bench-instrumented -- serve
 ```
 
 (The run records store the backend label, so sqlite vs postgres comparisons stay honest.)

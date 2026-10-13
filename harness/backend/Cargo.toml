@@ -4,12 +4,25 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lib]
+name = "umbral_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "umbral-bench-instrumented"
+path = "src/bin/bench-instrumented.rs"
+
+[[bin]]
+name = "umbral-bench-prod"
+path = "src/bin/bench-prod.rs"
+
 # harness/backend — the umbral benchmark & profiling harness app.
 # STANDALONE project (outside the framework workspace): path-deps the local
 # umbral crates. Run from this directory:
-#   cargo run -- migrate     # create the bench schema
-#   cargo run -- serve       # boot the app (seed runs on serve)
-# Real numbers: `cargo build --release` then `cargo run --release -- serve`.
+#   cargo run --bin umbral-bench-instrumented -- migrate   # create the bench schema
+#   cargo run --bin umbral-bench-instrumented -- serve     # boot the app (seed runs on serve)
+# Real numbers: `cargo build --release` then
+# `cargo run --release --bin umbral-bench-instrumented -- serve`.
 
 # Own workspace root, so the package is standalone by construction: cargo
 # stops its upward search here instead of walking out of the repo. Two things

@@ -64,7 +64,7 @@ and a JSON line lands in `traces/requests.jsonl` (writer thread, off the request
 
 ```bash
 UMBRAL_BENCH_USERS=50000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=25 \
-  cargo run -- serve        # 50k users / 500k posts — the design's target shape
+  cargo run --bin umbral-bench-instrumented -- serve   # 50k users / 500k posts — the design's target shape
 ```
 
 Defaults: 2,000 users · 10 posts/user · 25 likes/user · 8 follows/user · ~60% of posts get 1–2 comments.
@@ -72,9 +72,9 @@ Defaults: 2,000 users · 10 posts/user · 25 likes/user · 8 follows/user · ~60
 ## Running for real numbers
 
 ```bash
-cargo build --release
-cargo run --release -- migrate
-cargo run --release -- serve
+cargo build --release --bin umbral-bench-instrumented
+cargo run --release --bin umbral-bench-instrumented -- migrate
+cargo run --release --bin umbral-bench-instrumented -- serve
 ```
 
 `[profile.dev] debug = "line-tables-only"` keeps the target dir (and the disk) sane; the dev profile still runs correctly, just slower — never quote dev-profile latency as a result.
