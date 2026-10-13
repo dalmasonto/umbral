@@ -13,6 +13,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use umbral::migrate::ModelMeta;
 use umbral::prelude::*;
 use umbral_auth::AuthUser;
 
@@ -69,4 +70,39 @@ pub struct Comment {
     pub body: String,
     #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// The app's plugin
+// ---------------------------------------------------------------------------
+
+/// The app's plugin: owns the four models above and nothing else.
+///
+/// A `bench`-named owner is not optional. The migration engine names a
+/// plugin's directory (`migrations/bench/`) and its tracking rows after the
+/// plugin, so an app whose models have no registered owner cannot migrate at
+/// all: the rows already in `umbral_migrations` read back as
+/// applied-but-missing and `migrate` — and every `serve` with
+/// `auto_migrate_on_serve` — refuses with `DriftDetected`.
+///
+/// `bench-instrumented` mounts `probes::HarnessPlugin`, the same owner plus a
+/// dependency on the outermost probe (instrumentation-layer ordering).
+/// `bench-prod` mounts this one instead: registering a probe to satisfy that
+/// dependency is exactly the measurement scaffolding prod must not construct,
+/// and a declared dependency on an unregistered plugin is a hard build error.
+pub struct BenchPlugin;
+
+impl Plugin for BenchPlugin {
+    fn name(&self) -> &'static str {
+        "bench"
+    }
+
+    fn models(&self) -> Vec<ModelMeta> {
+        // Every `#[derive(Model)]` in THIS crate. This impl must live in the
+        // library: `discovered_models!` filters the link-time registrations by
+        // the first segment of `module_path!()` — the crate name — which is
+        // `umbral_bench` here and `umbral_bench_prod` inside a `[[bin]]`, so a
+        // plugin defined in the bin would discover zero models.
+        umbral::discovered_models!()
+    }
 }

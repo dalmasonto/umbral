@@ -432,7 +432,9 @@ pub async fn start_run(scenario: &str, vus: u32, duration_s: u32) -> Result<RunR
         .map(|p| p.id)
         .unwrap_or(0);
     if uid_max == 0 || pid_max == 0 {
-        return Err("database has no bench rows — let the seed run (cargo run -- serve)".into());
+        return Err("database has no bench rows — let the seed run \
+             (cargo run --bin umbral-bench-instrumented -- serve)"
+            .into());
     }
 
     let (self_url, backend) = {
