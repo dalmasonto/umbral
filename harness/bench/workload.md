@@ -1,0 +1,83 @@
+# The bench workload — the mix, and why
+
+The k6 scripts under `harness/bench/k6/` do not hammer an endpoint and call it a workload. They run a shaped traffic mix for a fixed hold, and it is that mix — how often a feed is read, how often a post is opened, how often something is written — that decides what every p95, p99 and RPS number out of this rig *means*. It is a deliberate choice, documented here and changed only by explicit decision (spec locked decision #7), never as an accident of whatever a script happened to default to.
+
+The mix lives in exactly one place in code: the `THE MIX` block of `k6/lib.js`. `warmup.js`, `hold.js` and the saturation script all call the same `doIteration`, so two scripts cannot disagree about what "the workload" is. This file is the record of the *decision*; `lib.js` is the implementation of it.
+
+## The mix
+
+The three probabilities are the operator's to fix. The values currently shipped in `lib.js` are the twelve-dollar challenge's shape (a read-dominant feed with occasional engagement), used as a starting point — the number that lands in the table below is the decision, and every number this rig reports is a number about that decision. A run's own copy of the mix travels inside its `--summary-export` (`setup_data.mix`), so a result can always be read back against the workload that produced it.
+
+| Knob | What it decides | Value |
+|---|---|---|
+| `LIKE_P` | probability that an iteration also likes a post | `_____` |
+| `POST_P` | probability that an iteration also creates a post | `_____` |
+| `PAGE_P` | probability that an iteration's second read is the HTML profile page instead of a single post (the JSON feed is read by every iteration either way) | `_____` |
+
+All three are independent: `PAGE_P` chooses which second read happens, and `LIKE_P`/`POST_P` then fire at exactly their stated rate, whatever `PAGE_P` is. Think time is not one of the three, but it is part of the workload and just as load-bearing: one gap of 3–8 seconds per iteration (`THINK_MIN`/`THINK_MAX`, in milliseconds), which is what makes this a browsing shape rather than a saturation hammer. Disabling it (`THINK_MAX=0`) is documented for exactly one caller — the saturation test — and a run records the think time it used alongside the mix, so a hold that somehow ran without it cannot hide.
+
+**What a change would mean.** Raising `LIKE_P` or `POST_P` moves the load onto the write path, where every request is an authenticated transaction against the same SQLite file the reads are reading (WAL commit, one writer at a time): the same request count, a materially different cost. Raising `PAGE_P` trades a `post` read for a template render and its data assembly. Lowering think time raises the offered request rate for the same VU count, which is exactly how the previous harness's `sleep(0.01)` turned every measurement into a saturation test. Because the mix defines what "fast" means, **a result is only comparable to another result with the same mix and the same think time** — Task 8's `compare.sh` refuses to diff two runs whose mix differs, and this table is where the ratified values live.
+
+## What one iteration is
+
+Every iteration reads the feed, thinks, performs one deeper read, and then reacts. The deeper read and the reaction are what the mix above decides.
+
+| # | Request | What it exercises | Rate per iteration |
+|---|---|---|---|
+| 1 | `GET /api/feed` | the batched read: 25 posts with authors, like and comment counts, ordered by `created_at DESC` | 1.00 |
+| 2 | `GET /u/{id}` | the HTML profile page — template render, aggregate counts | `PAGE_P` |
+| 2 | `GET /posts/{id}` | one post's HTML page — template render, author join | `1 − PAGE_P` |
+| 3 | `POST /api/posts/{id}/like` | engagement write: an existence check then an insert | `LIKE_P` |
+| 4 | `POST /api/posts` | a write: insert a post row | `POST_P` |
+
+Every request carries a pooled session cookie, reads included: the session middleware performs its real store lookup on each one, and that lookup is part of the honest cost of a `DbStore` deployment (spec locked decision #3). VUs are pinned to one pooled session each, so a VU's traffic is one coherent user rather than a new identity per call.
+
+With the shipped starting-point values that is **2.17 requests per iteration — 2.0 reads and 0.17 writes, a 92/8 read/write split** — spread over one 3–8 s think (mean 5.5 s), so roughly 0.39 requests per second per VU before latency is counted: about 985 RPS at 2,500 VUs in the steady state, less in practice because server latency adds to the think time. A social feed being browsed is overwhelmingly reads with occasional engagement; that is the shape this reproduces.
+
+The ids in rows 2–4 are drawn uniformly from the served dataset's ranges (users `1..USERS`, posts `1..POSTS`), not from the feed's newest 25 posts. That spreads the read working set across the table and index rather than measuring one hot page, and it makes the id ranges a correctness property of the run: an id past the last seeded row is a 404, k6 counts a 404 as a failed request, and a hold whose reads are missing would fail its error threshold while measuring the miss path. `setup()`'s preflight refuses to start a run whose ranges do not exist in the served dataset.
+
+## The run's shape
+
+| Stage | Duration | What happens |
+|---|---|---|
+| ramp | 60 s | 0 → `VUS` |
+| hold | `duration` (5 m for a hold, 2 m for the warm-up) | at `VUS` |
+| ramp down | 30 s | `VUS` → 0, `gracefulRampDown: 10s` |
+
+So a hold is a **6.5-minute wall clock**, and the 5-minute hold is a real 5 minutes — the ramp precedes it rather than eating into it. The thresholds and the summary's p95/p99/RPS are taken over the whole run, ramp and drain included, which is a mild average of the run rather than of the steady state alone (the challenge this rig calibrates against behaves the same way). An unscored run (`warmup.js`) has no thresholds at all, so it exits 0 whatever its summary says; pass/fail is the exit code of a scored `hold.js` (0 pass, 99 on a failed threshold).
+
+## Running it
+
+```bash
+# The silo must already be serving the database you measured against.
+harness/bench/run.sh serve
+harness/bench/run.sh verify          # envelope first: a number from an unverified cpuset is not a number
+
+# Warm-up (unscored, 1000 VUs, ~3.5 min).
+taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
+  harness/bench/k6/warmup.js
+
+# A hold (scored, VUS from the limit search, ~6.5 min). The id ranges must match
+# the rows the silo serves — add -e USERS=20000 -e POSTS=200000 for the
+# development-scale dataset, or the preflight will refuse the run.
+taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
+  -e USERS=20000 -e POSTS=200000 \
+  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js; echo "exit=$?"
+```
+
+Two rules decide whether a run is worth anything, and the preflight checks both before the first request:
+
+- **`USERS`/`POSTS` must match the served dataset, not the mix.** They are the id ranges, and they default to the challenge's quoted scale (50,000 users / 500,000 posts). A development-scale database (spec §2a's 20,000 users / 200,000 posts) needs `-e USERS=20000 -e POSTS=200000`. A run whose ranges disagree with the rows is not a slower run, it is a different, cheaper run.
+- **The session pool must have been built against the served database.** Sessions are rows in the database the server opened, so cookies minted against another file authenticate nothing — the failure reads as the server rejecting writes under load, which it is not. With writes in the mix the preflight calls `GET /api/auth/me` with the first pooled session and refuses to run on a 401.
+
+The preflight spends a handful of requests (`/api/ping`, `/api/auth/me`, the tops of the two id ranges) and its failure messages name the fix. `-e PREFLIGHT=0` skips it — the ids are then on their own honour. It costs a few requests inside a run that will issue hundreds of thousands of them, and it never touches the thresholds.
+
+k6 is pinned to cores 8–11 (`taskset`) so it never shares a physical core with the container, which owns 0, 2, 4 and 6. Each VU holds a socket, so a run needs a file-descriptor limit well above the VU count — `ulimit -n` is recorded with every result so a client-side `EMFILE` is never mistaken for a server ceiling.
+
+## Known properties, and what the number does not include
+
+- **No `Server-Timing`.** `bench-prod` constructs no telemetry, so it sends no `Server-Timing` header; nothing in these scripts reads one, and no trend here is fed by one. The instrumented binary on :8113 does emit it, and the older `harness/k6/*.js` scripts collect it there — that is a diagnostic number, never a performance result.
+- **The mix writes, so the run dirties the database.** At the shipped starting-point values a 2,500-VU hold writes on the order of 3,000 posts and 22,000 likes. Nothing ever deletes or re-seeds the bench database between runs; the dataset grows, and a baseline is a number about the dataset at the moment it was taken (recorded with the result, per Task 8).
+- **Writes require a live pool.** Until the pool users exist in the served database and `bench/session_pool.json` has been rebuilt against it, every authenticated request is a 401; a reads-only smoke run sets `-e LIKE_P=0 -e POST_P=0` and the preflight says so out loud.
+- **The preflight's probes are part of the run.** A handful of extra requests land in `http_reqs`, at the top of the ramp rather than inside the hold.
+- **The silo caps out around 1,000 concurrent connections.** Its soft `nofile` limit is Docker's default 1024, so past roughly a thousand open sockets it logs `accept error: Too many open files` once a second and refuses new ones. Observed during this task's 1,000-VU warm-up smoke: 16 of 60,755 requests sat until k6's 60-second timeout, while p95 and p99 stayed at 4.6 ms and 6.6 ms — a refused connection produces no response, so the percentiles cannot see it. A hold above ~1,000 VUs is above that ceiling, so **check `docker logs umbral-bench` for accept errors before believing a failure count**; the fix is a launch flag (`run.sh serve` does not set a `nofile` ulimit today), not a change to these scripts.
