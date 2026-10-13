@@ -5,11 +5,20 @@ edition = "2024"
 publish = false
 
 # harness/backend — the umbral benchmark & profiling harness app.
-# STANDALONE project (excluded from the framework workspace): path-deps the
-# local umbral crates. Run from this directory:
+# STANDALONE project (outside the framework workspace): path-deps the local
+# umbral crates. Run from this directory:
 #   cargo run -- migrate     # create the bench schema
 #   cargo run -- serve       # boot the app (seed runs on serve)
 # Real numbers: `cargo build --release` then `cargo run --release -- serve`.
+
+# Own workspace root, so the package is standalone by construction: cargo
+# stops its upward search here instead of walking out of the repo. Two things
+# depend on it. The `[profile.*]` sections below only apply at a workspace
+# root, and without it cargo refuses to build this package at all from a
+# nested checkout path (a worktree under `.worktrees/` still has the main
+# checkout's manifest above it, which neither member-lists nor excludes this
+# package).
+[workspace]
 
 [dependencies]
 # Framework core + CLI (dispatch, migrate, makemigrations, ...).
