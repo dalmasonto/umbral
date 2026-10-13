@@ -559,7 +559,7 @@ use umbral_health::HealthPlugin;
 use umbral_security::SecurityPlugin;
 use umbral_sessions::SessionsPlugin;
 
-use umbral_bench::{prod_handlers, seed, views};
+use umbral_bench::{prod_handlers, seed};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -590,9 +590,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .templates_dir("templates")
         .routes(
             Routes::new()
-                .get("/", views::feed_page)
-                .get("/u/{id}", views::profile_page)
-                .get("/posts/{id}", views::post_page)
+                .get("/", prod_handlers::feed_page)
+                .get("/u/{id}", prod_handlers::profile_page)
+                .get("/posts/{id}", prod_handlers::post_page)
                 .get("/api/ping", prod_handlers::ping)
                 .get("/api/feed", prod_handlers::feed)
                 .get("/api/feed-naive", prod_handlers::feed_naive)
@@ -690,6 +690,27 @@ pub async fn follow_user(
     Ok(Json(domain::follow_user(u.id(), id).await?))
 }
 ```
+
+**The `domain` surface changed during Task 3's fix round — use these names, not the ones earlier text implies.** The read paths were re-cut at a query/assemble seam so each half gets its own measurement window in the instrumented binary. What exists now:
+
+| Old shape | Current shape |
+|---|---|
+| `recent_posts(limit)` + `engage_counts(&ids)` + `feed_payload(...)` | `recent_posts(limit)` + `engage_rows(&ids)` + `feed_payload(&posts, &rows, kind)` |
+| `naive_feed_payload(limit)` | `naive_feed_query(limit)` + `naive_feed_payload(...)` |
+| `profile_payload(user_id)` | `profile_query(user_id)` + `profile_payload(...)` |
+| inline `q.limit.unwrap_or(25).clamp(1, 100) as u64` | `feed_limit(&q.limit)` |
+
+Read `harness/backend/src/domain.rs` for the exact current signatures rather than trusting this table — it is a map, not the territory, and it was written from the fix report.
+
+`feed_limit` matters for parity: it is the one place the default-and-clamp lives, so both binaries agree on `/api/feed?limit=0` and `?limit=999`. Call it; do not re-inline the expression.
+
+**The self-follow guard is not in `domain` — reproduce it here.** `domain::follow_user(user_id, target_id)` performs no `user_id == target_id` check; the guard deliberately lives in the handler (before the timer starts) to preserve stamp ordering. If `bench-prod` omits it, it returns `200 {"created":true}` where `bench-instrumented` returns `400`. Copy the guard exactly as the instrumented handler has it.
+
+- [ ] **Step 2b: Add the prod page handlers**
+
+The instrumented binary's page handlers in `src/views.rs` take `Extension<Trace>` and therefore cannot be mounted here — a missing axum extension is a runtime 500 on every HTML route, not a compile error. Task 3 therefore split each page's data-gathering into `domain`; `views.rs` keeps only rendering. `bench-prod` gets its own thin page handlers.
+
+For each of `feed_page`, `profile_page` and `post_page`, write a `prod_handlers` function that calls the corresponding `domain::*_page_query` / `domain::*_page_payload` pair and renders the same template with the same context as `views.rs` does. **Open `src/views.rs` and mirror its context construction exactly** — the template expects the same keys, and a missing key renders as an empty section rather than an error, so a mismatch would be silent. The golden gate covers `/`, `/u/1` and `/posts/1`, so a body difference fails loudly once Task 4's verification runs — but the gate compares the *instrumented* binary against its own past, not prod against instrumented. **Before committing, diff prod's rendered output against the instrumented binary's for all three pages** and confirm they match.
 
 **The extractor is `OptionalIdentity`** — verified, not guessed. `plugins/umbral-auth/src/auth_routes.rs:911-939` uses it on `/api/auth/me` to resolve an identity session-first and then from a bearer token, which is exactly what this app needs: a browser sends `umbral_session`, and an API client could send `Authorization: Bearer`. It filters on `is_active = true`.
 
