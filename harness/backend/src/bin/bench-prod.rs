@@ -17,6 +17,7 @@
 //! cargo run --release --bin umbral-bench-prod -- serve
 //! ```
 
+use umbral::cli::{CliError, PluginCommand, clap};
 use umbral::cors::CorsConfig;
 use umbral::prelude::*;
 use umbral_auth::AuthPlugin;
@@ -26,6 +27,41 @@ use umbral_sessions::SessionsPlugin;
 
 use umbral_bench::models::BenchPlugin;
 use umbral_bench::{prod_handlers, seed};
+
+/// `umbral-bench-prod seed-sessions` — create (or repair) the pooled login
+/// users `bench_1..bench_N`, the ones `bench/seed-sessions.sh` logs in as.
+///
+/// A project-owned command (`AppBuilder::command`), not a plugin: it belongs
+/// to this binary, not to a reusable unit. It runs against live data, so the
+/// default `needs_ready() == true` is right — plugins are up and the pool is
+/// open before the first `create_user`.
+///
+/// Size comes from `BENCH_SESSION_POOL_SIZE` (default 200) and the password
+/// from `BENCH_PASSWORD` (default `bench-password-123`), the same two
+/// variables the pool builder script reads, so the two halves cannot drift on
+/// the default.
+struct SeedSessions;
+
+#[umbral::async_trait]
+impl PluginCommand for SeedSessions {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("seed-sessions")
+            .about("Ensure bench_1..bench_N can log in with BENCH_PASSWORD")
+            .long_about(
+                "Create (or repair) the pooled login users `bench_1..bench_N` with the \
+                 password in BENCH_PASSWORD, so `bench/seed-sessions.sh` can log in as \
+                 them and build `bench/session_pool.json`.\n\n\
+                 N comes from BENCH_SESSION_POOL_SIZE (default 200). Idempotent: an \
+                 existing user whose stored hash already verifies is left untouched, and \
+                 one whose hash does not (a placeholder, or a rotated BENCH_PASSWORD) has \
+                 its password set in place. Users are never deleted and never duplicated.",
+            )
+    }
+
+    async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), CliError> {
+        seed::seed_session_pool(&seed::SessionPoolConfig::from_env()).await
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -71,6 +107,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .allow_origins(vec!["http://localhost:5173"])
                 .allow_credentials(false),
         )
+        // The pool's credentials come from the same binary that serves the
+        // measured traffic, so `bench/seed-sessions.sh` never has to know how
+        // a password is hashed — it only logs in.
+        .command(SeedSessions)
         .templates_dir("templates")
         .routes(
             Routes::new()

@@ -89,6 +89,32 @@ const WORDS: &[&str] = &[
     "signal", "meadow", "atlas", "quartz", "ember", "violet", "canyon", "orbit", "linen",
 ];
 
+/// The one timestamp format the bench writes. Fixed-width and UTC, so SQLite's
+/// TEXT comparison matches chronological order (the feed's `ORDER BY
+/// created_at DESC` depends on this). Change this and the ordering tests catch
+/// it.
+///
+/// Note *where* the text comes from: `created_at` is a typed `DateTime<Utc>`,
+/// so the bytes SQLite ends up holding are rendered by the ORM's encoder, not
+/// by this string. What `fmt_ts` fixes is the resolution every seeded instant
+/// is reduced to — millisecond, in UTC — which is what makes every seeded row
+/// the same textual shape. `seed_ts` is the round trip that keeps this the
+/// single definition of that shape.
+fn fmt_ts(t: DateTime<Utc>) -> String {
+    t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// The instant the seed actually writes for `t`: `t` reduced to the resolution
+/// `fmt_ts` can express. Round-tripping through the one formatter is what
+/// makes every `created_at` in this file come from the same definition, and
+/// what makes a seeded table's timestamps identical in shape rather than
+/// merely identical in semantics.
+fn seed_ts(t: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(&fmt_ts(t))
+        .expect("fmt_ts always renders a parseable RFC 3339 instant")
+        .with_timezone(&Utc)
+}
+
 fn body(rng: &mut Rng) -> String {
     format!(
         "{} {} {}",
@@ -223,7 +249,7 @@ async fn ensure_posts(
                 id: 0,
                 author: ForeignKey::new(u),
                 body: body(rng),
-                created_at: now - ChronoDuration::minutes(age_min),
+                created_at: seed_ts(now - ChronoDuration::minutes(age_min)),
             });
             if chunk.len() == 500 {
                 Post::objects()
@@ -276,7 +302,7 @@ async fn ensure_follows(
                     id: 0,
                     follower: ForeignKey::new(*u),
                     following: ForeignKey::new(target),
-                    created_at: now - ChronoDuration::days(rng.below(400)),
+                    created_at: seed_ts(now - ChronoDuration::days(rng.below(400))),
                 });
                 made += 1;
             }
@@ -328,7 +354,7 @@ async fn ensure_likes(
                     id: 0,
                     user: ForeignKey::new(*u),
                     post: ForeignKey::new(p),
-                    created_at: now - ChronoDuration::hours(rng.below(24 * 30)),
+                    created_at: seed_ts(now - ChronoDuration::hours(rng.below(24 * 30))),
                 });
                 made += 1;
             }
@@ -382,7 +408,7 @@ async fn ensure_comments(
                 post: ForeignKey::new(*p),
                 author: ForeignKey::new(user_ids[rng.below(user_ids.len() as i64) as usize]),
                 body: body(rng),
-                created_at: now - ChronoDuration::hours(rng.below(24 * 30)),
+                created_at: seed_ts(now - ChronoDuration::hours(rng.below(24 * 30))),
             });
             if chunk.len() == 500 {
                 Comment::objects()
@@ -395,4 +421,151 @@ async fn ensure_comments(
         Comment::objects().bulk_create(chunk).await?;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The session pool — the only users whose credentials have to be real
+// ---------------------------------------------------------------------------
+
+/// Default size of the pooled-login user set (`bench_1..bench_N`).
+pub const DEFAULT_SESSION_POOL_SIZE: i64 = 200;
+
+/// The password every pooled user is seeded with. The pool builder script
+/// reads the same default from `BENCH_PASSWORD`, so the two cannot drift when
+/// neither sets it.
+pub const DEFAULT_POOL_PASSWORD: &str = "bench-password-123";
+
+/// How many pooled users to seed, and with which password.
+pub struct SessionPoolConfig {
+    pub size: i64,
+    pub password: String,
+}
+
+impl SessionPoolConfig {
+    pub fn from_env() -> Self {
+        SessionPoolConfig {
+            size: std::env::var("BENCH_SESSION_POOL_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_SESSION_POOL_SIZE),
+            password: std::env::var("BENCH_PASSWORD")
+                .unwrap_or_else(|_| DEFAULT_POOL_PASSWORD.to_string()),
+        }
+    }
+}
+
+/// Ensure `bench_1..bench_N` exist and can log in with `cfg.password`.
+///
+/// This is the credential half of the benchmark, kept in its own user
+/// namespace on purpose. The seeded `bench_user_*` rows carry a placeholder
+/// hash: nothing logs in as them (the instrumented binary's scenarios
+/// authenticate via `x-bench-user`), and hashing every one of them through
+/// argon2 would only make the seed slow for no measurement value. The pool is
+/// the other side of that trade — a small set of users whose logins are real,
+/// built once, so k6 never pays for argon2 at all.
+///
+/// Idempotent by construction, and **non-destructive**: an absent user is
+/// created through [`umbral_auth::create_user`] (argon2id, and `is_active =
+/// true` — the one flag `/login` gates on, `plugins/umbral-auth/src/lib.rs`);
+/// an existing one is left exactly as it is when the bench password already
+/// verifies against its stored hash, and has its password rotated through
+/// [`umbral_auth::set_password`] when it does not. That second arm is what
+/// makes a re-run against a *partially* seeded database work — a row that
+/// exists with a placeholder or unknown hash is repaired in place, never
+/// duplicated and never deleted.
+pub async fn seed_session_pool(
+    cfg: &SessionPoolConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    eprintln!(
+        "[bench-pool] ensuring {} pooled login users (bench_1..bench_{})…",
+        cfg.size, cfg.size
+    );
+    let mut created = 0usize;
+    let mut rotated = 0usize;
+    let mut unchanged = 0usize;
+
+    for i in 1..=cfg.size {
+        let username = format!("bench_{i}");
+        let existing: Option<AuthUser> = AuthUser::objects()
+            .filter(auth_user::USERNAME.eq(username.as_str()))
+            .first()
+            .await?;
+
+        match existing {
+            None => {
+                let email = format!("{username}@example.com");
+                let user = umbral_auth::create_user(&username, &email, &cfg.password).await?;
+                println!("{username} id={} created", user.id);
+                created += 1;
+            }
+            Some(mut user) => {
+                if umbral_auth::verify_password_async(&cfg.password, &user.password_hash).await? {
+                    println!("{username} id={} unchanged", user.id);
+                    unchanged += 1;
+                } else {
+                    umbral_auth::set_password(&mut user, &cfg.password).await?;
+                    println!("{username} id={} password rotated", user.id);
+                    rotated += 1;
+                }
+            }
+        }
+    }
+
+    // The password itself is deliberately not echoed: the default is public,
+    // but an operator who overrode BENCH_PASSWORD did so on purpose, and a
+    // credential that reaches stderr reaches every log that captures it.
+    eprintln!("[bench-pool] done: {created} created, {rotated} rotated, {unchanged} unchanged.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeded_timestamps_sort_lexicographically() {
+        // Earlier instants must compare less-than later ones as strings.
+        let a = "2026-01-01T00:00:00.000Z";
+        let b = "2026-01-01T00:00:00.001Z";
+        let c = "2026-01-01T00:00:01.000Z";
+        let d = "2026-12-31T23:59:59.999Z";
+        let mut v = vec![d, b, a, c];
+        v.sort();
+        assert_eq!(v, vec![a, b, c, d]);
+    }
+
+    #[test]
+    fn seed_emits_the_sortable_format() {
+        // Pin the format the seed actually writes, so a change to it fails here
+        // rather than silently reordering every feed.
+        let now = Utc::now();
+        let s = fmt_ts(now); // the seed's own formatter
+        assert_eq!(s.len(), 24, "expected YYYY-MM-DDTHH:MM:SS.mmmZ, got {s}");
+        assert!(s.ends_with('Z'));
+        assert_eq!(&s[10..11], "T");
+    }
+
+    #[test]
+    fn seed_ts_reduces_instants_to_the_shared_definition() {
+        // `fmt_ts` is what every `created_at` in this file goes through, so
+        // pin what it does to an instant the format cannot hold exactly: the
+        // sub-millisecond part is dropped, never rounded up into the next
+        // millisecond (which would make a seeded row sort after a genuinely
+        // later one).
+        let t = DateTime::parse_from_rfc3339("2026-01-02T03:04:05.999900000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(fmt_ts(seed_ts(t)), "2026-01-02T03:04:05.999Z");
+        assert!(
+            seed_ts(t) <= t,
+            "truncation must never move an instant later"
+        );
+        assert_eq!(t - seed_ts(t), ChronoDuration::nanoseconds(900_000));
+
+        // A whole millisecond is preserved exactly.
+        let exact = DateTime::parse_from_rfc3339("2026-01-02T03:04:05.999Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(seed_ts(exact), exact);
+    }
 }
