@@ -139,11 +139,17 @@ Every run writes `bench/results/<git-sha>-<utc-timestamp>.json` recording: git s
 
 Phases 1 and 2 are measurement and must not change framework behaviour. If a Phase 1 or 2 task requires touching `crates/` or `plugins/`, that is a signal the rig is wrong, not the framework.
 
-## Open questions
+## Resolved at review (2026-10-13)
 
-1. **Which JWT feature, and when.** `umbral-auth` has no JWT support (`BearerAuthentication` is DB-backed token lookup). A session-authenticated baseline does not need it, so Phase 1 does not depend on it. It remains agreed work because stateless API auth is a genuine framework gap, and it becomes relevant if we later want a challenge-shaped auth comparison. **Resolution needed:** schedule it in Phase 3 or treat it as independent.
-2. **Port and harness coexistence.** The rig needs a port that cannot clash with a developer's dev server. **Resolution needed:** confirm which ports are reserved before implementation.
-3. **`search.sh` budget.** A full limit search is several 5-minute holds plus cooldowns — plausibly 60–90 minutes of wall clock. **Resolution needed:** confirm the acceptable search budget, or cap the doubling range.
+1. **JWT is scheduled *after* the baseline.** `umbral-auth` has no JWT support (`BearerAuthentication` is DB-backed token lookup). A session-authenticated baseline does not need it, so Phase 1 does not depend on it. It remains agreed work — stateless API auth is a genuine framework gap — but building a framework feature during a measurement phase moves the ruler and the thing being measured at the same time. It lands in Phase 3. **Consequence:** if JWT introduces a period where auth cost differs between baseline and post-optimization runs, the baseline must be re-measured against the new binary rather than compared across the change.
+2. **Bench port is 8114**, verified free, with the instrumented harness keeping 8113. Resolution folded into the Architecture section above.
+3. **`search.sh` caps the doubling range at 40,000 VUs.** A full search is several 5-minute holds plus 2–3 minute cooldowns — realistically 60–90 minutes and possibly more. The cap bounds a runaway search to an afternoon rather than a day, while staying well above the ranges v1 explored (≤150 VUs) and above the 2,500 starting point by four doublings. **The cap is a guardrail, not a target**: if a hold at 40,000 VUs passes, the search records that the cap was reached and reports it as a floor rather than a discovered maximum, because the true breaking point would be unknown.
+
+## Related
+
+- `docs/decisions/2026-08-08-fuzz-upgrade-load-tests.md` — the load/soak testing gap (#97) this work answers.
+- `planning/review_4/performance.md` — the static performance sweep; this rig is its measurement half.
+- `docs/superpowers/specs/2026-09-20-media-access-redesign-design.md` — the other recent spec that pairs a design with a phased implementation.
 
 ## What this spec deliberately does not do
 
