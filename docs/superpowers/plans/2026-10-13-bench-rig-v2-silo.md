@@ -1521,18 +1521,28 @@ Then move the seeded file into the silo's data directory so the container uses i
 cp harness/backend/bench.db harness/bench/data/bench-run.db
 ```
 
-**Then rebuild the session pool against the database you just copied.** This is mandatory and it is the step most likely to be skipped.
+**Then create the pool users inside the silo's database, and build the pool from it.** Both halves are mandatory, they happen in this order, and this is the step most likely to be skipped.
 
-Sessions live in the same SQLite file as the dataset, so **a pool built against one file is meaningless against another** — the cookies name session rows that do not exist in the silo's copy, and every authenticated request returns `401`. Task 5 deliberately built its pool against a scratch copy so that seeding 200 pool users would not move the routes the golden gate pins; the cost of that correct decision is that the pool must be rebuilt here, against the real file:
+Sessions and users live in the same SQLite file as the dataset, so **anything built against one file is meaningless against another.** There are two independent ways to get this wrong and each produces `401`s on every authenticated request in the hold:
+
+- **The users may not exist in the served database at all.** `seed_session_pool` is *not* wired into `seed::all` — it runs only via the `seed-sessions` command. Task 5 built its pool against a scratch copy precisely so that seeding 200 users would not move the routes the golden gate pins, which means the silo's database has no `bench_N` users yet. Log in against it and all 200 attempts return `401`.
+- **The session rows must land in the served file.** Cookies minted anywhere else name rows that file does not contain.
+
+Everything below therefore runs *inside* the container (port 8114 is the silo; `/data/bench-run.db` is the file it serves):
 
 ```bash
 harness/bench/run.sh serve
+
+# 1. Create the pool users in the served database.
+docker exec umbral-bench /app/umbral-bench-prod seed-sessions
+
+# 2. Mint the sessions against the same database.
 harness/bench/seed-sessions.sh 8114 200
 ```
 
-Note this rebuild happens **inside** the silo (port 8114 is the container), so the session rows land in `bench/data/bench-run.db` — the file the measured binary will actually serve. Build it against the host-side `bench.db` instead and you get the mismatch described above.
+Do **not** run `seed-sessions` on the host: with no database override it targets `harness/backend/bench.db` — the fixture this whole arrangement exists to keep untouched — while the pool build then talks to the silo. That mismatch is the second bullet above.
 
-Confirm before continuing:
+Confirm both halves before continuing:
 
 ```bash
 COOKIE=$(python3 -c 'import json; print(json.load(open("harness/bench/session_pool.json"))[0])')
@@ -1541,7 +1551,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8114/api/posts \
   -H 'content-type: application/json' -d '{"body":"pool matches the silo DB"}'
 ```
 
-Expected `201` (or `200`). A `401` means the pool and the served database disagree — rebuild, do not proceed. Every authenticated request in the hold depends on this.
+Expected `201` (or `200`). A `401` means the users, the sessions, and the served database disagree — fix it, do not proceed. Every authenticated request in the hold depends on this.
 
 **Never delete an existing bench database to "get a clean run"** — the resume logic tops up, and a wipe destroys the rows that make the seed meaningful. If the shape needs to change, change the scale parameters and let it top up.
 
