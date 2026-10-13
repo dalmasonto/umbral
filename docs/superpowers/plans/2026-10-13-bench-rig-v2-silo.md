@@ -609,7 +609,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 ```
 
-**One thing you must verify rather than assume:** `Settings` must expose a mutable `bind_addr` field for the override above to compile, and `views::*` must not reference `BenchUser` or `Trace`. Run `grep -n 'pub bind_addr' crates/umbral-core/src/settings.rs` and `grep -n 'BenchUser\|Trace' harness/backend/src/views.rs`. If `bind_addr` is not directly mutable, set the bind through whatever env var `Settings::from_env` reads instead. If `views.rs` does reference `BenchUser` or `Trace`, report it before proceeding — that is a coupling the spec did not anticipate and it needs a decision, not a workaround.
+**One thing you must verify rather than assume:** `Settings` must expose a mutable `bind_addr` field for the override above to compile. Run `grep -n 'pub bind_addr' crates/umbral-core/src/settings.rs`. If it is not directly mutable, set the bind through whatever env var `Settings::from_env` reads instead.
+
+The `views.rs` coupling this step originally asked you to check is **already resolved — do not treat it as a blocker and do not re-open it.** `views.rs`'s three page handlers do take `Extension<Trace>`, and Step 2b is the answer: `bench-prod` gets its own page handlers over `domain`'s page functions. A `Trace` reference in `views.rs` is expected and correct; it is why `bench-prod` cannot mount `views::*` directly.
 
 - [ ] **Step 2: Write the prod handlers**
 
