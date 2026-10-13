@@ -1706,6 +1706,14 @@ Per spec's resolved decision #3: start at 2,500, double until a hold fails, narr
 
 When the cap is reached without a failure, report the result as a **floor**, not a discovered maximum — the true breaking point is unknown and the summary must say so.
 
+**⚠️ The host cannot open 40,000 connections, so the cap is above a ceiling you cannot see and cannot raise from here.** `net.ipv4.ip_local_port_range` is `32768 60999` — **28,232 ephemeral ports**, and k6 holds roughly one connection per active VU. Above that, connections fail to *open*, which in a k6 summary is indistinguishable from the server refusing load: the search would report a client-side port exhaustion as umbral's ceiling. This is exactly the defect that was just fixed for file descriptors (the container was silently capped at 1,024 VUs by Docker's default `nofile`), and it is the same shape: a limit that belongs to the machine, discovered as a mysterious wall.
+
+It is not fixable by a `ulimit`, and `run.sh verify` cannot detect it — widening `ip_local_port_range` is a host sysctl and therefore the **operator's** call, not the rig's. So:
+
+- **Before the search**, check `sysctl net.ipv4.ip_local_port_range` and record the usable port count in the search summary.
+- **Treat that count as a hard cap on the search**, below the plan's 40,000. If a hold fails anywhere near it, that is a client-side artifact: say so in the summary rather than reporting a discovered maximum.
+- **Ask the operator before changing the sysctl.** They may prefer to keep the machine as-is and record a floor, which is a perfectly good answer — a documented "at least N" is worth more than a "maximum" that belongs to the network stack.
+
 - [ ] **Step 2: Verify the search logic without paying for it**
 
 Add a `--dry-run` that prints the planned hold sequence (VU counts, expected wall clock) without running k6. Confirm the sequence for a hypothetical "fails at 20,000, passes at 10,000" reaches a within-250 answer, and that a "passes at 40,000" run terminates at the cap and reports a floor.
