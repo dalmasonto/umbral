@@ -283,35 +283,98 @@ fn plan(kind: ScenarioKind) -> Plan {
     use Op::*;
     match kind {
         ScenarioKind::Feed => Plan::Ops(vec![
-            Weighted { weight: 70, op: Get("/api/feed"), auth: true },
-            Weighted { weight: 5, op: Get("/api/feed-naive"), auth: true },
-            Weighted { weight: 10, op: Get("/u/{id}"), auth: true },
-            Weighted { weight: 10, op: Get("/api/users/{id}/profile"), auth: true },
-            Weighted { weight: 5, op: Post("/api/posts/{pid}/like"), auth: true },
+            Weighted {
+                weight: 70,
+                op: Get("/api/feed"),
+                auth: true,
+            },
+            Weighted {
+                weight: 5,
+                op: Get("/api/feed-naive"),
+                auth: true,
+            },
+            Weighted {
+                weight: 10,
+                op: Get("/u/{id}"),
+                auth: true,
+            },
+            Weighted {
+                weight: 10,
+                op: Get("/api/users/{id}/profile"),
+                auth: true,
+            },
+            Weighted {
+                weight: 5,
+                op: Post("/api/posts/{pid}/like"),
+                auth: true,
+            },
         ]),
         ScenarioKind::WriteHeavy => Plan::Ops(vec![
-            Weighted { weight: 30, op: Post("/api/posts"), auth: true },
-            Weighted { weight: 25, op: Post("/api/posts/{pid}/like"), auth: true },
+            Weighted {
+                weight: 30,
+                op: Post("/api/posts"),
+                auth: true,
+            },
+            Weighted {
+                weight: 25,
+                op: Post("/api/posts/{pid}/like"),
+                auth: true,
+            },
             // `{other}` — the TARGET of a follow must differ from the acting
             // user (`{id}` is both the auth header and the path id elsewhere);
             // following yourself is a 400 by design and made every follow
             // request fail when this step used `{id}`.
-            Weighted { weight: 10, op: Post("/api/users/{other}/follow"), auth: true },
-            Weighted { weight: 35, op: Get("/api/feed"), auth: true },
+            Weighted {
+                weight: 10,
+                op: Post("/api/users/{other}/follow"),
+                auth: true,
+            },
+            Weighted {
+                weight: 35,
+                op: Get("/api/feed"),
+                auth: true,
+            },
         ]),
         ScenarioKind::Profile => Plan::Ops(vec![
-            Weighted { weight: 85, op: Get("/api/users/{id}/profile"), auth: true },
-            Weighted { weight: 15, op: Get("/u/{id}"), auth: true },
+            Weighted {
+                weight: 85,
+                op: Get("/api/users/{id}/profile"),
+                auth: true,
+            },
+            Weighted {
+                weight: 15,
+                op: Get("/u/{id}"),
+                auth: true,
+            },
         ]),
-        ScenarioKind::Static => Plan::Ops(vec![Weighted { weight: 100, op: Get("/api/ping"), auth: false }]),
+        ScenarioKind::Static => Plan::Ops(vec![Weighted {
+            weight: 100,
+            op: Get("/api/ping"),
+            auth: false,
+        }]),
         ScenarioKind::Readers => Plan::Journeys(vec![
-            Journey { weight: 70, steps: READER },
-            Journey { weight: 30, steps: LURKER },
+            Journey {
+                weight: 70,
+                steps: READER,
+            },
+            Journey {
+                weight: 30,
+                steps: LURKER,
+            },
         ]),
         ScenarioKind::Community => Plan::Journeys(vec![
-            Journey { weight: 60, steps: READER },
-            Journey { weight: 25, steps: WRITER },
-            Journey { weight: 15, steps: LURKER },
+            Journey {
+                weight: 60,
+                steps: READER,
+            },
+            Journey {
+                weight: 25,
+                steps: WRITER,
+            },
+            Journey {
+                weight: 15,
+                steps: LURKER,
+            },
         ]),
     }
 }
@@ -320,11 +383,7 @@ fn plan(kind: ScenarioKind) -> Plan {
 // Run driver
 // ---------------------------------------------------------------------------
 
-pub async fn start_run(
-    scenario: &str,
-    vus: u32,
-    duration_s: u32,
-) -> Result<RunRecord, String> {
+pub async fn start_run(scenario: &str, vus: u32, duration_s: u32) -> Result<RunRecord, String> {
     let kind = ScenarioKind::parse(scenario).ok_or_else(|| {
         format!(
             "unknown scenario '{scenario}' \
@@ -612,7 +671,14 @@ impl Worker {
                     let body = resp.text().await.unwrap_or_default();
                     Some(body.chars().take(200).collect())
                 };
-                Observation { ms, ok, status, template, sample, server_total_ms }
+                Observation {
+                    ms,
+                    ok,
+                    status,
+                    template,
+                    sample,
+                    server_total_ms,
+                }
             }
             Err(e) => {
                 let ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -652,7 +718,10 @@ fn parse_total_from_server_timing(v: &str) -> Option<f64> {
         let part = part.trim();
         let rest = part.strip_prefix("total;")?;
         let dur = rest.strip_prefix("dur=")?;
-        let num: String = dur.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        let num: String = dur
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
         num.parse().ok()
     })
 }

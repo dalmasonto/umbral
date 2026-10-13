@@ -91,8 +91,14 @@ pub async fn profile_page(
         .first()
         .await?
         .ok_or_else(|| ApiError::not_found(format!("user {id} not found")))?;
-    let followers = Follow::objects().filter(follow::FOLLOWING.eq(id)).count().await?;
-    let following = Follow::objects().filter(follow::FOLLOWER.eq(id)).count().await?;
+    let followers = Follow::objects()
+        .filter(follow::FOLLOWING.eq(id))
+        .count()
+        .await?;
+    let following = Follow::objects()
+        .filter(follow::FOLLOWER.eq(id))
+        .count()
+        .await?;
     let post_count = Post::objects().filter(post::AUTHOR.eq(id)).count().await?;
     let recent = Post::objects()
         .filter(post::AUTHOR.eq(id))

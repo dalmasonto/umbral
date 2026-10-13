@@ -189,8 +189,14 @@ pub async fn profile(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("user {id} not found")))?;
 
-    let followers = Follow::objects().filter(follow::FOLLOWING.eq(id)).count().await?;
-    let following = Follow::objects().filter(follow::FOLLOWER.eq(id)).count().await?;
+    let followers = Follow::objects()
+        .filter(follow::FOLLOWING.eq(id))
+        .count()
+        .await?;
+    let following = Follow::objects()
+        .filter(follow::FOLLOWER.eq(id))
+        .count()
+        .await?;
     let post_count = Post::objects().filter(post::AUTHOR.eq(id)).count().await?;
 
     let recent = Post::objects()
@@ -448,8 +454,8 @@ pub async fn list_runs() -> Json<Value> {
 }
 
 pub async fn get_run(Path(id): Path<u64>) -> Result<Json<Value>, ApiError> {
-    let run = loadgen::get_run(id)
-        .ok_or_else(|| ApiError::not_found(format!("run {id} not found")))?;
+    let run =
+        loadgen::get_run(id).ok_or_else(|| ApiError::not_found(format!("run {id} not found")))?;
     Ok(Json(json!(run)))
 }
 

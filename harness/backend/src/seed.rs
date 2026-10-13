@@ -82,8 +82,7 @@ impl Rng {
 /// Placeholder password hash for bench users. They never log in (scenarios
 /// authenticate via `x-bench-user`), so hashing 2,000+ users through argon2
 /// (~100 ms CPU each) would only make the seed slow for no measurement value.
-const PLACEHOLDER_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$YmVuY2hiZW5jaGJlbmNo$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA";
+const PLACEHOLDER_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$YmVuY2hiZW5jaGJlbmNo$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA";
 
 const WORDS: &[&str] = &[
     "shipping", "rumor", "sunset", "drift", "pixel", "kernel", "harbor", "cobalt", "timber",
@@ -149,7 +148,10 @@ async fn ensure_users(
         .filter(|i| !existing.contains(&format!("bench_user_{i}")))
         .count();
     if missing == 0 {
-        eprintln!("[bench-seed] users present; reusing {} users.", existing.len());
+        eprintln!(
+            "[bench-seed] users present; reusing {} users.",
+            existing.len()
+        );
     } else {
         eprintln!("[bench-seed] inserting {missing} users…");
         let mut chunk: Vec<AuthUser> = Vec::with_capacity(500);
@@ -171,7 +173,9 @@ async fn ensure_users(
                 email_verified_at: None,
             });
             if chunk.len() == 500 {
-                AuthUser::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                AuthUser::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if !chunk.is_empty() {
@@ -222,7 +226,9 @@ async fn ensure_posts(
                 created_at: now - ChronoDuration::minutes(age_min),
             });
             if chunk.len() == 500 {
-                Post::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Post::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if !chunk.is_empty() {
@@ -275,11 +281,16 @@ async fn ensure_follows(
                 made += 1;
             }
             if chunk.len() == 500 {
-                Follow::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Follow::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if i > 0 && i % 5000 == 0 {
-            eprintln!("[bench-seed] follows: scanned {i}/{} users…", user_ids.len());
+            eprintln!(
+                "[bench-seed] follows: scanned {i}/{} users…",
+                user_ids.len()
+            );
         }
     }
     if !chunk.is_empty() {
@@ -322,7 +333,9 @@ async fn ensure_likes(
                 made += 1;
             }
             if chunk.len() == 500 {
-                Like::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Like::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if i > 0 && i % 5000 == 0 {
@@ -372,7 +385,9 @@ async fn ensure_comments(
                 created_at: now - ChronoDuration::hours(rng.below(24 * 30)),
             });
             if chunk.len() == 500 {
-                Comment::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Comment::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
     }
