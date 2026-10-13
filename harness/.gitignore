@@ -9,5 +9,11 @@ bench.db
 bench.db-shm
 bench.db-wal
 
+# Generated golden snapshots (recreated by golden/capture.sh) and bench outputs.
+bench/golden/**/*.json
+bench/results/*.json
+bench/session_pool.json
+bench/bench-run.db*
+
 # Local operator overrides.
 .env
