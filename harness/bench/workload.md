@@ -6,13 +6,13 @@ The mix lives in exactly one place in code: the `THE MIX` block of `k6/lib.js`. 
 
 ## The mix
 
-The three probabilities are the operator's to fix. The values currently shipped in `lib.js` are the twelve-dollar challenge's shape (a read-dominant feed with occasional engagement), used as a starting point — the number that lands in the table below is the decision, and every number this rig reports is a number about that decision. A run's own copy of the mix travels inside its `--summary-export` (`setup_data.mix`), so a result can always be read back against the workload that produced it.
+The three probabilities are the operator's decision, and it has been made: **ratified 2026-10-14 at the values below**, which are the twelve-dollar challenge's shape (a read-dominant feed with engagement on a minority of iterations — at a rate deliberately far above a real user's; see *What one iteration is*). They are what `lib.js` ships, and every number this rig reports is a number about them. A run's own copy of the mix travels inside its `--summary-export` (`setup_data.mix`), so a result can always be read back against the workload that produced it.
 
 | Knob | What it decides | Value |
 |---|---|---|
-| `LIKE_P` | probability that an iteration also likes a post | `_____` |
-| `POST_P` | probability that an iteration also creates a post | `_____` |
-| `PAGE_P` | probability that an iteration's second read is the HTML profile page instead of a single post (the JSON feed is read by every iteration either way) | `_____` |
+| `LIKE_P` | probability that an iteration also likes a post | `0.15` |
+| `POST_P` | probability that an iteration also creates a post | `0.02` |
+| `PAGE_P` | probability that an iteration's second read is the HTML profile page instead of a single post (the JSON feed is read by every iteration either way) | `0.10` |
 
 All three are independent: `PAGE_P` chooses which second read happens, and `LIKE_P`/`POST_P` then fire at exactly their stated rate, whatever `PAGE_P` is. Think time is not one of the three, but it is part of the workload and just as load-bearing: one gap of 3–8 seconds per iteration (`THINK_MIN`/`THINK_MAX`, in milliseconds), which is what makes this a browsing shape rather than a saturation hammer. Disabling it (`THINK_MAX=0`) is documented for exactly one caller — the saturation test — and a run records the think time it used alongside the mix, so a hold that somehow ran without it cannot hide.
 
@@ -20,21 +20,23 @@ All three are independent: `PAGE_P` chooses which second read happens, and `LIKE
 
 ## What one iteration is
 
-Every iteration reads the feed, thinks, performs one deeper read, and then reacts. The deeper read and the reaction are what the mix above decides.
+Every iteration reads the feed, thinks, performs one deeper read, and then may react with a write. The deeper read and whether the reaction happens are what the mix above decides, and each request draws its own id — the like's post is a freshly drawn random one, not necessarily the post just read (the challenge's script draws them independently too).
 
 | # | Request | What it exercises | Rate per iteration |
 |---|---|---|---|
 | 1 | `GET /api/feed` | the batched read: 25 posts with authors, like and comment counts, ordered by `created_at DESC` | 1.00 |
 | 2 | `GET /u/{id}` | the HTML profile page — template render, aggregate counts | `PAGE_P` |
 | 2 | `GET /posts/{id}` | one post's HTML page — template render, author join | `1 − PAGE_P` |
-| 3 | `POST /api/posts/{id}/like` | engagement write: an existence check then an insert | `LIKE_P` |
+| 3 | `POST /api/posts/{id}/like` | engagement write: an existence check then an insert, on a fresh id | `LIKE_P` |
 | 4 | `POST /api/posts` | a write: insert a post row | `POST_P` |
 
 Every request carries a pooled session cookie, reads included: the session middleware performs its real store lookup on each one, and that lookup is part of the honest cost of a `DbStore` deployment (spec locked decision #3). VUs are pinned to one pooled session each, so a VU's traffic is one coherent user rather than a new identity per call.
 
-With the shipped starting-point values that is **2.17 requests per iteration — 2.0 reads and 0.17 writes, a 92/8 read/write split** — spread over one 3–8 s think (mean 5.5 s), so roughly 0.39 requests per second per VU before latency is counted: about 985 RPS at 2,500 VUs in the steady state, less in practice because server latency adds to the think time. A social feed being browsed is overwhelmingly reads with occasional engagement; that is the shape this reproduces.
+With the ratified values that is **2.17 requests per iteration — 2.0 reads and 0.17 writes, a 92.2% / 7.8% read/write split by request count** — spread over one 3–8 s think (mean 5.5 s), so ≈0.39 requests per second per VU before latency is counted: ≈986 RPS at 2,500 VUs in the steady state, less in practice because server latency adds to the think time.
 
-The ids in rows 2–4 are drawn uniformly from the served dataset's ranges (users `1..USERS`, posts `1..POSTS`), not from the feed's newest 25 posts. That spreads the read working set across the table and index rather than measuring one hot page, and it makes the id ranges a correctness property of the run: an id past the last seeded row is a 404, k6 counts a 404 as a failed request, and a hold whose reads are missing would fail its error threshold while measuring the miss path. `setup()`'s preflight refuses to start a run whose ranges do not exist in the served dataset.
+**What that models, honestly.** The shape is a social feed being browsed: reads dominate, and the writes that do happen are on the contended path (one SQLite writer at a time). The per-user *rates* are not observed user behaviour — at these probabilities a browsing VU likes something roughly every 37 seconds and posts roughly every 4.6 minutes, far more engagement than a real user generates. The write rate is a deliberate stress; read it as a rate this workload imposes, not one it observed.
+
+Each id in rows 2–4 is drawn independently and uniformly from the served dataset's ranges (users `1..USERS`, posts `1..POSTS`), not from the feed's newest 25 posts. That spreads the read working set across the table and index rather than measuring one hot page, and it makes the id ranges a correctness property of the run: an id past the last seeded row is a 404, k6 counts a 404 as a failed request, and a hold whose reads are missing would fail its error threshold while measuring the miss path. `setup()`'s preflight refuses to start a run whose ranges do not exist in the served dataset.
 
 ## The run's shape
 
@@ -77,7 +79,7 @@ k6 is pinned to cores 8–11 (`taskset`) so it never shares a physical core with
 ## Known properties, and what the number does not include
 
 - **No `Server-Timing`.** `bench-prod` constructs no telemetry, so it sends no `Server-Timing` header; nothing in these scripts reads one, and no trend here is fed by one. The instrumented binary on :8113 does emit it, and the older `harness/k6/*.js` scripts collect it there — that is a diagnostic number, never a performance result.
-- **The mix writes, so the run dirties the database.** At the shipped starting-point values a 2,500-VU hold writes on the order of 3,000 posts and 22,000 likes. Nothing ever deletes or re-seeds the bench database between runs; the dataset grows, and a baseline is a number about the dataset at the moment it was taken (recorded with the result, per Task 8).
+- **The mix writes, so the run dirties the database.** At the ratified values a 2,500-VU hold issues ≈340,000 requests and writes ≈3,100 posts and ≈23,500 likes over the whole 6.5-minute run — about 2,700 and 20,500 of those inside the 5-minute hold stage itself — with latency trimming all of them slightly. Nothing ever deletes or re-seeds the bench database between runs; the dataset grows, and a baseline is a number about the dataset at the moment it was taken (recorded with the result, per Task 8).
 - **Writes require a live pool.** Until the pool users exist in the served database and `bench/session_pool.json` has been rebuilt against it, every authenticated request is a 401; a reads-only smoke run sets `-e LIKE_P=0 -e POST_P=0` and the preflight says so out loud.
 - **The preflight's probes are part of the run.** A handful of extra requests land in `http_reqs`, at the top of the ramp rather than inside the hold.
-- **The silo caps out around 1,000 concurrent connections.** Its soft `nofile` limit is Docker's default 1024, so past roughly a thousand open sockets it logs `accept error: Too many open files` once a second and refuses new ones. Observed during this task's 1,000-VU warm-up smoke: 16 of 60,755 requests sat until k6's 60-second timeout, while p95 and p99 stayed at 4.6 ms and 6.6 ms — a refused connection produces no response, so the percentiles cannot see it. A hold above ~1,000 VUs is above that ceiling, so **check `docker logs umbral-bench` for accept errors before believing a failure count**; the fix is a launch flag (`run.sh serve` does not set a `nofile` ulimit today), not a change to these scripts.
+- **A refused connection is invisible in the percentiles.** An accept failure produces no response at all, so it lands as a request timeout — a failure count — instead of as latency: during this task's 1,000-VU warm-up smoke, 16 of 60,755 requests sat until k6's 60-second timeout while p95 and p99 stayed at 4.6 ms and 6.6 ms. That run predated the container's descriptor bump: Docker's default soft `nofile` is 1,024, which caps a keep-alive-driven run at roughly a thousand concurrent connections, and `run.sh serve` now raises it (`--ulimit nofile=524288`, asserted by `run.sh verify`, which also warns when the host's own limit is low). If a run reports failures nobody can explain, check `docker logs umbral-bench` for `accept error` and the descriptor limits recorded with the result before blaming the application.

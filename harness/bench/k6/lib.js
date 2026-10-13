@@ -41,12 +41,13 @@ export const USERS = Number(__ENV.USERS || 50000);
 export const POSTS = Number(__ENV.POSTS || USERS * 10);
 
 // ---------------------------------------------------------------------------
-// THE MIX — the operator's call. These three numbers define what "fast" means
-// for this benchmark: every threshold, every p99 and every RPS number this rig
-// ever produces is a statement about the application under THIS traffic. The
-// values below are the challenge-shaped starting point, not the decision; the
-// decision is the one recorded in `bench/workload.md`, and it changes only by
-// explicit choice (spec locked decision #7).
+// THE MIX — the operator's call, and the values below are the call it made:
+// ratified 2026-10-14 and recorded, with its reasoning, in `bench/workload.md`.
+// These three numbers define what "fast" means for this benchmark — every
+// threshold, every p99 and every RPS number this rig ever produces is a
+// statement about the application under THIS traffic — so they change only by
+// explicit choice (spec locked decision #7), never to make a number look
+// better, and a comparison across a mix change is not a comparison.
 //
 //   LIKE_P = probability an iteration also likes a post
 //   POST_P = probability an iteration also creates a post
@@ -126,7 +127,9 @@ export function doIteration(sessions) {
     check(post, { "post 200": (r) => r.status === 200 });
   }
 
-  // 4. Engagement — the reaction to what was just read. A write is a real
+  // 4. Engagement. The like's target is a FRESH random post, not the one just
+  //    read — the challenge's script draws them independently too — so the
+  //    write working set is not pinned to the read's. A write is a real
   //    transaction against the same SQLite file the reads are hitting, which is
   //    the contention this workload exists to expose.
   if (Math.random() < LIKE_P) {
