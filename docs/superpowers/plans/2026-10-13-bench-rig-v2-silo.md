@@ -1493,6 +1493,18 @@ git commit -m "feat(bench): k6 warm-up and 5-minute hold, with the mix in one pl
 
 `harness/bench/results/record.sh` takes the k6 summary path, the VU count, the dataset scale, and the exit code, and writes one JSON with every fact needed to judge whether the number means anything: git sha, binary name, container limits and cpuset (read from `docker inspect`), the host's load average at start, `ulimit -n`, peak thermal-zone temperature during the run, whether throttling was observed, `OOMKilled`, whether a WAL checkpoint stall was seen, the session max-age, the pass/fail verdict, and the mix parameters. It must refuse to write a result if `run.sh verify`'s cpuset does not match the expected value — a result from an unverified envelope is not a result.
 
+**The exit code is not a boolean, and treating it as one will misattribute failures.** Task 7's review found the contract incomplete and it matters here, because this script is what turns an exit code into a recorded verdict:
+
+| Exit | Meaning | What it is *not* |
+|---|---|---|
+| `0` | Thresholds held — the hold passed | |
+| `99` | A threshold failed: latency or error rate. **This is a real load result.** | |
+| `107` | The script aborted in `setup()`/preflight — a **rig-configuration** failure (wrong id ranges, a pool that does not match the served database) | **Not a server failure.** Recording it as one would blame umbral for a typo'd `-e USERS=`. |
+
+Anything else is an unclassified failure and must be recorded as such rather than folded into either bucket. A `107` in particular must be distinguishable in the result file from a `99`, because the first says "fix the rig" and the second says "umbral hit its limit" — and they will be read weeks apart by someone who was not here.
+
+**Also record whether the run's `check` results actually held.** Task 7's scripts record `check` outcomes but nothing thresholds them, so a run where `page 200` or `post 200` never passes can still exit `0` on the latency thresholds alone. The per-check counts do reach the summary export, so read them out and record them; do not infer a clean run from the exit code alone.
+
 - [ ] **Step 2: Write the comparator**
 
 `compare.sh` diffs two result files and exits non-zero when `rps` moves by more than 10% in either direction or `p99` by more than 20%, and refuses outright when `dataset_scale`, `cpuset`, or `mix` differ. It prints a one-line verdict per metric.
@@ -1626,12 +1638,17 @@ taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
 Pick a starting VU count. The challenge starts its search at 2,500; do the same so the first data point is comparable.
 
 ```bash
+SCALE=20000          # MUST equal UMBRAL_BENCH_USERS from Step 1
+POSTS=$((SCALE * 10))  # MUST equal the seeded posts per user multiplier
 taskset -c 8,9,10,11 ~/.local/bin/k6 run \
   -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   --summary-export=/tmp/hold-1.json \
   harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
+harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" $?
 ```
+
+**`USERS` and `POSTS` are not optional and they must match the dataset.** k6 picks random ids to read (`/u/{id}`, `/posts/{id}`), so if they describe a *larger* dataset than was seeded, a fraction of reads return `404` — and `404` is not an error the thresholds catch, because `http_req_failed` counts transport and non-2xx failures by k6's rules while a `404` on a read simply returns a body nobody checks. The result is a hold that looks clean and is silently reading nothing for half its requests. `lib.js` defaults `USERS` to 50,000; the plan seeds 20,000, so the default is wrong here and must be overridden. Task 7's preflight catches the mismatch in about a second if you get it wrong — do not disable it.
 
 - [ ] **Step 4: Cool down, then repeat twice**
 
@@ -1640,12 +1657,14 @@ harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
 ```bash
 sleep 180
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   --summary-export=/tmp/hold-2.json harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-2.json 2500 20000 $?
+harness/bench/results/record.sh /tmp/hold-2.json 2500 "$SCALE" $?
 sleep 180
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   --summary-export=/tmp/hold-3.json harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-3.json 2500 20000 $?
+harness/bench/results/record.sh /tmp/hold-3.json 2500 "$SCALE" $?
 ```
 
 - [ ] **Step 5: Report the spread, not the mean**
