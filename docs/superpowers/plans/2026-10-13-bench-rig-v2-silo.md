@@ -751,10 +751,29 @@ done
 
 Expected: `404` for all three. Any `200` means a bench control surface was mounted into the measured app.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Clear Task 2's disclosed leftovers**
+
+Task 2 renamed the binary but deliberately deferred three loose ends. They belong here, because this task owns the new binary and the widening gap between the two.
+
+**7a. Two runtime-rendered strings still name the old command.** `harness/backend/src/loadgen.rs:435` (the run-start error message) and `harness/backend/templates/feed.html:18` (the empty-feed page) both say `cargo run -- serve`, which now fails with cargo's "could not determine which binary to run". Update them to name `umbral-bench-instrumented` explicitly.
+
+Both branches are unreachable against a seeded database, so the golden gate does not pin them and this edit cannot cause a false `after` failure — but do not regenerate `golden/before`.
+
+**7b. Delete the stale pre-rename binary.**
 
 ```bash
-git add harness/backend/src/bin/bench-prod.rs harness/backend/src/prod_handlers.rs
+rm -f harness/backend/target/release/umbral-bench
+```
+
+Goodbye to ~44 MB of pre-refactor code that cargo will never clean and that is now one tab-completion away from being run by accident. This is a build artifact, not a database — the "never delete" constraint does not apply to it.
+
+**7c. Do NOT delete `harness/backend/target/release/umbral-bench-instrumented`** — it is the binary the golden gate runs against.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add harness/backend/src/bin/bench-prod.rs harness/backend/src/prod_handlers.rs \
+        harness/backend/src/loadgen.rs harness/backend/templates/feed.html
 git commit -m "feat(bench): add bench-prod, the measured application"
 ```
 
