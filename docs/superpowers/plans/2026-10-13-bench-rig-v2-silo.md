@@ -1190,13 +1190,22 @@ case "${1:-serve}" in
 esac
 ```
 
+**The committed `run.sh` is authoritative and is a good deal more than this sketch.** It was hardened during implementation and review in ways worth knowing before you read it, so treat the block above as the shape and the file as the truth:
+
+- `verify` **asserts** rather than prints — it accumulates failures and exits 1, and it checks both what was requested and what took effect (deriving the CPU cap from whichever form Docker stored, and reading the container's own `memory.max`/`memory.swap.max`).
+- `serve` fails fast and informatively: it prints status, exit code, `OOMKilled` and the last 40 log lines, and its readiness loop exits as soon as the container is gone rather than waiting out the timeout.
+- It refuses a bare `UMBRAL_DATABASE_URL` in `-e`, which Docker would otherwise treat as a variable *name* rather than a value.
+- It refuses a cold start unless `BENCH_ALLOW_COLD_START` is set, for the reason in Step 5.
+
 - [ ] **Step 5: Build and boot the silo**
 
 ```bash
 chmod +x harness/bench/run.sh
 harness/bench/run.sh build
-harness/bench/run.sh serve
+BENCH_ALLOW_COLD_START=1 harness/bench/run.sh serve
 ```
+
+**The flag is required on this first boot, and only on a cold one.** `run.sh` refuses to start against a missing `bench/data/bench-run.db` unless the operator opts in explicitly, because `?mode=rwc` means a mistyped database path would otherwise create a silent empty database rather than failing — and a hold run against an empty database produces a number that is wrong in a way nothing in the output reveals. A fresh silo's first boot *is* legitimately cold, so it opts in; every later boot against an existing database needs no flag, and passing it then is a warning worth reading.
 
 Expected: image builds, container starts, `ready on 8114`.
 
