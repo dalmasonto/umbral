@@ -47,7 +47,7 @@ pub async fn feed(
     Extension(trace): Extension<Trace>,
 ) -> Result<Json<Value>, ApiError> {
     trace.handler_start();
-    let limit = q.limit.unwrap_or(25).clamp(1, 100) as u64;
+    let limit = domain::feed_limit(q.limit);
 
     let t = Instant::now();
     let posts = domain::recent_posts(limit).await?;
@@ -56,11 +56,11 @@ pub async fn feed(
     let ids: Vec<i64> = posts.iter().map(|p| p.id).collect();
 
     let t = Instant::now();
-    let (like_counts, comment_counts) = domain::engage_counts(&ids).await?;
+    let (likes, comments) = domain::engage_rows(&ids).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
 
     let t = Instant::now();
-    let payload = domain::feed_payload(&posts, &like_counts, &comment_counts);
+    let payload = domain::feed_payload(&posts, &likes, &comments);
     trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
 
@@ -73,14 +73,15 @@ pub async fn feed_naive(
     Extension(trace): Extension<Trace>,
 ) -> Result<Json<Value>, ApiError> {
     trace.handler_start();
-    let limit = q.limit.unwrap_or(25).clamp(1, 100) as u64;
+    let limit = domain::feed_limit(q.limit);
 
-    // The walk is one `domain` call (initial read, the per-post author fetch
-    // and two COUNTs, row assembly), so it is one wall window rather than a
-    // window per post.
     let t = Instant::now();
-    let payload = domain::naive_feed_payload(limit).await?;
+    let facts = domain::naive_feed_query(limit).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
+
+    let t = Instant::now();
+    let payload = domain::naive_feed_payload(&facts);
+    trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
     Ok(Json(payload))
 }
@@ -95,10 +96,13 @@ pub async fn profile(
 ) -> Result<Json<Value>, ApiError> {
     trace.handler_start();
 
-    // Queries and payload assembly are one `domain` call, so one wall window.
     let t = Instant::now();
-    let payload = domain::profile_payload(id).await?;
+    let data = domain::profile_query(id).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
+
+    let t = Instant::now();
+    let payload = domain::profile_payload(&data);
+    trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
     Ok(Json(payload))
 }
