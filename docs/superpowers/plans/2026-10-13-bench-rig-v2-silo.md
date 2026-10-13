@@ -1019,10 +1019,19 @@ RUN apt-get update \
 WORKDIR /app
 COPY target/release/umbral-bench-prod /app/umbral-bench-prod
 COPY templates /app/templates
+COPY migrations /app/migrations
 
 # Data lives on a bind mount so the SQLite file is on the host's NVMe and not
 # on overlayfs (which copy-up's on every write).
 VOLUME ["/data"]
+
+# `migrations/` MUST be copied, and its absence is not a harmless omission.
+# The migration engine reads a missing migrations directory as "every applied
+# migration is missing" and fails boot with
+# `DriftDetected { missing: [("bench","0001_auto"), ...] }` — a startup failure
+# that looks like a schema problem and is actually a missing COPY. Task 4 hit
+# exactly this drift from a different cause (no plugin registered to own the
+# bench migrations) and it cost a diagnosis cycle there.
 
 ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db" \
     UMBRAL_BIND="0.0.0.0:8114" \
