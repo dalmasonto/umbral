@@ -6,16 +6,21 @@
 # its seed/tokens.json — real sessions, built once, verified per request.
 #
 # The pool USERS are not created here; the binary owns that, because only it
-# has the password-hashing API:
-#   cd harness/backend
-#   BENCH_SESSION_POOL_SIZE=200 ./target/release/umbral-bench-prod seed-sessions
-#   ./target/release/umbral-bench-prod serve &
-#   ./bench/seed-sessions.sh 8114 200
+# has the password-hashing API. The one rule is that they must exist in the
+# database the SERVED binary is using: sessions are rows in that database's
+# `session` table (the real DbStore), so a pool built against one database
+# authenticates nothing against another. Both halves therefore run where the
+# served database lives. With the silo (port 8114, /data/bench-run.db):
 #
-# The pool is bound to the database the logins were made against: sessions are
-# rows in the `session` table (the real DbStore), so a pool built against one
-# database authenticates nothing against another. Build it against the same
-# database the measured run serves, after that database has been seeded.
+#   harness/bench/run.sh serve
+#   docker exec umbral-bench /app/umbral-bench-prod seed-sessions
+#   harness/bench/seed-sessions.sh 8114 200
+#
+# Do NOT run the seeder on the host with no database override: it then defaults
+# to harness/backend/bench.db — the golden gate's fixture — and the logins
+# below would be minted against a different file from the one being served.
+# Override UMBRAL_DATABASE_URL to the served database if you must run it
+# host-side.
 #
 # Usage: seed-sessions.sh [port] [pool_size]
 #
@@ -34,6 +39,15 @@ N="${2:-200}"
 BASE="http://127.0.0.1:${PORT}"
 OUT="$(cd "$(dirname "$0")" && pwd)/session_pool.json"
 PASSWORD="${BENCH_PASSWORD:-bench-password-123}"
+
+# Validate the size before anything else touches the filesystem. `seq 1 0`
+# yields nothing and `seq 1 abc` errors, so an unchecked size would let the
+# loop run zero times and be read as a clean run — writing `[]` over a good
+# pool and calling it success.
+if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then
+  echo "ERROR: pool size must be a positive integer (got '$N')." >&2
+  exit 2
+fi
 
 echo "logging in $N pooled users against $BASE ..."
 tmp=$(mktemp)
@@ -78,5 +92,17 @@ if [ "$failed" -ne 0 ]; then
   echo "       Re-run 'seed-sessions' against this database before retrying." >&2
   exit 1
 fi
+
+# Second gate, independent of the one above: whatever the counter arithmetic
+# does, an empty pool is never written. `[]` would sail through k6's
+# SharedArray and fail every authenticated request at run time, and it would
+# have replaced a good pool to get there.
+if [ "$ok" -eq 0 ]; then
+  echo "ERROR: no sessions obtained — no pool written." >&2
+  echo "       Is the pool seeded in the database this server is using, and is" >&2
+  echo "       the login path right? See the header for the seeder command." >&2
+  exit 1
+fi
+
 mv "$tmp" "$OUT"
 echo "wrote $ok sessions to $OUT"
