@@ -320,11 +320,14 @@ Expected: builds clean. Fix any unresolved `crate::` paths the same way as Step 
 - [ ] **Step 8: Verify against the golden captures**
 
 ```bash
-./target/release/umbral-bench-instrumented serve &
+UMBRAL_BENCH_USERS=50 UMBRAL_BENCH_POSTS_PER_USER=3 UMBRAL_BENCH_LIKES_PER_USER=2 \
+  ./target/release/umbral-bench-instrumented serve &
 sleep 20
-../../harness/bench/golden/capture.sh 8113 harness/bench/golden/after-task2
-diff -r harness/bench/golden/before harness/bench/golden/after-task2 && echo "NO BEHAVIOUR CHANGE"
+../bench/golden/capture.sh 8113 ../bench/golden/after-task2
+diff -r ../bench/golden/before ../bench/golden/after-task2 && echo "NO BEHAVIOUR CHANGE"
 ```
+
+Run from `harness/backend`, and **with the same seed env Task 1 captured against**, against the same `bench.db`. A different dataset changes the response bodies, and the gate then fails for a reason that has nothing to do with your refactor. (Both facts are recorded in `harness/bench/golden/README.md`.)
 
 Expected: `NO BEHAVIOUR CHANGE`. Any diff is an unintended change — fix it, do not update the golden.
 
@@ -494,11 +497,14 @@ Expected: clean build, all tests pass. Warnings about unused imports mean a left
 - [ ] **Step 7: Verify against the golden captures**
 
 ```bash
-./target/release/umbral-bench-instrumented serve &
+UMBRAL_BENCH_USERS=50 UMBRAL_BENCH_POSTS_PER_USER=3 UMBRAL_BENCH_LIKES_PER_USER=2 \
+  ./target/release/umbral-bench-instrumented serve &
 sleep 20
-./bench/golden/capture.sh 8113 harness/bench/golden/after-task3
-diff -r harness/bench/golden/before harness/bench/golden/after-task3 && echo "NO BEHAVIOUR CHANGE"
+../bench/golden/capture.sh 8113 ../bench/golden/after-task3
+diff -r ../bench/golden/before ../bench/golden/after-task3 && echo "NO BEHAVIOUR CHANGE"
 ```
+
+Run from `harness/backend`, with the same seed env as Task 1 and Task 2, against the same `bench.db` — see `harness/bench/golden/README.md`.
 
 Expected: `NO BEHAVIOUR CHANGE`. This is the gate that proves the extraction preserved both the response bodies and the `Server-Timing` metric names the diagnostic tool depends on.
 
