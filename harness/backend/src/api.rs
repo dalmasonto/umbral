@@ -10,51 +10,28 @@
 //! `GET /api/users/{id}/profile` is the heavy aggregate the design's
 //! scenarios hammer: follower/following/post counts, likes and comments
 //! received, a recent-post window with per-post counts, and a top post.
+//!
+//! These handlers are thin: the queries and payload assembly live in
+//! [`crate::domain`], so `bench-prod` runs the same work under real auth.
+//! What stays here is `bench-instrumented`'s identity (`x-bench-user`) and
+//! every `trace.*` stamp.
 
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::{Duration, Instant};
 
 use axum::extract::Extension;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
-use umbral::prelude::*;
 use umbral::web::{ApiError, Json, Path, Query};
-use umbral_auth::{AuthUser, auth_user};
 
-use crate::models::{Comment, Follow, Like, Post, comment, follow, like, post};
+use crate::domain;
 use crate::probes::BenchUser;
 use crate::telemetry::Trace;
 use crate::{loadgen, telemetry};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn name_of(user: &AuthUser) -> String {
-    user.username.clone()
-}
-
-/// Author name for a post fetched WITH `select_related("author")`.
-fn hydrated_author_name(p: &Post) -> String {
-    p.author
-        .__resolved()
-        .map(name_of)
-        .unwrap_or_else(|| format!("user_{}", p.author.id()))
-}
-
-fn counts_by_fk<T: IntoIterator<Item = i64>>(ids: T) -> HashMap<i64, usize> {
-    let mut m: HashMap<i64, usize> = HashMap::new();
-    for id in ids {
-        *m.entry(id).or_default() += 1;
-    }
-    m
-}
 
 // ---------------------------------------------------------------------------
 // Feed
@@ -73,49 +50,17 @@ pub async fn feed(
     let limit = q.limit.unwrap_or(25).clamp(1, 100) as u64;
 
     let t = Instant::now();
-    let posts = Post::objects()
-        .select_related("author")
-        .order_by(post::CREATED_AT.desc())
-        .limit(limit)
-        .fetch()
-        .await?;
+    let posts = domain::recent_posts(limit).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
 
     let ids: Vec<i64> = posts.iter().map(|p| p.id).collect();
 
     let t = Instant::now();
-    let likes = if ids.is_empty() {
-        Vec::new()
-    } else {
-        Like::objects().filter(like::POST.in_(&ids)).fetch().await?
-    };
-    let comments = if ids.is_empty() {
-        Vec::new()
-    } else {
-        Comment::objects()
-            .filter(comment::POST.in_(&ids))
-            .fetch()
-            .await?
-    };
+    let (like_counts, comment_counts) = domain::engage_counts(&ids).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
 
     let t = Instant::now();
-    let like_counts = counts_by_fk(likes.iter().map(|l| l.post.id()));
-    let comment_counts = counts_by_fk(comments.iter().map(|c| c.post.id()));
-    let rows: Vec<Value> = posts
-        .iter()
-        .map(|p| {
-            json!({
-                "id": p.id,
-                "author": { "id": p.author.id(), "username": hydrated_author_name(p) },
-                "body": p.body,
-                "created_at": p.created_at,
-                "likes": like_counts.get(&p.id).copied().unwrap_or(0),
-                "comments": comment_counts.get(&p.id).copied().unwrap_or(0),
-            })
-        })
-        .collect();
-    let payload = json!({ "posts": rows, "count": rows.len() });
+    let payload = domain::feed_payload(&posts, &like_counts, &comment_counts);
     trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
 
@@ -130,44 +75,12 @@ pub async fn feed_naive(
     trace.handler_start();
     let limit = q.limit.unwrap_or(25).clamp(1, 100) as u64;
 
+    // The walk is one `domain` call (initial read, the per-post author fetch
+    // and two COUNTs, row assembly), so it is one wall window rather than a
+    // window per post.
     let t = Instant::now();
-    let posts = Post::objects()
-        .order_by(post::CREATED_AT.desc())
-        .limit(limit)
-        .fetch()
-        .await?;
+    let payload = domain::naive_feed_payload(limit).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
-
-    let mut rows = Vec::with_capacity(posts.len());
-    for p in &posts {
-        let t = Instant::now();
-        let author = AuthUser::objects()
-            .filter(auth_user::ID.eq(p.author.id()))
-            .first()
-            .await?;
-        let likes = Like::objects().filter(like::POST.eq(p.id)).count().await?;
-        let comments = Comment::objects()
-            .filter(comment::POST.eq(p.id))
-            .count()
-            .await?;
-        trace.add_db_wall(t.elapsed().as_micros() as u64);
-
-        rows.push(json!({
-            "id": p.id,
-            "author": {
-                "id": p.author.id(),
-                "username": author.map(|a| a.username).unwrap_or_default(),
-            },
-            "body": p.body,
-            "created_at": p.created_at,
-            "likes": likes,
-            "comments": comments,
-        }));
-    }
-
-    let t = Instant::now();
-    let payload = json!({ "posts": rows, "count": rows.len() });
-    trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
     Ok(Json(payload))
 }
@@ -182,85 +95,10 @@ pub async fn profile(
 ) -> Result<Json<Value>, ApiError> {
     trace.handler_start();
 
+    // Queries and payload assembly are one `domain` call, so one wall window.
     let t = Instant::now();
-    let user = AuthUser::objects()
-        .filter(auth_user::ID.eq(id))
-        .first()
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("user {id} not found")))?;
-
-    let followers = Follow::objects()
-        .filter(follow::FOLLOWING.eq(id))
-        .count()
-        .await?;
-    let following = Follow::objects()
-        .filter(follow::FOLLOWER.eq(id))
-        .count()
-        .await?;
-    let post_count = Post::objects().filter(post::AUTHOR.eq(id)).count().await?;
-
-    let recent = Post::objects()
-        .filter(post::AUTHOR.eq(id))
-        .select_related("author")
-        .order_by(post::CREATED_AT.desc())
-        .limit(10)
-        .fetch()
-        .await?;
+    let payload = domain::profile_payload(id).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
-
-    let ids: Vec<i64> = recent.iter().map(|p| p.id).collect();
-
-    let t = Instant::now();
-    let (likes_received, comments_received, like_rows, comment_rows) = if ids.is_empty() {
-        (0, 0, Vec::new(), Vec::new())
-    } else {
-        let lr = Like::objects().filter(like::POST.in_(&ids)).count().await?;
-        let cr = Comment::objects()
-            .filter(comment::POST.in_(&ids))
-            .count()
-            .await?;
-        let lrows = Like::objects().filter(like::POST.in_(&ids)).fetch().await?;
-        let crows = Comment::objects()
-            .filter(comment::POST.in_(&ids))
-            .fetch()
-            .await?;
-        (lr, cr, lrows, crows)
-    };
-    trace.add_db_wall(t.elapsed().as_micros() as u64);
-
-    let t = Instant::now();
-    let like_counts = counts_by_fk(like_rows.iter().map(|l| l.post.id()));
-    let comment_counts = counts_by_fk(comment_rows.iter().map(|c| c.post.id()));
-
-    let recent_rows: Vec<Value> = recent
-        .iter()
-        .map(|p| {
-            json!({
-                "id": p.id,
-                "body": p.body,
-                "created_at": p.created_at,
-                "likes": like_counts.get(&p.id).copied().unwrap_or(0),
-                "comments": comment_counts.get(&p.id).copied().unwrap_or(0),
-            })
-        })
-        .collect();
-    let top_post = recent_rows
-        .iter()
-        .max_by_key(|r| r["likes"].as_u64().unwrap_or(0))
-        .cloned()
-        .unwrap_or(Value::Null);
-
-    let payload = json!({
-        "user": { "id": user.id, "username": user.username, "joined": user.date_joined },
-        "followers": followers,
-        "following": following,
-        "posts": post_count,
-        "likes_received": likes_received,
-        "comments_received": comments_received,
-        "recent_posts": recent_rows,
-        "top_post": top_post,
-    });
-    trace.add_serialize(t.elapsed().as_micros() as u64);
     trace.handler_end();
     Ok(Json(payload))
 }
@@ -281,20 +119,13 @@ pub async fn create_post(
 ) -> Result<Json<Value>, ApiError> {
     trace.handler_start();
     let user = user.ok_or_else(|| ApiError::unauthorized("x-bench-user header required"))?;
-    let body: String = input.body.chars().take(280).collect();
+    let body = domain::clamp_body(&input.body);
 
     let t = Instant::now();
-    let saved = Post::objects()
-        .create(Post {
-            id: 0,
-            author: ForeignKey::new(user.id),
-            body,
-            created_at: Utc::now(),
-        })
-        .await?;
+    let payload = domain::create_post(user.id, &body).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
     trace.handler_end();
-    Ok(Json(json!({ "id": saved.id, "author_id": user.id })))
+    Ok(Json(payload))
 }
 
 pub async fn like_post(
@@ -306,23 +137,10 @@ pub async fn like_post(
     let user = user.ok_or_else(|| ApiError::unauthorized("x-bench-user header required"))?;
 
     let t = Instant::now();
-    let exists = Like::objects()
-        .filter(like::USER.eq(user.id) & like::POST.eq(id))
-        .exists()
-        .await?;
-    if !exists {
-        Like::objects()
-            .create(Like {
-                id: 0,
-                user: ForeignKey::new(user.id),
-                post: ForeignKey::new(id),
-                created_at: Utc::now(),
-            })
-            .await?;
-    }
+    let payload = domain::like_post(user.id, id).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
     trace.handler_end();
-    Ok(Json(json!({ "ok": true, "created": !exists })))
+    Ok(Json(payload))
 }
 
 pub async fn follow_user(
@@ -337,23 +155,10 @@ pub async fn follow_user(
     }
 
     let t = Instant::now();
-    let exists = Follow::objects()
-        .filter(follow::FOLLOWER.eq(user.id) & follow::FOLLOWING.eq(id))
-        .exists()
-        .await?;
-    if !exists {
-        Follow::objects()
-            .create(Follow {
-                id: 0,
-                follower: ForeignKey::new(user.id),
-                following: ForeignKey::new(id),
-                created_at: Utc::now(),
-            })
-            .await?;
-    }
+    let payload = domain::follow_user(user.id, id).await?;
     trace.add_db_wall(t.elapsed().as_micros() as u64);
     trace.handler_end();
-    Ok(Json(json!({ "ok": true, "created": !exists })))
+    Ok(Json(payload))
 }
 
 // ---------------------------------------------------------------------------
