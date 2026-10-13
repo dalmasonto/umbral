@@ -61,8 +61,17 @@ VOLUME ["/data"]
 # a deployment secret — and it is fixed on purpose: sessions and CSRF tokens
 # signed under one key must stay valid when the container is recreated, so the
 # rig cannot hand out a fresh random key per boot.
+# `UMBRAL_BIND` is LOOPBACK, deliberately, and it is *this binary's* knob — not
+# the framework's. `bench-prod.rs:73-79` reads `UMBRAL_BIND` itself and only
+# falls back to `UMBRAL_BIND_ADDR` (the framework variable) when it is unset.
+# Do not "tidy" it into the framework's name, and do not widen it back to
+# 0.0.0.0: with `--network host` the app is published exactly as bound, so
+# 0.0.0.0 would put the silo on every network this laptop joins — and with a
+# committed fixture secret key, a LAN client that sends `Host: localhost` (the
+# allowlist rejects the header, not the peer) could mint a session. k6 runs on
+# this host and reaches loopback directly, so the wider bind buys nothing.
 ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db?mode=rwc" \
-    UMBRAL_BIND="0.0.0.0:8114" \
+    UMBRAL_BIND="127.0.0.1:8114" \
     UMBRAL_SECRET_KEY="bench-silo-fixture-key-not-for-deployment-0001" \
     RUST_LOG="warn"
 
