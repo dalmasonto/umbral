@@ -66,6 +66,35 @@ case "${1:-serve}" in
         exit 2
         ;;
     esac
+    # A missing database is NOT a neutral condition. `?mode=rwc` makes the app
+    # silently CREATE one, seed it at the default 2000-user scale, and serve
+    # that — so a hold would measure the wrong dataset while looking perfectly
+    # healthy. The first boot of a fresh silo is legitimately cold (Task 6's
+    # Step 5 is exactly that), so it is allowed — but only when asked for, so
+    # that an unintentional cold start cannot happen quietly. This runs before
+    # the container is touched, so a refusal leaves a running silo alone.
+    db_url="${DB_ENV#*=}"
+    db_file=""
+    case "$db_url" in
+      sqlite:///data/*)
+        rel="${db_url#sqlite:///data/}"
+        rel="${rel%%\?*}"
+        db_file="$DATA/$rel"
+        ;;
+    esac
+    if [ -n "$db_file" ] && [ ! -f "$db_file" ]; then
+      if [ "${BENCH_ALLOW_COLD_START:-0}" != "1" ]; then
+        echo "ERROR: no database at $db_file" >&2
+        echo "       The app would create an EMPTY one (the URL carries ?mode=rwc)," >&2
+        echo "       seed it at the default scale, and serve that — a hold against it" >&2
+        echo "       would look healthy and measure the wrong dataset." >&2
+        echo "       Intentional first boot, or a deliberate reset?" >&2
+        echo "         BENCH_ALLOW_COLD_START=1 $0 serve" >&2
+        exit 2
+      fi
+      echo "WARNING: cold start — no $db_file; it will be created and seeded at" >&2
+      echo "         the default scale. No number from this container is the baseline." >&2
+    fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" \
       --cpuset-cpus=0,2,4,6 \
