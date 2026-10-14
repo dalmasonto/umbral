@@ -113,6 +113,25 @@ case "${1:-serve}" in
     # limit cannot be what stops a run: 13x the 40,000-VU cap the search
     # targets, 35x the reference workload's connection count. Do not tidy this
     # back to the default.
+    # One more container env var, as a whole assignment, for measurement
+    # cycles that toggle a framework settings knob without a rebuild:
+    #   BENCH_ENV='UMBRAL_DB_TEST_BEFORE_ACQUIRE=false' run.sh serve
+    # Same whole-assignment rule as the database URL: a bare name sets
+    # nothing and the silo silently runs the default, which would make a
+    # cycle's "change" a no-op that still produced a number.
+    EXTRA_ENV="${BENCH_ENV:-}"
+    EXTRA_E=()
+    if [ -n "$EXTRA_ENV" ]; then
+      case "$EXTRA_ENV" in
+        UMBRAL_*=*) EXTRA_E=(-e "$EXTRA_ENV") ;;
+        *)
+          echo "ERROR: BENCH_ENV must be a whole NAME=value assignment, e.g." >&2
+          echo "       BENCH_ENV='UMBRAL_DB_TEST_BEFORE_ACQUIRE=false' run.sh serve" >&2
+          echo "       Got: $EXTRA_ENV" >&2
+          exit 2
+          ;;
+      esac
+    fi
     docker run -d --name "$NAME" \
       --cpuset-cpus=0,2,4,6 \
       --cpus=4 \
@@ -121,6 +140,7 @@ case "${1:-serve}" in
       --network host \
       -v "$DATA:/data" \
       -e "$DB_ENV" \
+      ${EXTRA_E[@]+"${EXTRA_E[@]}"} \
       "$IMAGE" serve
     echo "started $NAME (pid $(docker inspect -f '{{.State.Pid}}' "$NAME"))"
     echo "waiting for readiness ..."
