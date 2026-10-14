@@ -81,8 +81,9 @@ impl Rng {
 
 /// Placeholder password hash for the dataset users. Most of them never log in
 /// (the instrumented binary's scenarios authenticate via `x-bench-user`), so
-/// hashing every one of them through argon2 (~100 ms CPU each) would only make
-/// the seed slow for no measurement value. The exception is deliberate: the
+/// hashing every one of them through argon2 (~17 ms CPU each — measured
+/// 2026-10-14: 10,000 users in 168 s) would only make the seed slow for no
+/// measurement value. The exception is deliberate: the
 /// session pool draws its logins from these same rows — [`seed_session_pool`]
 /// gives the first `BENCH_SESSION_POOL_SIZE` of them a real hash — so the
 /// dataset is one user table, not two. The constant doubles as the marker that
@@ -480,9 +481,11 @@ impl SessionPoolConfig {
 /// Idempotent by construction, and **non-destructive**: a row still carrying
 /// the dataset's [`PLACEHOLDER_HASH`] gets the password set; a row that already
 /// carries a real hash is verified against the password and left untouched when
-/// it matches. Both of those are argon2 operations at ~100 ms CPU each, so a
-/// re-run over N rows costs about the same wall clock as the first pass —
-/// verification is as expensive as hashing. The run prints its own wall clock.
+/// it matches. Both of those are argon2 operations at ~17–18 ms CPU each
+/// (measured 2026-10-14: 10,000 re-verifies in 168 s on SQLite, 10,000 sets in
+/// 179 s on Postgres), so a re-run over N rows costs about the same wall clock
+/// as the first pass — verification is as expensive as hashing, confirmed to
+/// within 6%. The run prints its own wall clock.
 ///
 /// A missing `bench_user_i` is a hard error, never a skip: it means the pool is
 /// sized past the dataset (`BENCH_SESSION_POOL_SIZE` > the seeded user count),
