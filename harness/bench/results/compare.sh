@@ -4,12 +4,13 @@
 # Usage: compare.sh <before.json> <after.json>
 #
 # The refusals are the point. Two numbers measured against different datasets,
-# inside different container envelopes, or under a different workload mix are
-# not two samples of the same thing — subtracting them produces a delta that
-# does not mean what it looks like, and a delta that does not mean anything is
-# worse than no comparison. So this script refuses (exit 3) rather than
-# comparing, and it also refuses when either file is not a load result at all
-# (a k6 preflight abort, exit 107, measures nothing about the server).
+# inside different container envelopes, on different DATABASE BACKENDS, or
+# under a different workload mix are not two samples of the same thing —
+# subtracting them produces a delta that does not mean what it looks like, and
+# a delta that does not mean anything is worse than no comparison. So this
+# script refuses (exit 3) rather than comparing, and it also refuses when
+# either file is not a load result at all (a k6 preflight abort, exit 107,
+# measures nothing about the server).
 #
 # It fails CLOSED: anything it cannot read, parse, or establish comparability
 # for is a non-zero exit, never a silent pass.
@@ -36,6 +37,41 @@ die() { # die <exit-code> <message...>
   local code="$1"; shift
   echo "ERROR: $*" >&2
   exit "$code"
+}
+
+# Which DATABASE BACKEND a result was measured against, from the file alone.
+#
+# The fact record.sh carries is the URL the container was started with, read
+# out of the container's own environment (`docker inspect`, so it is what the
+# container is actually serving, not what someone meant to pass), recorded as
+# `wal.db_url`. There is no separate `backend` key; the scheme IS the backend.
+#
+# Deriving it from the SCHEME and not the whole URL is deliberate: two runs of
+# the same backend legitimately differ in path, database name and port, and
+# refusing those would make this comparator useless. Only the scheme names the
+# architecture — SQLite is a function call inside the measured process,
+# Postgres is a TCP round trip to another container — so only the scheme is
+# compared. `postgres` and `postgresql` are one server under two spellings and
+# canonicalise to one name; an unknown scheme is echoed as-written, so two
+# different unknowns still refuse rather than silently matching.
+#
+# Prints the empty string when the file names no database URL at all, which
+# the caller treats as "backend unknown" and refuses on: a result whose
+# backend cannot be established is comparable to nothing.
+db_backend() { # db_backend <result.json>
+  local url scheme
+  url="$(jq -r '.wal.db_url // ""' "$1" 2>/dev/null || echo '')"
+  case "$url" in
+    *://*) ;;
+    *) echo ""; return ;;
+  esac
+  scheme="${url%%://*}"
+  scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+  case "$scheme" in
+    sqlite) echo "sqlite" ;;
+    postgres|postgresql) echo "postgres" ;;
+    *) echo "$scheme" ;;
+  esac
 }
 
 case "${1:-}" in -h|--help) usage; exit 0;; esac
@@ -80,7 +116,26 @@ for f in "$A" "$B"; do
   jq -e '.p99_ms | type == "number"' "$f" >/dev/null 2>&1 || die 3 "'$f': p99_ms is not a number."
   jq -e '.envelope.cpuset? != null' "$f" >/dev/null 2>&1 \
     || die 3 "'$f' records no envelope.cpuset: an unverified envelope is not comparable."
+  # The backend is the outermost fact of all — it decides whether the database
+  # is in the measured process or across a network hop — so a file that does
+  # not name one is not comparable to anything, not even to another such file.
+  [ -n "$(db_backend "$f")" ] \
+    || die 3 "'$f' names no database URL (wal.db_url is absent, empty, or has no scheme),
+       so the backend it was measured against cannot be established. An unknown
+       backend is not comparable to anything. Re-record it with record.sh."
 done
+
+backend_a="$(db_backend "$A")"
+backend_b="$(db_backend "$B")"
+if [ "$backend_a" != "$backend_b" ]; then
+  die 3 "the DATABASE BACKEND differs: $A is '$backend_a', $B is '$backend_b' (from each
+       result's recorded database URL). SQLite's database is a function call in the
+       measured process; Postgres's is a TCP round trip to a sibling container. Neither
+       is better — they are different architectures with different envelopes, and a
+       delta between them is the architecture, not the code. The only meaningful
+       comparisons are sqlite-vs-sqlite and postgres-vs-postgres across code changes:
+       compare each result with one from its own backend."
+fi
 
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].dataset_scale == $b[0].dataset_scale' >/dev/null; then
   die 3 "dataset_scale differs: $A is $(jq -r '.dataset_scale' "$A"), $B is $(jq -r '.dataset_scale' "$B").
