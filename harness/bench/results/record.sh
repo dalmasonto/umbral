@@ -520,6 +520,14 @@ per_check="$(jc '(.root_group.checks // {}) | to_entries | map({name: .key, pass
 setup_data="$(jc '.setup_data // null')"
 mix="$(jc 'if (.setup_data.mix // null) == null then null else {LIKE_P: .setup_data.mix.LIKE_P, POST_P: .setup_data.mix.POST_P, PAGE_P: .setup_data.mix.PAGE_P, think_ms: (.setup_data.think_ms // null)} end')"
 workload_range="$(jc 'if (.setup_data.users // null) == null then null else {users: .setup_data.users, posts: (.setup_data.posts // null), preflight: (.setup_data.preflight // null)} end')"
+# The k6 session pool's entry count, written into `setup_data` by preflight()
+# in k6/lib.js. Recorded as a fact about the LOAD (how many distinct client
+# identities it carried), beside the server-side session facts in the
+# `session` block, because the two together decide what the session cost in
+# this result means. `// null` like the others: a summary from a pre-flight-fix
+# script has no such field, and the absence must be visible rather than read
+# as anything.
+pool_size="$(jc '.setup_data.pool_size // null')"
 
 # ---------------------------------------------------------------------------
 # 4. Classify the exit code, and cross-check what the summary says
@@ -587,6 +595,20 @@ elif [ "$exit_class" != "preflight_abort" ]; then
 fi
 
 [ "$mix" = "null" ] && [ "$exit_class" != "preflight_abort" ] && warn "no mix in the summary: mix is null and compare.sh will refuse to diff this result."
+
+# The pool size is the second fact compare.sh refuses a missing value for, and
+# for the same reason as the mix: a run whose pool was smaller than its VU
+# count carried FEWER distinct client identities than it claimed to model
+# (every VU is pinned to one pooled session; a smaller pool makes
+# `(VU-1) % pool.length` hand one identity to several concurrent VUs). The
+# session working set and last-seen write set inside the measured database time
+# are then smaller than the load implies — a different workload, not a slower
+# one — and before this field existed the rig did exactly that unnoticed.
+if [ "$pool_size" = "null" ]; then
+  [ "$exit_class" != "preflight_abort" ] && warn "no session pool size in the summary (setup_data.pool_size): this result predates the pool-size recording, or its k6 script does not report one. A run recorded before this rig recorded pool sizes shared each pooled session between several VUs (a 200-entry pool at 2,500 VUs is 12-13 VUs per identity), so compare.sh REFUSES to diff this result against anything — a missing fact must never read as 'matches'. Re-run against the current scripts to obtain a comparable result."
+elif [ "$vus_max" != "null" ] && jq -en --argjson p "$pool_size" --argjson v "$vus_max" '$p < $v' >/dev/null; then
+  warn "the session pool ($pool_size sessions) is smaller than the run's VU count (vus_max=$vus_max): concurrent VUs shared session identities, so the load used fewer distinct clients than its VU count claims and the session working set is smaller than the real traffic implies. Real users do not share sessions; this result is not comparable to one from a 1:1 pool."
+fi
 
 # Envelope facts that run.sh asserts but that this script only warns about: the
 # brief's refusal is the cpuset, and a future rig may legitimately change these
@@ -809,9 +831,14 @@ wal_json="$(jq -n \
      basis: $basis
    }')"
 
+# `pool_size` is the LOAD's distinct client identities (the k6 pool), recorded
+# here beside the server-side session facts so one block answers "what did the
+# session layer look like on both sides". `null` on a pre-change result is a
+# fact too: it is the marker compare.sh refuses a diff across.
 session_json="$(jq -n \
   --argjson ttl "$SESSION_TTL_SECONDS" --arg source "$SESSION_SOURCE" \
-  '{ store: "DbStore", cookie: "umbral_session", ttl_seconds: $ttl, absolute_max_age_seconds: null, source: $source }')"
+  --argjson pool "$pool_size" \
+  '{ store: "DbStore", cookie: "umbral_session", ttl_seconds: $ttl, absolute_max_age_seconds: null, source: $source, pool_size: $pool }')"
 
 # The load average is the other fact the brief asks for "at start", and it gets
 # the same treatment: the sampler's first reading when there is one, otherwise
@@ -916,6 +943,7 @@ printf '  rps       %s   p95 %s ms   p99 %s ms   errors %s\n' \
   "$(fmt "$rps")" "$(fmt "$p95_ms")" "$(fmt "$p99_ms")" "$(fmt "$error_rate")"
 printf '  checks    %s\n' "$(printf '%s' "$checks_total" | jq -r 'if . == null then "n/a" else "\(.passes)/\(.passes + .fails) held" end')"
 printf '  envelope  cpuset %s, %s cpus, memory %s, nofile %s\n' "$env_cpuset" "$cpu_cap_cpus" "$memory" "$nofile_in"
+printf '  session   DbStore, pool %s for %s VUs\n' "$(fmt "$pool_size")" "$(fmt "$vus_max")"
 printf '  thermal   peak %s C (%s)\n' "$(fmt "${THERMAL_PEAK:-null}")" "$THERMAL_SHORT"
 printf '  warnings  %s\n' "$(printf '%s' "$warnings_json" | jq -r 'length')"
 if [ "${#warnings[@]}" -gt 0 ]; then

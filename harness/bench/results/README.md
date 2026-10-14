@@ -34,7 +34,7 @@ Arguments are the summary path, the VU count, the dataset scale, and the **k6 ex
 |---|---|---|
 | `0` | thresholds held | `exit.class: "passed"`, `verdict: "pass"` |
 | `99` | a threshold failed (latency or error rate) | `exit.class: "threshold_failed"`, `verdict: "fail"` — a real load result |
-| `107` | aborted in `setup()`/preflight | `exit.class: "preflight_abort"`, `verdict: "not_a_load_result"` — a **rig-configuration** failure (wrong id ranges, a pool that does not match the served database), not a server failure |
+| `107` | aborted in `setup()`/preflight | `exit.class: "preflight_abort"`, `verdict: "not_a_load_result"` — a **rig-configuration** failure (wrong id ranges, a pool that does not match the served database, a session pool *smaller than the VU count*), not a server failure |
 | anything else | unclassified | `exit.class: "unclassified"`, `verdict: "unknown"` — recorded as-is, never folded into either bucket |
 
 Filing a `107` as a load result would blame umbral for a typo'd `-e USERS=`; the two are read weeks apart by someone who was not there.
@@ -63,7 +63,7 @@ Flat where comparison happens, grouped where reading happens. Schema `1`:
 | `thermal` | peak thermal-zone temperature per zone, with its provenance: `source` (`sampler` = the run's own window, `post-run-window` = the fallback), `stale`, the window's `from`/`to`/`window_s`, `interval_s`, `samples` (ticks, not per-zone readings) and `sampled_after_run_s` (null for `sampler`) |
 | `throttling` | the CPUs' thermal-throttle counters, cumulative since boot, restricted to the container's cpuset CPUs. An unreadable counter is `null`, and one unknown component makes the aggregate `null` — never `0`, which would read as "no throttling" |
 | `wal` | the served database's `db_bytes`/`wal_bytes`/`shm_bytes`, the container log's busy/error line counts (`null` if `docker logs` could not be read — not `0`), and `checkpoint_stall_suspected` with its rule in `basis` |
-| `session` | the session backend, cookie, TTL and max age the measured binary runs with |
+| `session` | the session backend, cookie, TTL and max age the measured binary runs with, plus `pool_size` — the number of distinct client identities the **load** carried (the k6 pool: one pooled session per VU). `null` on a result recorded before pool sizes were recorded, which `compare.sh` refuses to diff |
 | `host` | hostname, kernel, CPU, `loadavg_before_run` (the sampler's first reading, null when no sampler ran), the load average at record time, and the recorder shell's `ulimit -n` |
 | `warnings` | everything above that a reader should not miss |
 
@@ -90,6 +90,7 @@ It **refuses** (exit 3, no comparison at all) when:
 - `dataset_scale` differs — the same code against a bigger dataset is a different measurement;
 - the container `cpuset` differs — different CPU sets are different machines;
 - `mix` differs, **including `think_ms`** — the mix is what "fast" means for this rig;
+- `session.pool_size` differs — the pool is how many distinct client identities the load carried (one per VU), and a smaller pool means concurrent VUs shared sessions, which shrinks the session working set inside the measured database time: a different workload, not a slower one. A file **without** the field (any result recorded before 2026-10-14) is refused as well — an unknown pool is an unknown workload, and a missing fact must never read as "matches". This includes the two recorded baselines, which therefore cannot be diffed even against each other until they are re-recorded;
 - `rps` is zero (a relative change from zero is undefined), or any comparison fact is missing/null.
 
 It **fails closed**: a file it cannot parse, or one missing `schema`, is an error (exit 2) — never a silent pass.

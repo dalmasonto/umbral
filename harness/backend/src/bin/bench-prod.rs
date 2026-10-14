@@ -28,33 +28,39 @@ use umbral_sessions::SessionsPlugin;
 use umbral_bench::models::BenchPlugin;
 use umbral_bench::{prod_handlers, seed};
 
-/// `umbral-bench-prod seed-sessions` — create (or repair) the pooled login
-/// users `bench_1..bench_N`, the ones `bench/seed-sessions.sh` logs in as.
+/// `umbral-bench-prod seed-sessions` — give the first `bench_user_1..=N`
+/// DATASET users the pool password, the ones `bench/seed-sessions.sh` logs in
+/// as.
 ///
 /// A project-owned command (`AppBuilder::command`), not a plugin: it belongs
 /// to this binary, not to a reusable unit. It runs against live data, so the
 /// default `needs_ready() == true` is right — plugins are up and the pool is
-/// open before the first `create_user`.
+/// open before the first `set_password`.
 ///
-/// Size comes from `BENCH_SESSION_POOL_SIZE` (default 200) and the password
-/// from `BENCH_PASSWORD` (default `bench-password-123`), the same two
-/// variables the pool builder script reads, so the two halves cannot drift on
-/// the default.
+/// Size comes from `BENCH_SESSION_POOL_SIZE` (default 10000 — the peak VU
+/// count, one pooled session per VU) and the password from `BENCH_PASSWORD`
+/// (default `bench-password-123`), the same two variables the pool builder
+/// script reads, so the two halves cannot drift on the default. The users are
+/// the dataset's own rows: nothing is created, nothing is deleted, and a
+/// missing `bench_user_i` (a pool sized past the dataset) is a hard error.
 struct SeedSessions;
 
 #[umbral::async_trait]
 impl PluginCommand for SeedSessions {
     fn command(&self) -> clap::Command {
         clap::Command::new("seed-sessions")
-            .about("Ensure bench_1..bench_N can log in with BENCH_PASSWORD")
+            .about("Give the first N dataset users the pool password")
             .long_about(
-                "Create (or repair) the pooled login users `bench_1..bench_N` with the \
-                 password in BENCH_PASSWORD, so `bench/seed-sessions.sh` can log in as \
-                 them and build `bench/session_pool.json`.\n\n\
-                 N comes from BENCH_SESSION_POOL_SIZE (default 200). Idempotent: an \
-                 existing user whose stored hash already verifies is left untouched, and \
-                 one whose hash does not (a placeholder, or a rotated BENCH_PASSWORD) has \
-                 its password set in place. Users are never deleted and never duplicated.",
+                "Give the first `bench_user_1..bench_user_N` dataset users the password in \
+                 BENCH_PASSWORD, so `bench/seed-sessions.sh` can log them in and build \
+                 `bench/session_pool.json` — one pooled session per VU.\n\n\
+                 N comes from BENCH_SESSION_POOL_SIZE (default 10000). Idempotent and \
+                 non-destructive: the users are the dataset's own rows, so nothing is \
+                 created and nothing is deleted — `auth_user` keeps its row count and id \
+                 range, and only `password_hash` changes. A user whose stored hash already \
+                 verifies is left untouched; a placeholder (or a rotated BENCH_PASSWORD) \
+                 is set in place. A missing dataset user is an error: the pool is sized \
+                 past the dataset.",
             )
     }
 

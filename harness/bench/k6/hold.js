@@ -26,12 +26,14 @@ export const options = buildOptions({ vus: VUS, duration: "5m", scored: true });
 
 // A run that cannot mean what it claims should not be paid for: `preflight`
 // aborts (throwing here fails the run before the first VU, with the fix in the
-// message) when the id ranges run past the served dataset, or when the mix
-// writes but the pooled session does not authenticate against the database the
-// silo is serving. What it returns lands in the summary's `setup_data` — the
-// run's own record of the mix and scale it used.
+// message) when the session pool is smaller than `VUS`, when the id ranges run
+// past the served dataset, or when the mix writes but the pooled session does
+// not authenticate against the database the silo is serving. The pool-size
+// check is not skippable by PREFLIGHT=0 — see `lib.js`. What it returns lands
+// in the summary's `setup_data` — the run's own record of the mix, the id
+// ranges and the pool size it used.
 export function setup() {
-  return preflight(sessions);
+  return preflight(sessions, VUS);
 }
 
 export default function () {

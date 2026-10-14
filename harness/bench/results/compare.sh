@@ -4,11 +4,12 @@
 # Usage: compare.sh <before.json> <after.json>
 #
 # The refusals are the point. Two numbers measured against different datasets,
-# inside different container envelopes, on different DATABASE BACKENDS, or
-# under a different workload mix are not two samples of the same thing —
-# subtracting them produces a delta that does not mean what it looks like, and
-# a delta that does not mean anything is worse than no comparison. So this
-# script refuses (exit 3) rather than comparing, and it also refuses when
+# inside different container envelopes, on different DATABASE BACKENDS, under a
+# different workload mix, or carrying a different number of distinct session
+# identities (the k6 pool, `session.pool_size`) are not two samples of the same
+# thing — subtracting them produces a delta that does not mean what it looks
+# like, and a delta that does not mean anything is worse than no comparison. So
+# this script refuses (exit 3) rather than comparing, and it also refuses when
 # either file is not a load result at all (a k6 preflight abort, exit 107,
 # measures nothing about the server).
 #
@@ -114,6 +115,21 @@ for f in "$A" "$B"; do
   done
   jq -e '.rps | type == "number"' "$f" >/dev/null 2>&1 || die 3 "'$f': rps is not a number."
   jq -e '.p99_ms | type == "number"' "$f" >/dev/null 2>&1 || die 3 "'$f': p99_ms is not a number."
+  # The session pool size is the number of DISTINCT CLIENT IDENTITIES the load
+  # carried (k6 pins each VU to one pooled session). A pool smaller than the VU
+  # count shares identities between concurrent VUs, so the session working set
+  # and last-seen write set inside the measured database time are smaller than
+  # the load implies — a different workload, not a slower one. Like the mix,
+  # this is a fact the file must carry; every result recorded before the pool
+  # fix lacks it, and a missing fact must never read as "matches". Fail closed:
+  # such a file is comparable to nothing, not even to another file without it.
+  jq -e '.session.pool_size? != null' "$f" >/dev/null 2>&1 \
+    || die 3 "'$f' records no session pool size (session.pool_size): results recorded
+       before the pool fix do not carry it, so whether their VUs shared session
+       identities is not knowable from the file — and an unknown pool is an unknown
+       workload. Re-record it with the current record.sh to make it comparable."
+  jq -e '.session.pool_size | type == "number"' "$f" >/dev/null 2>&1 \
+    || die 3 "'$f': session.pool_size is not a number."
   jq -e '.envelope.cpuset? != null' "$f" >/dev/null 2>&1 \
     || die 3 "'$f' records no envelope.cpuset: an unverified envelope is not comparable."
   # The backend is the outermost fact of all — it decides whether the database
@@ -152,6 +168,15 @@ if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].mix == $b[0].mix' >/dev
        $B: $(jq -c '.mix' "$B")
        The mix (including think time) is what 'fast' means for this rig; a
        comparison across a mix change is not a comparison."
+fi
+if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].session.pool_size == $b[0].session.pool_size' >/dev/null; then
+  die 3 "the session pool size differs: $A carried $(jq -r '.session.pool_size' "$A") distinct
+       session identities, $B carried $(jq -r '.session.pool_size' "$B"). The pool is how many
+       clients the load actually modelled (one pooled session per VU); a smaller
+       pool means concurrent VUs shared sessions, so the session working set
+       inside the measured database time was smaller. That is a different
+       workload, not a slower one. Size the pool to the peak VU count and
+       re-measure both sides."
 fi
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].rps > 0' >/dev/null; then
   die 3 "$A has rps = $(jq -r '.rps' "$A"): a relative change from zero is undefined."
@@ -196,10 +221,10 @@ report="$(jq -rn --slurpfile a "$A" --slurpfile b "$B" '
 ')"
 
 echo "compare  $A  ->  $B"
-printf '  a  %s  %s   vus %s   scale %s\n' \
-  "$(jq -r '.git_sha_short' "$A")" "$(jq -r '.verdict' "$A")" "$(jq -r '.vus' "$A")" "$(jq -r '.dataset_scale' "$A")"
-printf '  b  %s  %s   vus %s   scale %s\n' \
-  "$(jq -r '.git_sha_short' "$B")" "$(jq -r '.verdict' "$B")" "$(jq -r '.vus' "$B")" "$(jq -r '.dataset_scale' "$B")"
+printf '  a  %s  %s   vus %s   scale %s   pool %s\n' \
+  "$(jq -r '.git_sha_short' "$A")" "$(jq -r '.verdict' "$A")" "$(jq -r '.vus' "$A")" "$(jq -r '.dataset_scale' "$A")" "$(jq -r '.session.pool_size' "$A")"
+printf '  b  %s  %s   vus %s   scale %s   pool %s\n' \
+  "$(jq -r '.git_sha_short' "$B")" "$(jq -r '.verdict' "$B")" "$(jq -r '.vus' "$B")" "$(jq -r '.dataset_scale' "$B")" "$(jq -r '.session.pool_size' "$B")"
 echo
 
 while IFS=$'\t' read -r metric va vb change verdict; do

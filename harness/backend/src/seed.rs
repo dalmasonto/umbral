@@ -79,9 +79,14 @@ impl Rng {
     }
 }
 
-/// Placeholder password hash for bench users. They never log in (scenarios
-/// authenticate via `x-bench-user`), so hashing 2,000+ users through argon2
-/// (~100 ms CPU each) would only make the seed slow for no measurement value.
+/// Placeholder password hash for the dataset users. Most of them never log in
+/// (the instrumented binary's scenarios authenticate via `x-bench-user`), so
+/// hashing every one of them through argon2 (~100 ms CPU each) would only make
+/// the seed slow for no measurement value. The exception is deliberate: the
+/// session pool draws its logins from these same rows — [`seed_session_pool`]
+/// gives the first `BENCH_SESSION_POOL_SIZE` of them a real hash — so the
+/// dataset is one user table, not two. The constant doubles as the marker that
+/// seeder keys on: a row still holding it has never carried a real password.
 const PLACEHOLDER_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$YmVuY2hiZW5jaGJlbmNo$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA";
 
 const WORDS: &[&str] = &[
@@ -424,11 +429,17 @@ async fn ensure_comments(
 }
 
 // ---------------------------------------------------------------------------
-// The session pool — the only users whose credentials have to be real
+// The session pool — one pooled session per VU, drawn from the dataset users
 // ---------------------------------------------------------------------------
 
-/// Default size of the pooled-login user set (`bench_1..bench_N`).
-pub const DEFAULT_SESSION_POOL_SIZE: i64 = 200;
+/// Default size of the pooled-login set: the first
+/// `bench_user_1..=bench_user_N` dataset users.
+///
+/// Sized for the PEAK VU count, not the current run. Every VU is pinned to one
+/// pooled session — one VU is one client, `k6/lib.js` refuses to start a run
+/// whose pool is smaller than its VU count — and the ramp targets 2,500 →
+/// 5,000 → 10,000, so one pool serves the whole ramp.
+pub const DEFAULT_SESSION_POOL_SIZE: i64 = 10_000;
 
 /// The password every pooled user is seeded with. The pool builder script
 /// reads the same default from `BENCH_PASSWORD`, so the two cannot drift when
@@ -454,67 +465,95 @@ impl SessionPoolConfig {
     }
 }
 
-/// Ensure `bench_1..bench_N` exist and can log in with `cfg.password`.
+/// Give the first `cfg.size` DATASET users (`bench_user_1..=bench_user_N`) the
+/// pool password, so `bench/seed-sessions.sh` can log each of them in and mint
+/// one session cookie per user.
 ///
-/// This is the credential half of the benchmark, kept in its own user
-/// namespace on purpose. The seeded `bench_user_*` rows carry a placeholder
-/// hash: nothing logs in as them (the instrumented binary's scenarios
-/// authenticate via `x-bench-user`), and hashing every one of them through
-/// argon2 would only make the seed slow for no measurement value. The pool is
-/// the other side of that trade — a small set of users whose logins are real,
-/// built once, so k6 never pays for argon2 at all.
+/// These are the dataset's own rows — the same users the workload already
+/// draws its random ids from — not a parallel user namespace. Nothing is
+/// created and nothing is deleted: `auth_user` keeps its row count and its id
+/// range, and the only column this writes is `password_hash` (the update
+/// `set_password` issues patches exactly that one field). That is what makes a
+/// pool 1:1 with the VUs affordable: a second set of N users would grow the
+/// dataset by N rows for every pool size the ramp asks for.
 ///
-/// Idempotent by construction, and **non-destructive**: an absent user is
-/// created through [`umbral_auth::create_user`] (argon2id, and `is_active =
-/// true` — the one flag `/login` gates on, `plugins/umbral-auth/src/lib.rs`);
-/// an existing one is left exactly as it is when the bench password already
-/// verifies against its stored hash, and has its password rotated through
-/// [`umbral_auth::set_password`] when it does not. That second arm is what
-/// makes a re-run against a *partially* seeded database work — a row that
-/// exists with a placeholder or unknown hash is repaired in place, never
-/// duplicated and never deleted.
+/// Idempotent by construction, and **non-destructive**: a row still carrying
+/// the dataset's [`PLACEHOLDER_HASH`] gets the password set; a row that already
+/// carries a real hash is verified against the password and left untouched when
+/// it matches. Both of those are argon2 operations at ~100 ms CPU each, so a
+/// re-run over N rows costs about the same wall clock as the first pass —
+/// verification is as expensive as hashing. The run prints its own wall clock.
+///
+/// A missing `bench_user_i` is a hard error, never a skip: it means the pool is
+/// sized past the dataset (`BENCH_SESSION_POOL_SIZE` > the seeded user count),
+/// and carrying on would leave part of the load with logins that 401 — which
+/// reads as the server rejecting writes, not as a rig misconfiguration.
 pub async fn seed_session_pool(
     cfg: &SessionPoolConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if cfg.size < 1 {
+        return Err(format!(
+            "[bench-pool] BENCH_SESSION_POOL_SIZE={} is not a positive size.",
+            cfg.size
+        )
+        .into());
+    }
+    let started = std::time::Instant::now();
     eprintln!(
-        "[bench-pool] ensuring {} pooled login users (bench_1..bench_{})…",
+        "[bench-pool] ensuring the first {} dataset users (bench_user_1..bench_user_{}) can log in…",
         cfg.size, cfg.size
     );
-    let mut created = 0usize;
+    let mut set = 0usize;
     let mut rotated = 0usize;
     let mut unchanged = 0usize;
 
     for i in 1..=cfg.size {
-        let username = format!("bench_{i}");
+        let username = format!("bench_user_{i}");
         let existing: Option<AuthUser> = AuthUser::objects()
             .filter(auth_user::USERNAME.eq(username.as_str()))
             .first()
             .await?;
 
-        match existing {
-            None => {
-                let email = format!("{username}@example.com");
-                let user = umbral_auth::create_user(&username, &email, &cfg.password).await?;
-                println!("{username} id={} created", user.id);
-                created += 1;
-            }
-            Some(mut user) => {
-                if umbral_auth::verify_password_async(&cfg.password, &user.password_hash).await? {
-                    println!("{username} id={} unchanged", user.id);
-                    unchanged += 1;
-                } else {
-                    umbral_auth::set_password(&mut user, &cfg.password).await?;
-                    println!("{username} id={} password rotated", user.id);
-                    rotated += 1;
-                }
-            }
+        let Some(mut user) = existing else {
+            return Err(format!(
+                "[bench-pool] {username} does not exist: the pool is sized \
+                 BENCH_SESSION_POOL_SIZE={} but the dataset is smaller. The pool is \
+                 drawn from the dataset's own rows on purpose — it adds no rows — so \
+                 seed the dataset first (the served binary tops it up on boot) or size \
+                 the pool within it.",
+                cfg.size
+            )
+            .into());
+        };
+
+        // The placeholder branch is more than an optimisation: verifying the
+        // password against the placeholder hash costs a full argon2 operation
+        // and returns false, and `set_password` then hashes the same password
+        // again — two argon2 ops per row where one will do. Recognising the
+        // placeholder collapses a first pass to exactly one hash per user.
+        if user.password_hash == PLACEHOLDER_HASH {
+            umbral_auth::set_password(&mut user, &cfg.password).await?;
+            println!("{username} id={} password set", user.id);
+            set += 1;
+        } else if umbral_auth::verify_password_async(&cfg.password, &user.password_hash).await? {
+            println!("{username} id={} unchanged", user.id);
+            unchanged += 1;
+        } else {
+            umbral_auth::set_password(&mut user, &cfg.password).await?;
+            println!("{username} id={} password rotated", user.id);
+            rotated += 1;
         }
     }
 
     // The password itself is deliberately not echoed: the default is public,
     // but an operator who overrode BENCH_PASSWORD did so on purpose, and a
     // credential that reaches stderr reaches every log that captures it.
-    eprintln!("[bench-pool] done: {created} created, {rotated} rotated, {unchanged} unchanged.");
+    let secs = started.elapsed().as_secs_f64();
+    eprintln!(
+        "[bench-pool] done: {set} set, {rotated} rotated, {unchanged} unchanged, in \
+         {secs:.1}s ({:.0} ms/user).",
+        secs * 1000.0 / cfg.size as f64
+    );
     Ok(())
 }
 

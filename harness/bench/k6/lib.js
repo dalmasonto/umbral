@@ -104,6 +104,11 @@ function go(method, path, session, body) {
 
 /// One iteration of the workload. `sessions` is the SharedArray from the pool.
 export function doIteration(sessions) {
+  // The pool is 1:1 with the VU count — `preflight` refuses to start a run
+  // where it is not — so one VU is one client and this modulo is the identity.
+  // It stays as the bounds guarantee for the other direction (a pool larger
+  // than the VU count still indexes a distinct entry per VU, and never past
+  // the end).
   const session = sessions[(__VU - 1) % sessions.length];
 
   // 1. The feed. Every iteration reads it; it is the one unconditional request
@@ -213,13 +218,46 @@ export function runParams() {
   };
 }
 
+/// The rig's pool scale: the session pool is 1:1 with the PEAK VU count the
+/// ramp targets (2,500 → 5,000 → 10,000, spec §2a), because every VU is
+/// pinned to one pooled session — one VU is one client — and one pool serves
+/// the whole ramp rather than being rebuilt per VU count. Only used for the
+/// size suggested in preflight's failure messages; the authoritative numbers
+/// are `BENCH_SESSION_POOL_SIZE` (the seeder) and the script's argument,
+/// which `bench/seed-sessions.sh` refuses to let disagree.
+const POOL_TARGET = 10000;
+
+/// The two commands that rebuild the pool against the database the silo is
+/// serving, as the lines of a preflight error message. `n` is the pool size
+/// the run needs; the seeder's `BENCH_SESSION_POOL_SIZE` and the script's
+/// argument must be that same number, or one half of the pool is sized for
+/// the other (the script refuses to run when it can see the two disagree).
+function rebuildCommands(n) {
+  return (
+    "  docker exec umbral-bench /app/umbral-bench-prod seed-sessions\n" +
+    `  harness/bench/seed-sessions.sh 8114 ${n}   # see bench/workload.md`
+  );
+}
+
 /// Call this from `setup()`. It spends a handful of requests to make sure the
 /// run is not about to measure the wrong thing, and it THROWS — aborting the
 /// run before a single iteration, with the fix in the message — rather than
 /// letting a hold fail six minutes later for a reason that is not the server's.
 ///
-/// Two ways this rig lies to itself, both structural rather than hypothetical:
+/// `vus` is the run's VU count — the number of concurrent clients — and the
+/// pool must hold at least that many DISTINCT sessions. Three ways this rig
+/// lies to itself, all structural rather than hypothetical:
 ///
+///   * THE POOL vs THE VU COUNT. Every VU is pinned to one pooled session (one
+///     VU = one client, bench/workload.md). With fewer sessions than VUs,
+///     `(VU-1) % pool.length` hands each identity to several concurrent VUs:
+///     real users do not share sessions, and sharing shrinks the session
+///     working set and the last-seen write set inside the measured database
+///     time. This is checked FIRST and is deliberately not skippable: it is
+///     knowable from two numbers with no request at all, so `PREFLIGHT=0` —
+///     the escape hatch for the server probes below — must not be able to
+///     switch it off and silently restore the sharing this rig exists to
+///     avoid.
 ///   * ID RANGES vs DATASET. USERS/POSTS are env knobs; the served rows are a
 ///     file. A range that runs past the seeded rows turns every read past the
 ///     end into a 404, a 404 counts as a failed request, and the hold fails its
@@ -233,22 +271,53 @@ export function runParams() {
 ///     one side-effect-free request: 200 when the cookie names a live session,
 ///     401 when it names nothing.
 ///
-/// Set PREFLIGHT=0 to skip both — the ids are then on their own honour.
-export function preflight(sessions) {
+/// `PREFLIGHT=0` skips the SERVER probes (the two above that need a request) —
+/// the ids are then on their own honour. The pool-vs-VU check always runs.
+export function preflight(sessions, vus) {
   const params = runParams();
 
-  if (Number(__ENV.PREFLIGHT ?? 1) === 0) {
-    return { ...params, preflight: "skipped (PREFLIGHT=0)" };
+  if (!Number.isInteger(vus) || vus < 1) {
+    throw new Error(
+      "preflight: preflight(sessions, vus) needs the run's VU count as a positive " +
+        `integer; got ${vus}. Every script that builds its options from a VU count ` +
+        "must pass that same count here: without it the rig cannot tell whether the " +
+        "session pool is big enough, and an unchecked pool is exactly the identity " +
+        "sharing this check exists to prevent.",
+    );
   }
 
   if (sessions.length === 0) {
     throw new Error(
       "preflight: session_pool.json is empty, so every VU would send no session " +
-        "and every write would 401. Build the pool against the database the silo " +
-        "is SERVING:\n" +
-        "  docker exec umbral-bench /app/umbral-bench-prod seed-sessions\n" +
-        "  harness/bench/seed-sessions.sh 8114 200   # see bench/workload.md",
+        "and every write would 401. Build the pool 1:1 with peak VUs against the " +
+        "database the silo is SERVING (the seeder and the script must be the same " +
+        "size):\n" +
+        rebuildCommands(Math.max(vus, POOL_TARGET)),
     );
+  }
+
+  if (sessions.length < vus) {
+    throw new Error(
+      `preflight: the session pool is smaller than this run — ${sessions.length} ` +
+        `pooled sessions for ${vus} VUs. Every VU must get its own session: with a ` +
+        `smaller pool, (VU-1) % ${sessions.length} gives each identity ` +
+        `${Math.ceil(vus / sessions.length)} concurrent VUs, and real users do not ` +
+        "share sessions — it shrinks the session working set and the last-seen write " +
+        "set inside the measured database time, and biases the very number this rig " +
+        "produces. The pool is sized to PEAK VUs (one session per client), not to one " +
+        "run. Rebuild it against the database the silo is SERVING, seeder and script " +
+        "at the same size:\n" +
+        rebuildCommands(Math.max(vus, POOL_TARGET)),
+    );
+  }
+
+  // The pool's entry count travels in `setup_data` like the mix and the scale:
+  // it is a fact about the LOAD (how many distinct client identities it used),
+  // the recorder writes it into every result's `session` block, and
+  // `results/compare.sh` refuses to diff two results whose pool sizes differ.
+  const pool = { pool_size: sessions.length };
+  if (Number(__ENV.PREFLIGHT ?? 1) === 0) {
+    return { ...params, ...pool, preflight: "skipped (PREFLIGHT=0)" };
   }
 
   const ping = http.get(`${BASE}/api/ping`, { tags: { name: "preflight" } });
@@ -274,8 +343,7 @@ export function preflight(sessions) {
           "hold would fail `http_req_failed` for a reason that is not the server's. " +
           "The pool and the database it was built against must be the one the silo " +
           "serves (users AND session rows):\n" +
-          "  docker exec umbral-bench /app/umbral-bench-prod seed-sessions\n" +
-          "  harness/bench/seed-sessions.sh 8114 200   # see bench/workload.md",
+          rebuildCommands(sessions.length),
       );
     }
   } else {
@@ -306,7 +374,7 @@ export function preflight(sessions) {
     );
   }
 
-  return { ...params, preflight: "ok" };
+  return { ...params, ...pool, preflight: "ok" };
 }
 
 /// Probe the top of an id range. Tolerant of a merely gappy top — three

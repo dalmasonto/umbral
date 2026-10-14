@@ -11,6 +11,8 @@
 
 **Neither is comparable to the other, and no artifact may diff them.** SQLite's database is a function call inside the measured process; Postgres's is a TCP round trip to a sibling container. Each is a fixed point only for itself — the only meaningful comparisons are sqlite-vs-sqlite and postgres-vs-postgres across code changes. `compare.sh` enforces this by refusing (exit 3) when two results name different backends.
 
+**Both baselines also ran the pre-fix 200-entry session pool, and that is a second incomparability.** The rig pins each VU to one pooled session, so the pool size is how many distinct client identities the load carried — and at 2,500 VUs a 200-entry pool made `(VU-1) % 200` hand each identity to 12–13 concurrent VUs. Real users do not share sessions; the sharing shrinks the session working set and the last-seen write set inside the measured database time, i.e. it biases the session-read layer (83% of all measured server time) in the direction that flatters `DbStore`. Both result files predate the `session.pool_size` field, and `compare.sh` now **refuses any result that does not carry it** — so the two baselines can no longer be diffed at all, not even against each other, until they are re-recorded against the 1:1 pool. The defect, the layer it lands in, and this fix are documented in `results/reports/2026-10-14-phase2-closeout-and-layer-ledger.md`; the pool is now sized 1:1 with the ramp's peak (10,000) and every result records it.
+
 Both baselines carry a caveat that governs what their numbers can be used for: 2,500 VUs pins throughput to the workload's think time, so **RPS is a regression guard and p95/p99 is the signal** — and on Postgres the p99 spread (27–54%) is wide enough that `compare.sh`'s own 20% p99 limit sits inside the noise. Read `results/README.md`'s section on the tail's spread before quoting a p99 change from either.
 
 The rest of this file describes the SQLite baseline, which is what "the baseline" meant before the Postgres one existed.
@@ -68,7 +70,7 @@ Run 1 was recorded at commit `52e800a9`; runs 2 and 3 at `1819ddbc`. That is not
 | **Envelope** | `--cpuset-cpus=0,2,4,6`, 4 GB memory, no swap, `nofile 524288:524288`, `--network host`, image `umbral-bench:latest` |
 | **Mix** | `LIKE_P=0.15`, `POST_P=0.02`, `PAGE_P=0.10`, think time 3000–8000 ms — the ratified values in `workload.md` (≈2.17 requests per iteration, a 92.2 / 7.8 read/write split by request count) |
 | **VUs** | 2,500, the challenge's starting point and the value `search.sh` doubles from |
-| **Sessions** | `SessionsPlugin::default()` — the `DbStore` backend, one real session-store read per authenticated request, **reads included** |
+| **Sessions** | `SessionsPlugin::default()` — the `DbStore` backend, one real session-store read per authenticated request, **reads included**. The load's k6 session pool was the pre-fix 200 entries at 2,500 VUs (12–13 VUs per identity) — see the caveat above |
 | **Measured binary** | `umbral-bench-prod` (no `TraceRoot`, `DevAuth`, `RequestLog`, `ResponseStamp`, probes, lab middleware or rate limiter), sha256 `bcc4479a…2418eb` |
 | **Load generator** | k6 v2.3.0, `taskset -c 8,9,10,11` |
 
@@ -79,7 +81,7 @@ The dataset scale is a parameter, recorded in every result as `dataset_scale`; `
 **Included, deliberately:**
 
 - **A database session read on every request, including reads.** `SessionsPlugin::default()` is the `DbStore` backend (spec locked decision #3) — what a developer gets without choosing — so the session lookup and its SQLite read are part of the honest cost of this workload. If session lookups were to dominate the number, that would be a finding to act on rather than a cost to configure away.
-- **Real authentication.** The workload authenticates through `umbral-auth`/`umbral-sessions` for real; `DevAuth` does not exist in this binary. Every VU is pinned to one pooled session, so its traffic is one coherent user.
+- **Real authentication.** The workload authenticates through `umbral-auth`/`umbral-sessions` for real; `DevAuth` does not exist in this binary. Every VU is pinned to one pooled session, so its traffic is one coherent user — **except in these three runs, which used the pre-fix 200-entry pool where 12–13 VUs shared each identity** (see the caveat at the top of this file; the rig now refuses to start a run whose pool is smaller than its VU count).
 - **The write path's contention.** At the ratified mix every iteration reads the feed, thinks, makes one deeper read, and may like (15%) or post (2%). The writes are real transactions against the same SQLite file the reads are reading, one writer at a time — ≈3,100 posts and ≈23,500 likes over a 6.5-minute run, which is why the dataset grows across runs and why a baseline is a number about the dataset at the moment it was taken.
 - **The ramp and the drain.** The p95/p99/RPS in the summary are taken over the whole run — 60 s ramp, 5 m hold, 30 s ramp-down — not the steady state alone. The same is true of the challenge this rig calibrates against.
 
@@ -88,7 +90,7 @@ The dataset scale is a parameter, recorded in every result as `dataset_scale`; `
 - **No telemetry.** `bench-prod` constructs no instrumentation, so there is no `Server-Timing` header and no per-request layer breakdown behind this number. Attribution lives on :8113 with the instrumented binary, and any trend read from there is diagnostic.
 - **Not a saturation ceiling.** This is a *scored hold at a fixed VU count* under a sleep-dominated workload, and with the ratified mix the offered rate is a fixed multiple of the VU count: **`RPS ≈ VUs × 0.3945`** (2.17 requests per iteration ÷ 5.5 s of think) — 986 RPS at 2,500 VUs. That is why the challenge-shaped mix can never answer the "how much can it actually serve" question: the number is set by the sleep, not by the server. `saturation.js` (Phase 2) is the separate exercise that drops the think time to zero and ramps the offered *rate* instead. (An earlier draft of this file carried `RPS ≈ VUs × 0.106` from the plan, written before the mix was ratified; the run's own counters measured 2.1696 requests per iteration over 5.5 s of think, so 0.106 was stale and is gone.)
 - **Not a limit search.** 2,500 VUs is where the search begins; where it ends is Task 10's job.
-- **Not comparable to a run at another scale, mix, think time, or envelope.** `compare.sh` refuses those diffs by construction.
+- **Not comparable to a run at another scale, mix, think time, session pool size, or envelope.** `compare.sh` refuses those diffs by construction.
 - **Not a number about a different backend.** SQLite here; a Postgres run is a separate exercise with its own envelope, and no report may compare across backends.
 
 ## Reproducing it
@@ -108,9 +110,13 @@ cp /tmp/umbral-bench-seed/bench-seed.db harness/bench/data/bench-run.db
 harness/bench/run.sh build && harness/bench/run.sh serve
 harness/bench/run.sh verify                 # the envelope MUST match before anything runs
 
-# Both halves of the credential chain, against the SERVED database:
+# Both halves of the credential chain, against the SERVED database. The pool is
+# 1:1 with the ramp's PEAK VU count (2,500 → 5,000 → 10,000), so it is built
+# once, for 10,000; the seeder's BENCH_SESSION_POOL_SIZE and the script's
+# argument must be the same number. Idempotent — `auth_user` keeps its row
+# count; the seeder gives the dataset's own first 10,000 rows the password.
 docker exec umbral-bench /app/umbral-bench-prod seed-sessions
-harness/bench/seed-sessions.sh 8114 200
+harness/bench/seed-sessions.sh 8114 10000
 
 # Warm up, then the three scored holds (see the header of results/record.sh):
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \

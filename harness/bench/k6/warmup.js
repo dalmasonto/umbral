@@ -7,9 +7,10 @@
 //
 // It is `scored: false`, so no thresholds apply and k6 exits 0 whatever the
 // summary says: a warm-up is not a verdict. It is also the first script in the
-// sequence, so its `preflight()` is where a mis-scoped id range or a pool built
-// against the wrong database gets caught — for the price of a one-second abort
-// instead of a failed hold six minutes later.
+// sequence, so its `preflight()` is where a mis-scoped id range, a pool built
+// against the wrong database, or a pool smaller than the VU count gets caught —
+// for the price of a one-second abort instead of a failed hold six minutes
+// later.
 //
 // There is deliberately no extra pacing here. `doIteration` already sleeps the
 // workload's 3–8 s of think time, and a caller adding a `sleep` of its own is
@@ -26,10 +27,12 @@ const sessions = new SharedArray("sessions", () =>
   JSON.parse(open("../session_pool.json")),
 );
 
-export const options = buildOptions({ vus: 1000, duration: "2m", scored: false });
+const VUS = 1000;
+
+export const options = buildOptions({ vus: VUS, duration: "2m", scored: false });
 
 export function setup() {
-  return preflight(sessions);
+  return preflight(sessions, VUS);
 }
 
 export default function () {
