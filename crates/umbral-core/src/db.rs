@@ -561,7 +561,16 @@ fn is_valid_guc_name(name: &str) -> bool {
 /// installed). `idle_timeout`/`max_lifetime` are only applied when `Some`;
 /// a `None` (env `0`/empty) leaves that recycling disabled.
 pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
-    pg_pool_options().connect(url).await
+    pg_pool_options().connect_with(pg_connect_options(url)?).await
+}
+
+/// Postgres connect options with the shared, pool-independent knobs applied.
+/// Statement logging is wired to the same `UMBRAL_DB_LOG_STATEMENTS` knob as
+/// SQLite so both backends observe identically (previously PG silently rode
+/// sqlx's Debug default while SQLite was Off).
+fn pg_connect_options(url: &str) -> Result<sqlx::postgres::PgConnectOptions, sqlx::Error> {
+    use std::str::FromStr;
+    Ok(sqlx::postgres::PgConnectOptions::from_str(url)?.log_statements(statement_log_level()))
 }
 
 /// Open a Postgres pool LAZILY (audit_2 H17): the pool object is created
@@ -570,7 +579,7 @@ pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
 /// context. Same [`PoolConfig`] knobs and the same RLS `before_acquire` GUC
 /// hook as the eager [`connect_postgres`].
 pub fn connect_postgres_lazy(url: &str) -> Result<PgPool, sqlx::Error> {
-    pg_pool_options().connect_lazy(url)
+    Ok(pg_pool_options().connect_lazy_with(pg_connect_options(url)?))
 }
 
 /// Shared `PgPoolOptions` builder for the eager + lazy connect paths, so the
@@ -697,6 +706,41 @@ pub fn connect_sqlite_lazy(url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool_opts.connect_lazy_with(opts))
 }
 
+/// Per-statement logging level for every backend's connections.
+///
+/// Env: `UMBRAL_DB_LOG_STATEMENTS` = `off` (default) | `error` | `warn` |
+/// `info` | `debug` | `trace`. Unknown values warn and fall back to `off`.
+///
+/// Default is `off` because sqlx's statement logger reads every statement
+/// (summary extraction) before execution — a measurable per-query cost
+/// under load. Profiling tools opt in with `debug`: sqlx then emits one
+/// `tracing` event at target `sqlx::query` per executed statement (fields
+/// `summary`, `db.statement`, `elapsed`, `rows_*`), which is the seam the
+/// bench harness's layer attribution and `tests/query_counts.rs` read.
+/// The `slow statement` WARN at the 1-second threshold is a separate sqlx
+/// setting and stays on regardless.
+fn statement_log_level() -> tracing::log::LevelFilter {
+    use tracing::log::LevelFilter;
+    match std::env::var("UMBRAL_DB_LOG_STATEMENTS") {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "off" => LevelFilter::Off,
+            "error" => LevelFilter::Error,
+            "warn" => LevelFilter::Warn,
+            "info" => LevelFilter::Info,
+            "debug" => LevelFilter::Debug,
+            "trace" => LevelFilter::Trace,
+            other => {
+                eprintln!(
+                    "umbral: unknown UMBRAL_DB_LOG_STATEMENTS value `{other}` \
+                     (off|error|warn|info|debug|trace); using `off`"
+                );
+                LevelFilter::Off
+            }
+        },
+        Err(_) => LevelFilter::Off,
+    }
+}
+
 /// Shared SQLite options builder (pool knobs + connection PRAGMAs + in-memory
 /// temp-file handling) for the eager + lazy connect paths, so they never drift.
 fn sqlite_options(url: &str) -> Result<(SqlitePoolOptions, SqliteConnectOptions), sqlx::Error> {
@@ -724,12 +768,13 @@ fn sqlite_options(url: &str) -> Result<(SqlitePoolOptions, SqliteConnectOptions)
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(5))
         .foreign_keys(true)
-        // Disable per-statement logging — sqlx's default INFO-level
-        // logger reads every statement before execution, which adds a
-        // measurable per-query overhead under load. The `slow statement`
-        // WARN at the 1-second threshold stays on, since it goes via a
-        // separate log target.
-        .log_statements(tracing::log::LevelFilter::Off);
+        // Disable per-statement logging — sqlx's statement logger reads
+        // every statement before execution, which adds a measurable
+        // per-query overhead under load. Profilers opt in with
+        // `UMBRAL_DB_LOG_STATEMENTS=debug` (see `statement_log_level`).
+        // The `slow statement` WARN at the 1-second threshold goes via a
+        // separate setting and stays on.
+        .log_statements(statement_log_level());
 
     // gaps2 #91: apply the same settings-driven pool knobs as Postgres so
     // a single `UMBRAL_DB_*` configuration governs every backend. SQLite is
