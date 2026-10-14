@@ -182,6 +182,23 @@ if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].rps > 0' >/dev/null; th
   die 3 "$A has rps = $(jq -r '.rps' "$A"): a relative change from zero is undefined."
 fi
 
+# The allocator is the loudest fact on this list: Cycle B measured a drop-in
+# allocator change at +20.5% capacity and 45% off p95 (2026-10-14), so two
+# records whose containers DECLARED different allocators describe different
+# servers and must not diff. A record that predates BENCH_ALLOCATOR declares
+# nothing — every such record predates the mimalloc dependency by construction,
+# so it is not refused — but it is printed in the context block below, because
+# "a: — vs b: mimalloc" is exactly the comparison somebody must not make
+# silently.
+alloc_a="$(jq -r '.envelope.allocator.declared // "—"' "$A")"
+alloc_b="$(jq -r '.envelope.allocator.declared // "—"' "$B")"
+if [ "$alloc_a" != "—" ] && [ "$alloc_b" != "—" ] && [ "$alloc_a" != "$alloc_b" ]; then
+  die 3 "the declared allocator differs: $A declares '$alloc_a', $B declares '$alloc_b'.
+       The global allocator was measured at +20.5% capacity (Cycle B, 2026-10-14) —
+       it is part of the configuration, not an implementation detail. Re-measure
+       both sides under one allocator."
+fi
+
 # ---------------------------------------------------------------------------
 # The comparison
 # ---------------------------------------------------------------------------
@@ -294,6 +311,14 @@ if [ -n "$mhz_a" ] && [ -n "$mhz_b" ]; then
     line="$line — DIFFERENT BANDS (>25%): the CPU was clocking differently around the two records, so a latency movement is not attributable to the code without a same-session re-pair"
   fi
   ctx "cpu clock" "$line"
+fi
+
+# Present only when it can matter: a declared allocator on one side and none on
+# the other (or none on both) is not refused above — but it is named here, with
+# the asymmetry spelled out, so no one diffs a pre-Cycle-B record against a
+# mimalloc one without seeing it.
+if [ "$alloc_a" != "$alloc_b" ]; then
+  ctx "allocator" "a: ${alloc_a}   b: ${alloc_b} — a record that declares none predates BENCH_ALLOCATOR (and with it, the mimalloc dependency); if a is such a record and b declares a different allocator, this comparison crosses a measured +20.5% boundary (Cycle B, 2026-10-14)"
 fi
 
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].vus == $b[0].vus' >/dev/null; then

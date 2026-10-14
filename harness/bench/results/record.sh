@@ -503,6 +503,14 @@ fi
 # bind mount (/data -> harness/bench/data).
 db_url="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$NAME" \
   | awk '/^UMBRAL_DATABASE_URL=/{sub(/^UMBRAL_DATABASE_URL=/,""); print; exit}')"
+# The global allocator, read the same way and for the same reason Cycle B made
+# it matter (+20.5% capacity, 2026-10-14): a DECLARED fact from the container's
+# own environment, not an introspection of the binary. `null` when the launch
+# declared none — which is not a guess in either direction, and is exactly what
+# compare.sh prints in its context block when two records disagree about it.
+alloc_declared="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$NAME" \
+  | awk '/^BENCH_ALLOCATOR=/{sub(/^BENCH_ALLOCATOR=/,""); print; exit}')"
+[ -n "$alloc_declared" ] || alloc_declared="null"
 # A WAL file that is ABSENT at record time is not an error: SQLite deletes
 # -wal/-shm when the last connection closes cleanly, so a database at rest
 # after its writer went idle looks exactly like this. The size is recorded when
@@ -763,6 +771,7 @@ envelope_json="$(jq -n \
   --argjson nofile "$nofile_in" \
   --argjson running "$running" --argjson oom "$oom" \
   --arg started_at "$started_at" \
+  --argjson allocator "$(n_or_q "$alloc_declared")" \
   '{
      container: $container,
      image: $image,
@@ -779,6 +788,10 @@ envelope_json="$(jq -n \
      memory_max_in_container: $mem_max,
      memory_swap_max_in_container: $swap_max,
      nofile_soft_in_container: $nofile,
+     allocator: {
+       declared: $allocator,
+       source: "declared at launch (container env BENCH_ALLOCATOR, set by the sweep script or the runner); not introspected from the binary. null = the launch declared none, which for records before 2026-10-14 means glibc by construction (the mimalloc dependency did not exist yet)."
+     },
      verified: true
    }')"
 

@@ -132,6 +132,22 @@ case "${1:-serve}" in
           ;;
       esac
     fi
+    # The global allocator is a CONFIGURATION FACT since Cycle B measured one
+    # at +20.5% capacity (2026-10-14): the container DECLARES it here, record.sh
+    # records the declaration, and compare.sh refuses (or flags) a diff across
+    # a change. No default on purpose — a guessed value recorded as fact is the
+    # failure mode this rig refuses everywhere. An unset variable records null
+    # (readable as "not declared"), and the warning below makes sure a human
+    # sees that the record will carry it.
+    ALLOC_E=()
+    if [ -n "${BENCH_ALLOCATOR:-}" ]; then
+      ALLOC_E=(-e "BENCH_ALLOCATOR=$BENCH_ALLOCATOR")
+    else
+      echo "WARNING: BENCH_ALLOCATOR is unset — the container will declare no allocator," >&2
+      echo "         so the record carries null and compare.sh will flag any diff against" >&2
+      echo "         a record that does declare one. Set it (e.g. BENCH_ALLOCATOR=mimalloc)" >&2
+      echo "         whenever the measured binary's allocator is not the plain glibc default." >&2
+    fi
     docker run -d --name "$NAME" \
       --cpuset-cpus=0,2,4,6 \
       --cpus=4 \
@@ -140,6 +156,7 @@ case "${1:-serve}" in
       --network host \
       -v "$DATA:/data" \
       -e "$DB_ENV" \
+      ${ALLOC_E[@]+"${ALLOC_E[@]}"} \
       ${EXTRA_E[@]+"${EXTRA_E[@]}"} \
       "$IMAGE" serve
     echo "started $NAME (pid $(docker inspect -f '{{.State.Pid}}' "$NAME"))"

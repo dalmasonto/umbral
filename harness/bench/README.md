@@ -110,6 +110,15 @@ cp /tmp/umbral-bench-seed/bench-seed.db harness/bench/data/bench-run.db
 harness/bench/run.sh build && harness/bench/run.sh serve
 harness/bench/run.sh verify                 # the envelope MUST match before anything runs
 
+# Since Cycle B (2026-10-14) the global allocator is a recorded configuration
+# fact — measured at +20.5% capacity — so a serve DECLARES which one the image
+# carries, and `record.sh` files the declaration:
+#   BENCH_ALLOCATOR=mimalloc harness/bench/run.sh serve
+# Unset is not refused (records carry `null` = "not declared", and everything
+# before Cycle B means glibc by construction), but `run.sh` warns, and
+# `compare.sh` flags any diff that crosses a declared boundary. A cycle whose
+# arms differ in allocator must set it per arm.
+
 # Both halves of the credential chain, against the SERVED database. The pool
 # holds one session per DATASET USER (20,000) and `seed-sessions.sh` shuffles
 # it, so the VUs a run activates are a random sample of the user base rather
