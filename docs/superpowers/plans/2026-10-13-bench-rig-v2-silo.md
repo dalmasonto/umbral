@@ -1556,24 +1556,50 @@ This is the deliverable: three scored holds at one VU count, reported with varia
 - Consumes: everything above.
 - Produces: three result JSONs and a written baseline.
 
-- [ ] **Step 1: Bring the dataset to scale**
+- [ ] **Step 1: Bring the dataset to scale — in a scratch file, NOT in `bench.db`**
 
 Per spec §2a: 20,000 users for development, 50,000 for any number that gets quoted. Pick one and record it — `compare.sh` will refuse to diff across scales.
 
+**⚠️ Do not seed `harness/backend/bench.db`.** That file is the **golden gate's fixture**: Task 1 captured `golden/before` against it at 50 users / 150 posts, and Tasks 2 and 3 were verified by replaying that capture against it. Growing it to 20,000 users would silently invalidate the gate for every future task, and the failure would look like a behaviour change rather than a dataset change. The earlier plan said to seed it; that was wrong and this is the correction.
+
+Seed a **scratch copy** instead, then hand that to the silo:
+
 ```bash
 cd harness/backend
-UMBRAL_BENCH_USERS=20000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=4 \
-  ./target/release/umbral-bench-prod migrate
-# Seeding is resumable and never wipes: re-running tops up.
+SEED=/tmp/umbral-bench-seed/bench-seed.db
+mkdir -p "$(dirname "$SEED")"
+cp bench.db "$SEED"          # start from the gate fixture; this copy is disposable
+
+# Seeding is resumable and never wipes, so re-running tops up rather than resets.
+UMBRAL_DATABASE_URL="sqlite:///$SEED?mode=rwc" \
 UMBRAL_BENCH_USERS=20000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=4 \
   ./target/release/umbral-bench-prod serve &
-# wait for "seed complete", then Ctrl-C / kill the host-side process
+# wait for "[bench-seed] done:" in its output, then stop the host-side process
 ```
 
-Then move the seeded file into the silo's data directory so the container uses it:
+Confirm the scale before going further — a hold whose id ranges describe more rows than exist returns `404`s for a fraction of its reads, and a `404` is not a failure any threshold catches:
 
 ```bash
-cp harness/backend/bench.db harness/bench/data/bench-run.db
+python3 -c "
+import sqlite3
+c = sqlite3.connect('file:$SEED?mode=ro', uri=True)
+for t in ('auth_user','post','like','follow'):
+    print(t, c.execute('select count(*) from \\\"%s\\\"' % t).fetchone()[0])
+"
+```
+
+Expected: `auth_user` ≈ 20,000 and `post` ≈ 200,000. Those two numbers are `SCALE` and `POSTS` for every k6 command in Steps 2–4.
+
+Then hand the seeded file to the silo:
+
+```bash
+cp "$SEED" harness/bench/data/bench-run.db
+```
+
+**`harness/backend/bench.db` must be byte-identical afterwards.** Check it, because this is the one step in the whole plan that could quietly break the gate:
+
+```bash
+git status --short harness/backend/bench.db    # expect no output
 ```
 
 **Then create the pool users inside the silo's database, and build the pool from it.** Both halves are mandatory, they happen in this order, and this is the step most likely to be skipped.
