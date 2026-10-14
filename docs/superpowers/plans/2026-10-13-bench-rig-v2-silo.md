@@ -1679,7 +1679,7 @@ POSTS=$((SCALE * 10))  # MUST equal the seeded posts per user multiplier
 # describes whatever the machine was doing then, not what the run did. That
 # matters here because this is the step whose whole purpose is a spread small
 # enough to trust, and heat-soak is the leading explanation when it is not.
-harness/bench/results/record.sh --thermal-sample &
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
 SAMPLER=$!
 
 taskset -c 8,9,10,11 ~/.local/bin/k6 run \
@@ -1695,6 +1695,8 @@ harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" $?
 
 **Start the sampler *after* the cooldown, not before it.** If the machine is already hot when sampling opens, the recorded peak includes heat this run did not generate — the recorder detects that case and warns (`the sampler's window opened at N C`), but the warning means the number is contaminated. Its first reading is also where the run's starting load average comes from, which is what makes a busy machine visible in the result.
 
+**`taskset -c 12` is not optional.** The sampler reads sysfs in a loop and forks about nine processes per tick; measured, that is roughly **0.22 s of CPU per 5 s of wall time — some 4% of one core**, constant for the life of the hold. Unpinned, the scheduler is free to place it on cores 0, 2, 4, or 6, which are exactly the four the container owns and the four being measured. That would be a constant tax on the measured envelope in service of a tool that exists to explain the measured envelope. Core 12 is an E-core outside the container's set, so the sampler runs for free as far as the number is concerned.
+
 **`USERS` and `POSTS` are not optional and they must match the dataset.** k6 picks random ids to read (`/u/{id}`, `/posts/{id}`), so if they describe a *larger* dataset than was seeded, a fraction of reads return `404` — and `404` is not an error the thresholds catch, because `http_req_failed` counts transport and non-2xx failures by k6's rules while a `404` on a read simply returns a body nobody checks. The result is a hold that looks clean and is silently reading nothing for half its requests. `lib.js` defaults `USERS` to 50,000; the plan seeds 20,000, so the default is wrong here and must be overridden. Task 7's preflight catches the mismatch in about a second if you get it wrong — do not disable it.
 
 - [ ] **Step 4: Cool down, then repeat twice**
@@ -1703,7 +1705,7 @@ harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" $?
 
 ```bash
 sleep 180
-harness/bench/results/record.sh --thermal-sample &
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
 SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS="$SCALE" -e POSTS="$POSTS" \
@@ -1711,7 +1713,7 @@ taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=25
 kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
 harness/bench/results/record.sh /tmp/hold-2.json 2500 "$SCALE" $?
 sleep 180
-harness/bench/results/record.sh --thermal-sample &
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
 SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS="$SCALE" -e POSTS="$POSTS" \
