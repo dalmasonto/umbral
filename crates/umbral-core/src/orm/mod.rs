@@ -79,6 +79,33 @@ pub fn pk_key(value: &serde_json::Value) -> String {
     }
 }
 
+/// Diagnosability hook for the related-row hydration arms that
+/// `#[derive(Model)]` generates (`hydrate_fk`, `set_m2m_resolved_json`,
+/// `set_reverse_fk_resolved_json`) — not a user-facing API, but `pub`
+/// because macro-expanded code in downstream crates has to reach it.
+///
+/// Those arms deserialize decoded related rows into typed values and
+/// historically dropped any row whose deserialization failed **with no trace
+/// anywhere**. That silence is how a real Postgres bug survived: the
+/// prefetch's row→JSON decode nulled every `timestamptz`, so hydration of
+/// any datetime-bearing related model failed invisibly and payloads quietly
+/// served fallback values (bench rig, 2026-10-14 — see
+/// `tests/select_related_datetime_postgres.rs`). The decode side is fixed;
+/// this hook exists so that the *next* hydration failure is visible instead
+/// of silently changing what the app serves. A failure here means the row's
+/// decoded JSON does not round-trip through the model's own `Deserialize` —
+/// a decode/deserialize shape mismatch, not a data condition.
+#[doc(hidden)]
+pub fn __hydrate_failed(model: &str, field: &str, err: &serde_json::Error) {
+    tracing::warn!(
+        target: "umbral::orm::hydrate",
+        model,
+        field,
+        error = %err,
+        "related-row hydration failed; the relation stays unresolved for this row"
+    );
+}
+
 /// Escape SQL `LIKE` wildcards in a user-supplied **literal** substring.
 ///
 /// `contains` / `startswith` / `icontains` / the REST `__contains`

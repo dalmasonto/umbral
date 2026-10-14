@@ -870,20 +870,82 @@ pub(crate) async fn fetch_related_as_json_by_pk(
         q.and_where(sea_query::Expr::col(sea_query::Alias::new("deleted_at")).is_null());
     }
 
+    // Decode through the related model's column metadata when the registry
+    // is up.
+    //
+    // The blind cascade in `row_to_json` (`i64 → f64 → bool → uuid →
+    // String → null`) cannot represent a `timestamptz` on Postgres — none of
+    // its arms match, so every datetime column came back as JSON `null`,
+    // the typed `Deserialize` in the generated `hydrate_fk` failed on the
+    // missing value, and its forgive-and-continue posture dropped the whole
+    // row in silence. The bench rig caught the symptom (feed and post pages
+    // serving fallback author names on PG) on 2026-10-14. The
+    // metadata-aware decoder below is the ORM's single source of truth for
+    // column → JSON shape: RFC3339 for timestamps, string for
+    // uuid/date/time/decimal, PK-shape dispatch for FK columns,
+    // `pg_text_or_enum` for enum-typed text — every other decode path (the
+    // dynamic ORM, the JOIN hydrator) already goes through it. `None`
+    // (registry not up: the registry-less unit tests) keeps the legacy
+    // cascade, which is exactly the shape those tests exercise.
+    let meta = crate::migrate::model_meta_for_table(table);
+
     match pool {
         DbPool::Sqlite(pool) => {
             let (sql, args) = q.build_sqlx(SqliteQueryBuilder);
             let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, args)
                 .fetch_all(pool)
                 .await?;
-            Ok(rows.iter().map(backend_sqlite::row_to_json).collect())
+            rows.iter()
+                .map(|row| prefetch_row_to_json(row, meta.as_ref()))
+                .collect()
         }
         DbPool::Postgres(pool) => {
             let (sql, args) = q.build_sqlx(PostgresQueryBuilder);
             let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, args)
                 .fetch_all(pool)
                 .await?;
-            Ok(rows.iter().map(backend_pg::row_to_json).collect())
+            rows.iter()
+                .map(|row| prefetch_row_to_json_pg(row, meta.as_ref()))
+                .collect()
         }
     }
+}
+
+/// Row → JSON for a prefetch on SQLite — metadata-aware when the related
+/// model is in the registry; see the call site for why that matters. A
+/// decode error propagates: a shape the schema declares but the row cannot
+/// honor is a bug to surface, not a value to null.
+fn prefetch_row_to_json(
+    row: &sqlx::sqlite::SqliteRow,
+    meta: Option<&crate::migrate::ModelMeta>,
+) -> Result<JsonValue, sqlx::Error> {
+    let Some(meta) = meta else {
+        return Ok(backend_sqlite::row_to_json(row));
+    };
+    let mut obj = serde_json::Map::with_capacity(meta.fields.len());
+    for col in &meta.fields {
+        obj.insert(
+            col.name.clone(),
+            crate::orm::dynamic::decode_to_json(row, col)?,
+        );
+    }
+    Ok(JsonValue::Object(obj))
+}
+
+/// Postgres counterpart to [`prefetch_row_to_json`].
+fn prefetch_row_to_json_pg(
+    row: &sqlx::postgres::PgRow,
+    meta: Option<&crate::migrate::ModelMeta>,
+) -> Result<JsonValue, sqlx::Error> {
+    let Some(meta) = meta else {
+        return Ok(backend_pg::row_to_json(row));
+    };
+    let mut obj = serde_json::Map::with_capacity(meta.fields.len());
+    for col in &meta.fields {
+        obj.insert(
+            col.name.clone(),
+            crate::orm::dynamic::decode_pg_to_json(row, col)?,
+        );
+    }
+    Ok(JsonValue::Object(obj))
 }

@@ -1934,10 +1934,17 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 #field_name_str => {
                     let mut decoded: ::std::vec::Vec<#inner> = ::std::vec::Vec::with_capacity(rows.len());
                     for row in rows {
-                        if let ::core::result::Result::Ok(c) =
-                            ::umbral::_serde_json::from_value::<#inner>(row)
-                        {
-                            decoded.push(c);
+                        // A failing row is skipped, but never silently: see
+                        // `__hydrate_failed` for what the old `.ok()` hid.
+                        match ::umbral::_serde::Deserialize::deserialize(&row) {
+                            ::core::result::Result::Ok(c) => decoded.push(c),
+                            ::core::result::Result::Err(err) => {
+                                ::umbral::orm::__hydrate_failed(
+                                    <#struct_name as ::umbral::orm::Model>::NAME,
+                                    #field_name_str,
+                                    &err,
+                                );
+                            }
                         }
                     }
                     self.#field_ident.__set_resolved(decoded);
@@ -2560,8 +2567,24 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 }
                 hydrate_arms.push(quote! {
                     #field_name_str => {
-                        if let Ok(resolved) = ::umbral::_serde_json::from_value::<#inner_ty>(row.clone()) {
-                            self.#field_name.__set_resolved(resolved);
+                        // Borrowed deserialize (no whole-row clone) and a
+                        // named warning on failure. The old
+                        // `if let Ok(..) = from_value(row.clone())` dropped a
+                        // failing row in silence — that silence is what hid a
+                        // real Postgres bug where every timestamptz decoded
+                        // to JSON null, so hydration of any related row with
+                        // a datetime column failed invisibly (2026-10-14).
+                        match <#inner_ty as ::umbral::_serde::Deserialize>::deserialize(row) {
+                            ::core::result::Result::Ok(resolved) => {
+                                self.#field_name.__set_resolved(resolved);
+                            }
+                            ::core::result::Result::Err(err) => {
+                                ::umbral::orm::__hydrate_failed(
+                                    <#struct_name as ::umbral::orm::Model>::NAME,
+                                    #field_name_str,
+                                    &err,
+                                );
+                            }
                         }
                     }
                 });
@@ -2578,8 +2601,19 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 hydrate_arms.push(quote! {
                     #field_name_str => {
                         if let ::core::option::Option::Some(ref mut fk_mut) = self.#field_name {
-                            if let Ok(resolved) = ::umbral::_serde_json::from_value::<#inner_ty>(row.clone()) {
-                                fk_mut.__set_resolved(resolved);
+                            // Same borrowed-deserialize + named-warning
+                            // contract as the non-nullable arm above.
+                            match <#inner_ty as ::umbral::_serde::Deserialize>::deserialize(row) {
+                                ::core::result::Result::Ok(resolved) => {
+                                    fk_mut.__set_resolved(resolved);
+                                }
+                                ::core::result::Result::Err(err) => {
+                                    ::umbral::orm::__hydrate_failed(
+                                        <#struct_name as ::umbral::orm::Model>::NAME,
+                                        #field_name_str,
+                                        &err,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2772,10 +2806,22 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             let field_name_str = ident.to_string();
             quote! {
                 #field_name_str => {
-                    let parsed: ::std::vec::Vec<#child_ty> = rows
-                        .into_iter()
-                        .filter_map(|r| ::umbral::_serde_json::from_value::<#child_ty>(r).ok())
-                        .collect();
+                    // Per-row failure is skipped with a named warning, never
+                    // silently — the same contract as `hydrate_fk`; see
+                    // `umbral::orm::__hydrate_failed`.
+                    let mut parsed: ::std::vec::Vec<#child_ty> = ::std::vec::Vec::with_capacity(rows.len());
+                    for r in rows {
+                        match ::umbral::_serde::Deserialize::deserialize(&r) {
+                            ::core::result::Result::Ok(c) => parsed.push(c),
+                            ::core::result::Result::Err(err) => {
+                                ::umbral::orm::__hydrate_failed(
+                                    <#struct_name as ::umbral::orm::Model>::NAME,
+                                    #field_name_str,
+                                    &err,
+                                );
+                            }
+                        }
+                    }
                     self.#ident.__set_resolved(parsed);
                 }
             }
