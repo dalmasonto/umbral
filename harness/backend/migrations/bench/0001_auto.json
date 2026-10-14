@@ -55,8 +55,8 @@
       ],
       "unique_together": [
         [
-          "follower_id",
-          "following_id"
+          "follower",
+          "following"
         ]
       ]
     },
@@ -221,8 +221,8 @@
       ],
       "unique_together": [
         [
-          "user_id",
-          "post_id"
+          "user",
+          "post"
         ]
       ]
     }
@@ -348,8 +348,8 @@
         "icon": "database",
         "unique_together": [
           [
-            "follower_id",
-            "following_id"
+            "follower",
+            "following"
           ]
         ],
         "app_label": "app"
@@ -409,8 +409,8 @@
         "icon": "database",
         "unique_together": [
           [
-            "user_id",
-            "post_id"
+            "user",
+            "post"
           ]
         ],
         "app_label": "app"
