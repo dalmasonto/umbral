@@ -15,5 +15,17 @@ bench/results/*.json
 bench/session_pool.json
 bench/bench-run.db*
 
+# The containers' bind mount (`run.sh serve` mounts bench/data at /data; the
+# Postgres silo mounts bench/data/pg as its data directory). Its contents are
+# owned by the containers — thousands of files under bench/data/pg — and are
+# never committed. This was already true *in effect* and only by accident: the
+# directory is root-owned and mode 755, so git cannot read inside it and
+# reports the tree clean while printing a "could not open directory" warning.
+# On any machine where git CAN read it, every result recorded by record.sh
+# would carry `git_dirty: true` — a permanent spurious warning in every number
+# this rig produces. The ignore rule makes the cleanliness configuration rather
+# than a side effect of ownership.
+bench/data/
+
 # Local operator overrides.
 .env
