@@ -19,7 +19,11 @@
 // binaries the same allocator so diagnostics and measurements agree.
 //
 // `#[global_allocator]` in the library is deliberate: every binary that
-// links this crate gets it, which is exactly the arms' contract.
+// links this crate gets it, which is exactly the arms' contract. The
+// `dhat-alloc` feature (diagnostic-only) swaps it out for the heap profiler
+// in `tests/alloc_profile.rs` — a binary cannot carry two global allocators,
+// so this one yields to it by cfg.
+#[cfg(not(feature = "dhat-alloc"))]
 #[global_allocator]
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

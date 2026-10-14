@@ -33,6 +33,13 @@ path = "src/bin/bench-prod.rs"
 # package).
 [workspace]
 
+[features]
+# Diagnostic build: swaps the mimalloc global allocator for dhat's, so the
+# ignored `alloc_profile` test can attribute heap traffic to call sites.
+# Never enable this for a measured binary — since Cycle B the allocator IS
+# part of the measurement (+20.5% capacity; 2026-10-14).
+dhat-alloc = ["dep:dhat"]
+
 [dependencies]
 # Framework core + CLI (dispatch, migrate, makemigrations, ...).
 umbral = { path = "../../crates/umbral" }
@@ -58,6 +65,10 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # framework can't reach from the ORM alone. This is app-level configuration,
 # not a framework change — any umbral app can add these two lines.
 mimalloc = "0.1"
+
+# Heap-allocation profiler for the `dhat-alloc` diagnostic build (see the
+# [features] block). Optional: a normal build never links it.
+dhat = { version = "0.3", optional = true }
 
 # Telemetry: custom tracing layer (captures sqlx events per request) + fmt.
 tracing = "0.1"

@@ -52,3 +52,6 @@ info
 rein
 .taskflow.json
 .taskflow/
+
+# dhat diagnostic output (harness alloc_profile run)
+harness/backend/dhat-heap.json
