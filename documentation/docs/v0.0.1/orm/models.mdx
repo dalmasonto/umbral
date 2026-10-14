@@ -297,6 +297,22 @@ Read the table name back with `User::table_name()` (→ `"auth_user"`) instead o
 
 Beyond `table`, the struct-level `#[umbral(...)]` also accepts `plugin`, `display`, `icon`, `database`, `singleton`, `soft_delete`, `unique_together = [[...]]`, `indexes = [[...]]`, and `ordering = ["-col", "col"]`. The field-level `#[umbral(...)]` accepts `primary_key`, `unique`, `index`, `default = "..."`, `on_delete = "..."` / `on_update = "..."`, `auto_now` / `auto_now_add`, `max_length = N`, `min = N` / `max = N`, `string`, `noform`, `noedit`, `help = "..."`, `example = "..."`, `widget = "..."`, `backend = "..."`, `cidr`, `db_constraint = false`, `slug_from = "..."`, `choices`, `reverse_fk = "..."`, and `no_reverse`. (`choices` pairs `#[derive(Choices)]` on the enum with `#[umbral(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
+## Composite constraints and indexes
+
+`unique_together = [["a", "b"]]` declares a composite UNIQUE constraint over the listed columns; `indexes = [["a", "b"]]` declares a plain multi-column index. The migration engine creates both, and autodetects a group you add or remove:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
+#[umbral(unique_together = [["follower", "following"]])]
+pub struct Follow {
+    pub id: i64,
+    pub follower: ForeignKey<User>,
+    pub following: ForeignKey<User>,
+}
+```
+
+Each entry is a **column** name. A foreign key's column is named after its field — `follower`, not `follower_id` — so a Django-style `_id` habit produces a group naming a column the model does not have. Umbral refuses that in both places it can happen: `makemigrations` errors on the declaration (naming the model and the columns it really has), and a migration file already on disk that does it is refused when it is read, before any SQL runs, on SQLite and Postgres alike. That symmetry is the point — Postgres rejects such an index with `42703` anyway, while SQLite would otherwise accept it and quietly build a UNIQUE index over the quoted names as string constants, so the table takes one row and every later insert fails with a misleading UNIQUE violation.
+
 ## Display hints (`string`, `max_length`)
 
 Two field-level attributes shape how the admin renders a model when no `list_display` is configured:
