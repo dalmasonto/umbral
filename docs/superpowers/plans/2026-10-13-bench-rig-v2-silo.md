@@ -1571,6 +1571,9 @@ mkdir -p "$(dirname "$SEED")"
 cp bench.db "$SEED"          # start from the gate fixture; this copy is disposable
 
 # Seeding is resumable and never wipes, so re-running tops up rather than resets.
+# `UMBRAL_BIND` is REQUIRED here: the default is 8114, which the silo already
+# holds, so without it this host-side seeder cannot bind and the step fails.
+UMBRAL_BIND=127.0.0.1:8199 \
 UMBRAL_DATABASE_URL="sqlite:///$SEED?mode=rwc" \
 UMBRAL_BENCH_USERS=20000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=4 \
   ./target/release/umbral-bench-prod serve &
@@ -1596,11 +1599,13 @@ Then hand the seeded file to the silo:
 cp "$SEED" harness/bench/data/bench-run.db
 ```
 
-**`harness/backend/bench.db` must be byte-identical afterwards.** Check it, because this is the one step in the whole plan that could quietly break the gate:
+**`harness/backend/bench.db` must be byte-identical afterwards**, because this is the one step in the whole plan that could quietly break the gate. Check it with a **hash**, not with git:
 
 ```bash
-git status --short harness/backend/bench.db    # expect no output
+sha256sum harness/backend/bench.db    # expect 4e46744f7d39...af260, unchanged
 ```
+
+**A `git status --short` check here is vacuous and must not be relied on.** `bench.db` is gitignored (`harness/.gitignore:8`), so git would stay silent even if the file had been rewritten — the check would pass on exactly the failure it exists to catch. The same is true of the `-shm`/`-wal` sidecars that appear beside it whenever something opens it in WAL mode: their presence is harmless, their content is not part of the fixture, and neither is visible to git.
 
 **Then create the pool users inside the silo's database, and build the pool from it.** Both halves are mandatory, they happen in this order, and this is the step most likely to be skipped.
 
@@ -1686,12 +1691,17 @@ taskset -c 8,9,10,11 ~/.local/bin/k6 run \
   -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS="$SCALE" -e POSTS="$POSTS" \
   --summary-export=/tmp/hold-1.json \
-  harness/bench/k6/hold.js; echo "exit=$?"
+  harness/bench/k6/hold.js
+K6_EXIT=$?                        # capture IMMEDIATELY — see the note below
 
 kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
 
-harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" $?
+harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" "$K6_EXIT"
 ```
+
+**`K6_EXIT=$?` must be the very next statement after k6.** `$?` is clobbered by whatever runs next: written as a one-liner chained with `; echo "exit=$?"` and then followed by the sampler's `kill`/`wait`, the value handed to `record.sh` is **not** k6's.
+
+**The failure is quieter than it looks, and that is the whole danger.** The sampler traps `TERM INT` and exits 0 by design, so `wait "$SAMPLER"` returns **0** — meaning the brief's literal snippet would have produced files indistinguishable from correct ones. What it would actually do is file **a run that exited 99 or 107 as `exit.class: "passed"`**, which is the exact field `compare.sh` keys on. A genuine threshold failure or a preflight abort would be recorded as a pass, and the recorder's own cross-check warnings would be the only hint. A first implementation of this brief hit this; it was caught by noticing the results were suspiciously uniform, not by anything failing loudly.
 
 **Start the sampler *after* the cooldown, not before it.** If the machine is already hot when sampling opens, the recorded peak includes heat this run did not generate — the recorder detects that case and warns (`the sampler's window opened at N C`), but the warning means the number is contaminated. Its first reading is also where the run's starting load average comes from, which is what makes a busy machine visible in the result.
 
@@ -1709,17 +1719,19 @@ taskset -c 12 harness/bench/results/record.sh --thermal-sample &
 SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS="$SCALE" -e POSTS="$POSTS" \
-  --summary-export=/tmp/hold-2.json harness/bench/k6/hold.js; echo "exit=$?"
+  --summary-export=/tmp/hold-2.json harness/bench/k6/hold.js
+K6_EXIT=$?
 kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
-harness/bench/results/record.sh /tmp/hold-2.json 2500 "$SCALE" $?
+harness/bench/results/record.sh /tmp/hold-2.json 2500 "$SCALE" "$K6_EXIT"
 sleep 180
 taskset -c 12 harness/bench/results/record.sh --thermal-sample &
 SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS="$SCALE" -e POSTS="$POSTS" \
-  --summary-export=/tmp/hold-3.json harness/bench/k6/hold.js; echo "exit=$?"
+  --summary-export=/tmp/hold-3.json harness/bench/k6/hold.js
+K6_EXIT=$?
 kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
-harness/bench/results/record.sh /tmp/hold-3.json 2500 "$SCALE" $?
+harness/bench/results/record.sh /tmp/hold-3.json 2500 "$SCALE" "$K6_EXIT"
 ```
 
 - [ ] **Step 5: Report the spread, not the mean**
@@ -1835,7 +1847,9 @@ git commit -m "feat(bench): limit search with a 40k VU cap"
 
 ### Task 11: `saturation.js` — the RPS ceiling
 
-The VU score and "can it do 25,000 RPS" are different questions. The challenge-shaped workload is sleep-dominated (roughly `RPS ≈ VUs × 0.106`), so it can never answer the second one.
+The VU score and "can it do 25,000 RPS" are different questions. The workload is sleep-dominated — **0.394 req/s per VU** at the ratified mix (`2.17 req/iter ÷ 5.5 s think`), so 2,500 VUs offer ≈986 RPS and the Task 9 baseline's 865 RPS is **99% of what the load asked for, not a ceiling**. That is why this task exists: the hold test cannot answer "how much can it do", because at these VU counts it is measuring the workload's think time rather than the framework.
+
+(An earlier draft of this plan said `RPS ≈ VUs × 0.106`. That figure belongs to the *reference challenge's* script, which sleeps three times per iteration — roughly 20 s per 2.17 requests. Our mix sleeps once. The two are not interchangeable, and the measured baseline settles it: 865/2500 = 0.346 req/s/VU against a 0.394 offer.)
 
 **Files:**
 - Create: `harness/bench/k6/saturation.js`
