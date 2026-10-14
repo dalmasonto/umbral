@@ -142,6 +142,50 @@ die() { # die <exit-code> <message...>
   exit "$code"
 }
 
+warnings=()
+warn() { warnings+=("$1"); }
+
+# A value read from OUTSIDE this script — `docker exec`, a cgroup file, an awk
+# over /proc/1/limits — is a number only when it LOOKS like one, and there are
+# three ways it stops looking like one without any command reporting failure: a
+# cgroup file reads `max` when it is uncapped, awk prints nothing when its
+# pattern misses, and a command can succeed while writing zero bytes. Any of
+# those reaching `--argjson` makes jq exit 2, and under `set -e` that killed the
+# whole record with no line naming the field — it cost Cycle A's first arm its
+# recorded facts (the number survived only in the k6 summary). Normalizing AT
+# THE READ means everything downstream — the JSON, the comparisons, the printed
+# summary — can only ever see a number or the string `null`, which this file's
+# schema already reads as "unreadable", never as 0. A present-but-non-numeric
+# value (the cgroup `max`) is a fact worth keeping, so it is named in a warning
+# rather than dropped silently.
+#
+# Both helpers run in the CALLER's shell, never inside `$( )`: a warn() called
+# from a command substitution appends to that subshell's copy of `warnings`
+# and is discarded — the field would null silently, which is exactly the
+# mute-hole failure this hardening exists to remove. `read_num` therefore
+# captures with the substitution and sanitizes outside it.
+sanitize_num() { # sanitize_num <field-name> <var-name> — normalize IN PLACE
+  local v="${!2}"
+  case "$v" in
+    '') warn "$1 read came back empty (unreadable) — recorded as null"; printf -v "$2" null ;;
+    *[!0-9]*) warn "$1 reads '$v' (not a number) — recorded as null"; printf -v "$2" null ;;
+  esac
+}
+
+read_num() { # read_num <field-name> <var-name> <command...> — capture, then sanitize
+  local field="$1" var="$2"; shift 2
+  local raw
+  raw="$("$@" 2>/dev/null || true)"
+  printf -v "$var" '%s' "$raw"
+  sanitize_num "$field" "$var"
+}
+
+# The ERR trap is the net under the sanitizers: if some future read path is
+# still unguarded and a value reaches jq unparsed, the record dies NAMING the
+# command that rejected it instead of exiting 2 in silence (the first failure
+# mode above). `:` at the end keeps the trap from altering the exit status.
+trap 'echo "ERROR: record.sh failed at line $LINENO — nothing was written." >&2; echo "       command: $BASH_COMMAND" >&2; :' ERR
+
 # ---------------------------------------------------------------------------
 # 0a. The sampler — the run's own thermal window
 # ---------------------------------------------------------------------------
@@ -439,13 +483,14 @@ fi
 # the in-container half is then null and says so.
 nproc_in="null"; mem_max_in="null"; swap_max_in="null"; nofile_in="null"; binary_sha="null"
 if [ "$running" = "true" ]; then
-  nproc_in="$(docker exec "$NAME" nproc 2>/dev/null || echo null)"
-  mem_max_in="$(docker exec "$NAME" cat /sys/fs/cgroup/memory.max 2>/dev/null || echo null)"
-  swap_max_in="$(docker exec "$NAME" cat /sys/fs/cgroup/memory.swap.max 2>/dev/null || echo null)"
+  read_num nproc nproc_in docker exec "$NAME" nproc
+  read_num memory.max mem_max_in docker exec "$NAME" cat /sys/fs/cgroup/memory.max
+  read_num memory.swap.max swap_max_in docker exec "$NAME" cat /sys/fs/cgroup/memory.swap.max
   # pid 1's limit, not a fresh exec shell's: this is the limit that decides
   # whether a high-VU hold can keep its connections (run.sh verify reads the
-  # same file for the same reason).
-  nofile_in="$(docker exec "$NAME" awk '/Max open files/{print $4}' /proc/1/limits 2>/dev/null || echo null)"
+  # same file for the same reason). The awk prints NOTHING when its pattern
+  # misses while still exiting 0 — the empty-read shape read_num exists for.
+  read_num nofile nofile_in docker exec "$NAME" awk '/Max open files/{print $4}' /proc/1/limits
   # Which binary ran, not just which name it had: a commit can be rebuilt, and
   # the binary is what actually served the load.
   binary_sha="$(docker exec "$NAME" sha256sum "$container_path" 2>/dev/null | awk '{print $1}' || true)"
@@ -485,6 +530,8 @@ esac
 if container_log="$(docker logs "$NAME" 2>&1)"; then
   busy_lines="$(printf '%s' "$container_log" | grep -ciE 'busy|database is locked|checkpoint' || true)"
   error_lines="$(printf '%s' "$container_log" | grep -cE 'level=error|ERROR' || true)"
+  sanitize_num busy_lines busy_lines
+  sanitize_num error_lines error_lines
 else
   busy_lines="null"
   error_lines="null"
@@ -539,8 +586,8 @@ case "$EXIT_CODE" in
   *)   exit_class="unclassified";     verdict="unknown" ;;
 esac
 
-warnings=()
-warn() { warnings+=("$1"); }
+# `warnings`/`warn` live with the other helpers at the top: the read sites that
+# first need them (the in-container facts, section 2) run before this point.
 
 git_dirty="false"
 git_sha=""; git_sha_short=""
