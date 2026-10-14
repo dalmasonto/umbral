@@ -1923,6 +1923,30 @@ Phase 3 has no task list, by design: its shape depends on what the baselines say
 
 **One change per cycle. Two or three holds per cycle. A report per cycle. Then the next.**
 
+### Cycle 0 — the migration-validation fixes (correctness, before the Postgres baseline)
+
+Not a performance cycle. It is here because the rig found it, it blocks a baseline, and the failure mode is worse than any performance bug this plan will chase.
+
+**What happened.** Task 9b could not boot the app on Postgres. `harness/backend/migrations/bench/0001_auto.json` carries two `unique_together` groups naming columns that do not exist — `["follower_id","following_id"]` and `["user_id","post_id"]`, where the real columns are `follower`/`following` and `user`/`post`. Postgres rejects it (`42703`, `ComputeIndexAttrs`) and the process exits before binding.
+
+**SQLite does not reject it, and that is the bug.** The engine renders `CREATE UNIQUE INDEX "uniq_follow_follower_id_following_id" ON "follow" ("follower_id","following_id")`, and SQLite's long-standing misfeature reads an unknown *double-quoted* token as a **string literal**. So it builds a unique index over the constants `'follower_id'` and `'following_id'` — a constant key, meaning at most one row can ever satisfy it — and reports success.
+
+**So Postgres is the backend reporting the bug, not the one causing it.** A fresh SQLite build of this app produces a **corrupt index and no error**; every existing SQLite database in the repo is clean only because it was built before the file was damaged. That damage is the `umbra→umbral` rename rewriting snapshots — the failure the project's own notes already warn the engine cannot self-heal.
+
+**The two fixes.**
+
+1. **Validate index columns before rendering.** `Operation::CreateIndex`/`AddIndex` (`crates/umbral-core/src/migrate.rs:974-1005`) must check that every named column exists on the target table and **fail loudly** if one does not. This is the fix that matters most: it converts a silent corruption into an error on the backend that currently lies.
+2. **Validate `unique_together` against real fields at generation time**, so `makemigrations` refuses a group naming a nonexistent column rather than writing it into a file that will later apply differently on different backends.
+
+Both are logged as **`gaps7 #176`**; this cycle closes that entry rather than adding a third instance of it.
+
+**Constraints.**
+
+- **Fix, don't patch.** A validation error is the fix. A `#[allow]`, a warning-only path, or an SQLite-specific special case is not — the whole finding is that one backend silently disagrees with the other, so a fix that preserves that disagreement has fixed nothing.
+- **The error must name the table, the column, and the migration file** — the person hitting it will be holding a generated file they did not write by hand, and "unknown column" alone sends them looking at the wrong layer.
+- **Tests must demonstrate both halves:** a valid `unique_together` still applies on SQLite and Postgres, and an invalid one **errors on both**. A test that only shows the error leaves the success path unproven.
+- **This changes `crates/`, so it changes the measured binary.** The SQLite baseline's binary sha will no longer match. That is expected and is the first Phase 3 result: after the fix, **re-run the SQLite baseline and confirm the number is unchanged.** A validation fix that touches no hot path *should* be a null result, and a null result here is what proves the fix was genuinely behaviour-preserving. Report it as a result, not as a formality.
+
 ### The cycle
 
 1. **Pick one change**, and only one. If a change needs a second change to be correct, that is one change.
