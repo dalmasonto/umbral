@@ -77,6 +77,35 @@ pub struct Post {
     pub tags: umbral::orm::M2M<Tag>,
 }
 
+// Composition pair: an annotated model that ALSO has a prefetchable FK.
+// `select_related` + `fetch_annotated` on the same query used to return
+// unhydrated rows in silence (2026-10-15) — this pair pins the contract.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "anc_author")]
+pub struct Author {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "anc_entry")]
+pub struct Entry {
+    pub id: i64,
+    pub title: String,
+    pub author: ForeignKey<Author>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbral(reverse_fk = "entry")]
+    pub ping_set: ReverseSet<Ping>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "anc_ping")]
+pub struct Ping {
+    pub id: i64,
+    pub entry: ForeignKey<Entry>,
+}
+
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
 async fn boot() {
@@ -93,6 +122,9 @@ async fn boot() {
             .model::<Review>()
             .model::<Note>()
             .model::<Tag>()
+            .model::<Author>()
+            .model::<Entry>()
+            .model::<Ping>()
             .build()
             .expect("App::build");
         umbral_core::migrate::create_tables_for_tests()
@@ -156,6 +188,26 @@ async fn boot() {
                 .execute(&pool)
                 .await
                 .expect("seed junction");
+        }
+        // The composition pair: one author, one entry titled "composed",
+        // two pings against it.
+        sqlx::query("INSERT INTO anc_author (name) VALUES (?)")
+            .bind("ada")
+            .execute(&pool)
+            .await
+            .expect("seed author");
+        sqlx::query("INSERT INTO anc_entry (title, author) VALUES (?, ?)")
+            .bind("composed")
+            .bind(1_i64)
+            .execute(&pool)
+            .await
+            .expect("seed entry");
+        for _ in 0..2 {
+            sqlx::query("INSERT INTO anc_ping (entry) VALUES (?)")
+                .bind(1_i64)
+                .execute(&pool)
+                .await
+                .expect("seed ping");
         }
     })
     .await;
@@ -381,4 +433,40 @@ async fn annotate_count_over_m2m_counts_junction_rows() {
         .collect();
     assert_eq!(by_title["alpha"], 2, "two junction rows attach to alpha");
     assert_eq!(by_title["beta"], 0, "beta has no tags");
+}
+
+/// `select_related` composes with `fetch_annotated`: the annotated rows are
+/// parent rows and must hydrate like any other fetch.
+///
+/// Before 2026-10-15 the terminal decoded `T` and read annotations but never
+/// ran the prefetch — so a caller combining the two got silently UNHYDRATED
+/// rows (empty related slots, raw FK ids in payloads). Same
+/// silent-composition class as the prefetch decode bug fixed the day before;
+/// found while building the statement-combining cycle (one annotated query
+/// where the app used to run three).
+#[tokio::test]
+async fn select_related_composes_with_fetch_annotated() {
+    boot().await;
+    let rows = Entry::objects()
+        .select_related("author")
+        .annotate_count("ping_set")
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated with select_related");
+
+    let (entry, anns) = rows
+        .into_iter()
+        .find(|(e, _)| e.title == "composed")
+        .expect("the seeded entry must come back");
+
+    let author = entry.author.__resolved().expect(
+        "select_related must hydrate alongside annotations — a None here means the \
+         annotated terminal dropped the prefetch again",
+    );
+    assert_eq!(author.name, "ada");
+    assert_eq!(
+        anns["ping_set_count"].as_i64(),
+        Some(2),
+        "and the annotation must arrive on the same row"
+    );
 }
