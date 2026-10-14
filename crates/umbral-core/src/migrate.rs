@@ -4267,6 +4267,40 @@ fn rename_intent() -> RenameIntent {
     }
 }
 
+/// Filter composite index groups down to those every column of which exists in
+/// `columns` — i.e. the groups an operation carrying them can actually build.
+///
+/// `diff_columns` shapes an `AlterColumn`'s / rebuild-`DropColumn`'s
+/// `new_columns` like the **previous** table on purpose (a same-diff ADDED
+/// column must be absent, or the SQLite recreation dance's `INSERT … SELECT`
+/// names a column the old table does not have; see the comment there), but the
+/// groups it carries come from the CURRENT model. A group naming a to-be-added
+/// column can't be built by that operation — the `AddColumn` that introduces
+/// the column runs *after* it — so carrying it would emit an index over a
+/// column that does not exist yet. On SQLite that is accepted as an index over
+/// a string CONSTANT (the table briefly enforces a narrower uniqueness), and it
+/// takes the deterministic index NAME, so the follow-on `AddIndex` from
+/// [`diff_indexes`] becomes a no-op via `IF NOT EXISTS`; on a backend that
+/// resolves index columns strictly it is a hard error.
+///
+/// The filtered-out groups are not lost: any group naming a column that is new
+/// in `current` cannot have existed in `previous` — `diff` validates both
+/// snapshots' groups against their own fields before any of this runs — so
+/// [`diff_indexes`], called right after `diff_columns` on every path that emits
+/// these ops, sees it as an added group and emits the standalone `AddIndex`
+/// that builds it on both backends.
+fn groups_buildable_on(groups: &[Vec<String>], columns: &[Column]) -> Vec<Vec<String>> {
+    groups
+        .iter()
+        .filter(|group| {
+            group
+                .iter()
+                .all(|name| columns.iter().any(|col| &col.name == name))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Emit `AddIndex` / `DropIndex` ops for changes to a model's TABLE-level
 /// `unique_together` and `indexes` between two snapshots.
 ///
@@ -5335,9 +5369,13 @@ fn diff_columns(
             new_columns: new_columns.clone(),
             prev_columns: Some(prev_columns_snapshot.clone()),
             // audit_2 core-migrate #10: carry the table-level constraints so the
-            // SQLite recreation dance re-creates them instead of dropping them.
-            unique_together: current.unique_together.clone(),
-            indexes: current.indexes.clone(),
+            // SQLite recreation dance re-creates them instead of dropping them —
+            // filtered to the ones this op can actually build (see
+            // `groups_buildable_on`; a same-diff ADDED column is absent from
+            // `new_columns`, and its group is created by the follow-on
+            // `AddIndex` instead).
+            unique_together: groups_buildable_on(&current.unique_together, &new_columns),
+            indexes: groups_buildable_on(&current.indexes, &new_columns),
         });
     }
 
@@ -5440,11 +5478,11 @@ fn diff_columns(
                 .filter(|c| c.name != col.name && !removed.contains(&c.name))
                 .cloned()
                 .collect();
-            (
-                Some(survivors),
-                current.unique_together.clone(),
-                current.indexes.clone(),
-            )
+            // Same filter as the `AlterColumn` carry above: the rebuild carries
+            // only the groups it can build from `survivors`.
+            let unique_together = groups_buildable_on(&current.unique_together, &survivors);
+            let indexes = groups_buildable_on(&current.indexes, &survivors);
+            (Some(survivors), unique_together, indexes)
         } else {
             (None, Vec::new(), Vec::new())
         };
