@@ -1884,6 +1884,39 @@ git commit -m "feat(bench): saturation test for the RPS ceiling"
 
 ---
 
+## Task 9c — The session-store comparison
+
+Every authenticated request performs a session read. `SessionsPlugin::default()` uses `DbStore`, so on SQLite that read is an **in-process file lookup**, and on Postgres it is a **network round trip to the database**. This task measures what changes when that read is served from a fast key-value store instead.
+
+**The framework already supports it; nothing needs building.** `umbral-sessions` ships `RedisStore` (`plugins/umbral-sessions/src/redis_store.rs:149`, `impl SessionStore for RedisStore`) with `RedisStore::connect(url)` and `RedisStore::from_env()`, gated behind the crate's non-default `redis` feature and covered by its own tests. `umbral-cache` separately ships a `RedisBackend`. So this is a **configuration and measurement** task, not a feature task — which also means it cannot hide a framework change behind a benchmark result.
+
+Harness-side work is three small things: enable `umbral-sessions/redis` in `harness/backend/Cargo.toml`, run a Redis container, and mount `SessionsPlugin::default().store(RedisStore::connect(url).await?)` in `bench-prod` behind an env switch so both arms come from one binary.
+
+### Why this runs *after* the Postgres baseline
+
+**The prediction is that Redis helps Postgres and hurts SQLite, and that prediction is only testable with both.** On SQLite the current store is an in-process lookup — roughly a function call plus a file read on a page-cached file. A Redis GET is a **localhost TCP round trip**, which is plausibly *more* expensive than the thing it replaces. On Postgres the current store is a network query against a general-purpose RDBMS, and a purpose-built KV store is exactly where a session read should live.
+
+If that holds, the result is not "caching is faster" but "**caching moves the cost, and which way depends on where your database already is**" — a more useful finding, and one nobody can get from a single-backend measurement. **State the prediction before measuring**, so the result can falsify it rather than being rationalised after the fact.
+
+### The three arms
+
+| Arm | Store | What it costs per authenticated request |
+|---|---|---|
+| A | `DbStore` (current default) | one indexed lookup in the app's own database |
+| B | `RedisStore` | one localhost TCP round trip to Redis |
+| C | **`CookieStore`** | **nothing** — the session lives in the signed cookie |
+
+**Arm C is included deliberately and is the most interesting one.** It needs no container at all: the record travels in the cookie and no store is consulted. It is also what the *previous* harness chose, and the spec's locked decision #3 overrode it in favour of `DbStore` as "the honest default a developer gets". Measuring it settles a question that decision left open — **how much is that default costing?** — without reopening the decision, because the default stays `DbStore` either way.
+
+Arm C has a real cost of its own that the number will not show: the session payload travels on every request, the cookie is capped around 4 KB, and revocation stops working. The report must say so rather than presenting C as a free win.
+
+### Rules
+
+- **Same workload, VUs, dataset, envelope and cooldowns as Task 9**, one variable changed. The Redis container is pinned to the app's cpuset like Postgres is, for the same reason.
+- **Report per backend.** Four numbers, not one: SQLite × {DbStore, RedisStore}, Postgres × {DbStore, RedisStore} — plus arm C on at least the backend where it matters most. Never average across backends.
+- **The sensitivity rule from Task 9 applies.** These arms differ in per-request cost, and at this operating point throughput is pinned by think time, so **p95/p99 is the primary signal** and RPS is a regression guard.
+- **Revert to the default afterwards.** The operator's instruction is to measure caching and then continue without it; the point is a finding, not a new default. `bench-prod` keeps `DbStore` unless a later cycle argues otherwise on evidence.
+
 ## Phase 3 — The optimization loop
 
 Phase 3 has no task list, by design: its shape depends on what the baselines say, and a spec written before the measurements would be a guess with a plan attached. What it *does* have is a fixed rhythm, set by the operator, so that a long series of changes stays legible as a series rather than becoming an undifferentiated churn.
