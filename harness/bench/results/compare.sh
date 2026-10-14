@@ -175,8 +175,20 @@ ctx "checks" "a $(check_summary "$A")   b $(check_summary "$B")"
 
 jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].host.hostname == $b[0].host.hostname' >/dev/null || ctx "host" "$(jq -r '.host.hostname' "$A") vs $(jq -r '.host.hostname' "$B") — different machines"
 
-ta="$(jq -r '.thermal.peak_c // "n/a"' "$A")"; tb="$(jq -r '.thermal.peak_c // "n/a"' "$B")"
-ctx "thermal" "post-run peak ${ta} C -> ${tb} C (not the in-run peak; a rising peak is heat-soak, not code)"
+# The provenance is part of the number: an in-run peak and a post-run sample
+# are different kinds of fact, and a stale sample is not a fact about its run at
+# all. Printing one blanket caption over both would be the same mistake the
+# store exists to prevent, one level up.
+thermal_summary() {
+  jq -r '
+    if .thermal == null then "n/a"
+    elif .thermal.source == "sampler" then "IN-RUN peak \(.thermal.peak_c) C (\(.thermal.window_s)s window)"
+    elif .thermal.stale == true then "post-run sample \(.thermal.peak_c) C, +\(.thermal.sampled_after_run_s)s (STALE: not evidence about the run)"
+    elif (.thermal.sampled_after_run_s // null) == null then "peak \(.thermal.peak_c) C (provenance not recorded)"
+    else "post-run sample \(.thermal.peak_c) C, +\(.thermal.sampled_after_run_s)s (cooling curve, below the in-run peak)"
+    end' "$1"
+}
+ctx "thermal" "a $(thermal_summary "$A")   b $(thermal_summary "$B")"
 
 if jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].host.hostname == $b[0].host.hostname' >/dev/null; then
   ctx "throttling" "$(jq -n --slurpfile a "$A" --slurpfile b "$B" -r '

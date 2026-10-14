@@ -2,19 +2,27 @@
 
 Every number this rig quotes is written by `record.sh` and argued from `compare.sh`. The point of the pair is that a performance number is not a number: it is a number *plus* every fact needed to decide whether it means anything — which commit and which binary, what container envelope, what dataset scale, what workload mix, whether the machine was throttling, whether the container was OOM-killed, whether the run's checks actually held. A number without those facts is an anecdote, and six weeks later nobody can tell the difference.
 
-`record.sh` writes one JSON per run into this directory (`results/<git-sha>-<utc>.json`); `compare.sh` diffs two of them and refuses to when they describe different things. The JSONs are gitignored (`harness/.gitignore`: `bench/results/*.json`) — the store is local and machine-specific, and a result is only meaningful beside the envelope facts it carries. The scripts and this file are committed.
+`record.sh` writes one JSON per run into this directory (`results/<git-sha>-<utc>.json`); `compare.sh` diffs two of them and refuses to when they describe different things. The JSONs and the sampler's trace are gitignored (`harness/.gitignore`: `bench/results/*.json`, and this directory's own `.gitignore` for `.thermal-sample.tsv` / `.record.*`) — the store is local and machine-specific, and a result is only meaningful beside the envelope facts it carries. The scripts and this file are committed.
 
 ## Recording a run
 
 ```bash
+# the sampler: the run's own thermal + load window (started before k6, stopped after it)
+harness/bench/results/record.sh --thermal-sample &
+SAMPLER=$!
+
 # the run (scored hold; the summary export is what record.sh reads)
 taskset -c 8,9,10,11 ~/.local/bin/k6 run \
   -e BASE=http://127.0.0.1:8114 -e VUS=2500 -e USERS=20000 -e POSTS=200000 \
   --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js; echo "exit=$?"
 
+kill "$SAMPLER"; wait "$SAMPLER"
+
 # the record
 harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
 ```
+
+**Run the sampler around every hold you intend to quote.** It samples the thermal zones and the load average once a second on the host — never in the container, whose cores are the measurement; its cost is a handful of sysfs reads a second, and it is not CPU-pinned (start it under `taskset -c` with a spare core if you want it off the k6 cores entirely) — and the recorder reads the run's peak out of its file (`results/.thermal-sample.tsv` by default; `BENCH_THERMAL_SAMPLE` overrides it, and the sampler truncates it at start, so one file is one run's window). Without it there is no in-run temperature at all, and the recorder says so in the result: see [Reading the facts that cannot be measured in a single file](#reading-the-facts-that-cannot-be-measured-in-a-single-file). A sampler file that does not cover the run it is being recorded against is rejected, not used.
 
 Arguments are the summary path, the VU count, the dataset scale, and the **k6 exit code**. The exit code is not a boolean; `record.sh` classifies it:
 
@@ -48,11 +56,11 @@ Flat where comparison happens, grouped where reading happens. Schema `1`:
 | `exit`, `verdict` | the classified exit code and the verdict |
 | `k6_setup_data` | the summary's `setup_data`, verbatim — the run's own record of its parameters |
 | `envelope` | container, image and image id, the binary's path/args/`sha256`, cpuset, CPU cap, memory and swap limits, the in-container `nproc` / `memory.max` / `memory.swap.max` / `nofile`, `container_running`, `oom_killed`, `verified` |
-| `thermal` | peak thermal-zone temperature, per zone, from a ~10 s sample taken as soon as the recorder starts (see the caveat below) |
-| `throttling` | the CPUs' thermal-throttle counters, cumulative since boot, restricted to the container's cpuset CPUs |
-| `wal` | the served database's `db_bytes`/`wal_bytes`/`shm_bytes`, the container log's busy/error line counts, and `checkpoint_stall_suspected` with its rule in `basis` |
+| `thermal` | peak thermal-zone temperature per zone, with its provenance: `source` (`sampler` = the run's own window, `post-run-window` = the fallback), `stale`, the window's `from`/`to`/`window_s`, `interval_s`, `samples` (ticks, not per-zone readings) and `sampled_after_run_s` (null for `sampler`) |
+| `throttling` | the CPUs' thermal-throttle counters, cumulative since boot, restricted to the container's cpuset CPUs. An unreadable counter is `null`, and one unknown component makes the aggregate `null` — never `0`, which would read as "no throttling" |
+| `wal` | the served database's `db_bytes`/`wal_bytes`/`shm_bytes`, the container log's busy/error line counts (`null` if `docker logs` could not be read — not `0`), and `checkpoint_stall_suspected` with its rule in `basis` |
 | `session` | the session backend, cookie, TTL and max age the measured binary runs with |
-| `host` | hostname, kernel, CPU, the load average at record time, and the recorder shell's `ulimit -n` |
+| `host` | hostname, kernel, CPU, `loadavg_before_run` (the sampler's first reading, null when no sampler ran), the load average at record time, and the recorder shell's `ulimit -n` |
 | `warnings` | everything above that a reader should not miss |
 
 ## Comparing two results
@@ -84,10 +92,11 @@ It **fails closed**: a file it cannot parse, or one missing `schema`, is an erro
 
 ## Reading the facts that cannot be measured in a single file
 
-Three facts are recorded in forms that only mean something when read correctly:
+Four facts are recorded in forms that only mean something when read correctly:
 
-- **Thermal.** Nothing on this host keeps thermal history, and the recorder runs *after* k6 exits. `thermal.peak_c` is therefore the top of the **cooling curve**, sampled for ~10 s immediately after the run — close to, but not equal to, the in-run peak. It is there to be compared *between* results: run 3 of a heat-soaked baseline reading hotter than run 1 is heat-soak, not a code change.
-- **Throttling.** The per-CPU throttle counters (`/sys/devices/system/cpu/cpu*/thermal_throttle/`) are cumulative since boot, so one file cannot say whether throttling happened during its own run. `compare.sh` prints the delta between two results: a non-zero delta means the CPU throttled *between the two records*, which includes the second run. The counters are restricted to the container's cpuset CPUs, which also carry other processes' work.
-- **Load average and `ulimit -n`.** Both are recorded at *record* time, not at the run's start — a post-run invocation cannot see the past. The load average is contaminated by the run that just ended; `nofile` is the limit of the shell that invoked `record.sh`, which in the documented flow is the same shell that ran k6.
+- **Thermal.** `thermal.source` says where the peak came from. `sampler` is the run's own window — the only reading that may be used to explain a run-to-run difference as heat-soak. `post-run-window` is the fallback for a hold that was recorded without the sampler: it is the machine's temperature at record time, and the further from the run it was taken, the less it has to do with it. Past `THERMAL_FRESH_S` (60 s) the recorder marks it `stale: true` and the note says in as many words that it is not evidence about the run; a stale sample is not a weaker version of the run's peak, it is a measurement of something else. Degenerate case worth knowing: at a lag of tens of minutes the window can even go *up* — the recorder has 10 s of whatever the machine is doing, and the machine is doing something else.
+- **Load average.** `host.loadavg_before_run` is the sampler's first reading, taken a moment before k6 is launched — the closest available reading of the host at the run's start. Without a sampler, only `loadavg_at_record` exists, and the note distinguishes the two cases: within ~2 minutes it is *run-tainted* (the 1/5-minute averages still carry the run's tail, but they are not a pre-run baseline), beyond that it describes a machine that has long since moved on, and the recorder warns.
+- **Throttling.** The per-CPU throttle counters (`/sys/devices/system/cpu/cpu*/thermal_throttle/`) are cumulative since boot, so one file cannot say whether throttling happened during its own run. `compare.sh` prints the delta between two results: a non-zero delta means the CPU throttled *between the two records*, which includes the second run. The counters are restricted to the container's cpuset CPUs, which also carry other processes' work. An unreadable counter is `null`; `compare.sh` renders a null counter as `n/a` rather than a delta of zero.
+- **`ulimit -n` and the database files.** `nofile` is the limit of the shell that invoked `record.sh`, which in the documented flow is the same shell that ran k6. The `wal` sizes are read from the bind mount at record time; an absent `-wal` (SQLite removes it when the last connection closes cleanly) is recorded as `null`, not as an error and not as `0`.
 
 The `wal` block is the same idea for storage: `bench-prod` deliberately carries no per-request instrumentation, so a SQLite checkpoint stall cannot be observed directly. `checkpoint_stall_suspected` is inferred by the explicit rule in `.wal.basis` (`max_ms > 200` **and** `max_ms > 10 × p99_ms`) from the raw numbers stored beside it; the log counters are cumulative since container start and are meant to be diffed across results.
