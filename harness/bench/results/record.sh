@@ -17,9 +17,15 @@
 #   harness/bench/results/record.sh --thermal-sample &
 #   SAMPLER=$!
 #   taskset -c 8,9,10,11 ~/.local/bin/k6 run -e VUS=2500 --summary-export=/tmp/hold-1.json \
-#     harness/bench/k6/hold.js; echo "exit=$?"
+#     harness/bench/k6/hold.js
+#   K6=$?                        # k6's OWN status, captured immediately
 #   kill "$SAMPLER"; wait "$SAMPLER"
-#   harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
+#   harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 "$K6"
+#
+# `$K6` and never a bare `$?` on that last line: by then `$?` is `wait`'s, and
+# the sampler exits 0, so a run that exited 99 or 107 would be filed as
+# `exit.class: "passed"` — the field `compare.sh` keys on. The long version of
+# why is in results/README.md.
 #
 # `--thermal-sample` writes a ~1 Hz thermal/load trace until it is stopped. The
 # normal invocation then reads the run's PEAK out of that file when the file
