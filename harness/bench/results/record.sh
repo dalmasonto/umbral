@@ -597,17 +597,18 @@ fi
 [ "$mix" = "null" ] && [ "$exit_class" != "preflight_abort" ] && warn "no mix in the summary: mix is null and compare.sh will refuse to diff this result."
 
 # The pool size is the second fact compare.sh refuses a missing value for, and
-# for the same reason as the mix: a run whose pool was smaller than its VU
-# count carried FEWER distinct client identities than it claimed to model
-# (every VU is pinned to one pooled session; a smaller pool makes
-# `(VU-1) % pool.length` hand one identity to several concurrent VUs). The
-# session working set and last-seen write set inside the measured database time
-# are then smaller than the load implies — a different workload, not a slower
-# one — and before this field existed the rig did exactly that unnoticed.
+# for the same reason as the mix: the pool is the set of identities the load
+# could draw on, so a run whose pool was smaller than its VU count activated
+# FEWER distinct client identities than it claimed to model (every VU is pinned
+# to one pooled session; a smaller pool makes `(VU-1) % pool.length` hand one
+# identity to several concurrent VUs). The session working set and last-seen
+# write set inside the measured database time are then smaller than the load
+# implies — a different workload, not a slower one — and before this field
+# existed the rig did exactly that unnoticed.
 if [ "$pool_size" = "null" ]; then
   [ "$exit_class" != "preflight_abort" ] && warn "no session pool size in the summary (setup_data.pool_size): this result predates the pool-size recording, or its k6 script does not report one. A run recorded before this rig recorded pool sizes shared each pooled session between several VUs (a 200-entry pool at 2,500 VUs is 12-13 VUs per identity), so compare.sh REFUSES to diff this result against anything — a missing fact must never read as 'matches'. Re-run against the current scripts to obtain a comparable result."
 elif [ "$vus_max" != "null" ] && jq -en --argjson p "$pool_size" --argjson v "$vus_max" '$p < $v' >/dev/null; then
-  warn "the session pool ($pool_size sessions) is smaller than the run's VU count (vus_max=$vus_max): concurrent VUs shared session identities, so the load used fewer distinct clients than its VU count claims and the session working set is smaller than the real traffic implies. Real users do not share sessions; this result is not comparable to one from a 1:1 pool."
+  warn "the session pool ($pool_size sessions) is smaller than the run's VU count (vus_max=$vus_max): concurrent VUs shared session identities, so the load used fewer distinct clients than its VU count claims and the session working set is smaller than the real traffic implies. Real users do not share sessions; this result is not comparable to one from a full-size pool."
 fi
 
 # Envelope facts that run.sh asserts but that this script only warns about: the
@@ -831,8 +832,9 @@ wal_json="$(jq -n \
      basis: $basis
    }')"
 
-# `pool_size` is the LOAD's distinct client identities (the k6 pool), recorded
-# here beside the server-side session facts so one block answers "what did the
+# `pool_size` is the k6 session pool's entry count (one session per dataset
+# user, shuffled; a run activates the first `vus` entries), recorded here
+# beside the server-side session facts so one block answers "what did the
 # session layer look like on both sides". `null` on a pre-change result is a
 # fact too: it is the marker compare.sh refuses a diff across.
 session_json="$(jq -n \

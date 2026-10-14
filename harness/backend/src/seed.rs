@@ -434,13 +434,16 @@ async fn ensure_comments(
 // ---------------------------------------------------------------------------
 
 /// Default size of the pooled-login set: the first
-/// `bench_user_1..=bench_user_N` dataset users.
+/// `bench_user_1..=bench_user_N` dataset users — by default the WHOLE dataset
+/// (20,000), so every user is eligible to be active.
 ///
-/// Sized for the PEAK VU count, not the current run. Every VU is pinned to one
-/// pooled session — one VU is one client, `k6/lib.js` refuses to start a run
-/// whose pool is smaller than its VU count — and the ramp targets 2,500 →
-/// 5,000 → 10,000, so one pool serves the whole ramp.
-pub const DEFAULT_SESSION_POOL_SIZE: i64 = 10_000;
+/// The pool is not sized to one run's VU count. `bench/seed-sessions.sh`
+/// shuffles the minted sessions, so the VUs active in a run (2,500 → 7,500 of
+/// the ramp) are a random sample of the user base rather than always the same
+/// low ids — the session working set and last-seen write set spread across
+/// the dataset the way real traffic spreads them. One VU is still one client:
+/// `k6/lib.js` refuses to start a run whose pool is smaller than its VU count.
+pub const DEFAULT_SESSION_POOL_SIZE: i64 = 20_000;
 
 /// The password every pooled user is seeded with. The pool builder script
 /// reads the same default from `BENCH_PASSWORD`, so the two cannot drift when
@@ -454,15 +457,23 @@ pub struct SessionPoolConfig {
 }
 
 impl SessionPoolConfig {
-    pub fn from_env() -> Self {
-        SessionPoolConfig {
-            size: std::env::var("BENCH_SESSION_POOL_SIZE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_SESSION_POOL_SIZE),
+    pub fn from_env() -> Result<Self, String> {
+        let size = match std::env::var("BENCH_SESSION_POOL_SIZE") {
+            Ok(v) => v.parse::<i64>().map_err(|_| {
+                format!(
+                    "[bench-pool] BENCH_SESSION_POOL_SIZE='{v}' is not an integer, so the pool \
+                     size is not knowable. Refusing to fall back to the {DEFAULT_SESSION_POOL_SIZE} \
+                     default: a typo'd size must not silently select a different pool, because the \
+                     pool size is recorded in every result and compared across runs."
+                )
+            })?,
+            Err(_) => DEFAULT_SESSION_POOL_SIZE,
+        };
+        Ok(SessionPoolConfig {
+            size,
             password: std::env::var("BENCH_PASSWORD")
                 .unwrap_or_else(|_| DEFAULT_POOL_PASSWORD.to_string()),
-        }
+        })
     }
 }
 
@@ -475,8 +486,8 @@ impl SessionPoolConfig {
 /// created and nothing is deleted: `auth_user` keeps its row count and its id
 /// range, and the only column this writes is `password_hash` (the update
 /// `set_password` issues patches exactly that one field). That is what makes a
-/// pool 1:1 with the VUs affordable: a second set of N users would grow the
-/// dataset by N rows for every pool size the ramp asks for.
+/// pool covering the whole dataset affordable: a second set of N users would
+/// grow the dataset by N rows for every pool size the ramp asks for.
 ///
 /// Idempotent by construction, and **non-destructive**: a row still carrying
 /// the dataset's [`PLACEHOLDER_HASH`] gets the password set; a row that already

@@ -1,7 +1,8 @@
 // The workload, in one place.
 //
-// warmup.js, hold.js and saturation.js all call `doIteration`, so a change to
-// the mix cannot make two scripts disagree about what "the workload" is. The
+// warmup.js and hold.js call `doIteration` (the future saturation.js will too),
+// so a change to the mix cannot make two scripts disagree about what "the
+// workload" is. The
 // mix this file implements is recorded (and ratified) in `bench/workload.md`,
 // and the values a run actually used travel inside its own `--summary-export`
 // (`setup_data`) so a result can never be read apart from the workload that
@@ -104,11 +105,11 @@ function go(method, path, session, body) {
 
 /// One iteration of the workload. `sessions` is the SharedArray from the pool.
 export function doIteration(sessions) {
-  // The pool is 1:1 with the VU count — `preflight` refuses to start a run
-  // where it is not — so one VU is one client and this modulo is the identity.
-  // It stays as the bounds guarantee for the other direction (a pool larger
-  // than the VU count still indexes a distinct entry per VU, and never past
-  // the end).
+  // One VU = one client: `preflight` refuses any run whose pool is smaller
+  // than its VU count, so this modulo maps every VU to a DISTINCT pool entry
+  // (and never past the end). The pool holds one session per dataset user and
+  // was shuffled at mint, so the entries the first `vus` VUs land on are a
+  // random sample of the user base, not the lowest ids.
   const session = sessions[(__VU - 1) % sessions.length];
 
   // 1. The feed. Every iteration reads it; it is the one unconditional request
@@ -218,14 +219,16 @@ export function runParams() {
   };
 }
 
-/// The rig's pool scale: the session pool is 1:1 with the PEAK VU count the
-/// ramp targets (2,500 → 5,000 → 10,000, spec §2a), because every VU is
-/// pinned to one pooled session — one VU is one client — and one pool serves
-/// the whole ramp rather than being rebuilt per VU count. Only used for the
-/// size suggested in preflight's failure messages; the authoritative numbers
-/// are `BENCH_SESSION_POOL_SIZE` (the seeder) and the script's argument,
-/// which `bench/seed-sessions.sh` refuses to let disagree.
-const POOL_TARGET = 10000;
+/// The rig's pool scale: one session for every dataset user (20,000), minted
+/// once per database and shuffled by `bench/seed-sessions.sh` so the VUs
+/// active in a run are a random sample of the user base rather than always
+/// the same first N ids. Every VU is pinned to one pooled session — one VU is
+/// one client — and one pool serves every VU count up to the dataset size.
+/// Only used for the size suggested in preflight's failure messages; the
+/// authoritative numbers are `BENCH_SESSION_POOL_SIZE` (the seeder) and the
+/// script's argument, and `bench/seed-sessions.sh` refuses to run when it can
+/// see those two disagree — pass it the same number you gave the seeder.
+const POOL_TARGET = 20000;
 
 /// The two commands that rebuild the pool against the database the silo is
 /// serving, as the lines of a preflight error message. `n` is the pool size
@@ -245,7 +248,9 @@ function rebuildCommands(n) {
 /// letting a hold fail six minutes later for a reason that is not the server's.
 ///
 /// `vus` is the run's VU count — the number of concurrent clients — and the
-/// pool must hold at least that many DISTINCT sessions. Three ways this rig
+/// pool must hold at least that many DISTINCT sessions. The pool is minted
+/// with one session per dataset user (20,000) and shuffled, so the entries a
+/// run's VUs land on are a random sample of the user base. Three ways this rig
 /// lies to itself, all structural rather than hypothetical:
 ///
 ///   * THE POOL vs THE VU COUNT. Every VU is pinned to one pooled session (one
@@ -289,9 +294,9 @@ export function preflight(sessions, vus) {
   if (sessions.length === 0) {
     throw new Error(
       "preflight: session_pool.json is empty, so every VU would send no session " +
-        "and every write would 401. Build the pool 1:1 with peak VUs against the " +
-        "database the silo is SERVING (the seeder and the script must be the same " +
-        "size):\n" +
+        "and every write would 401. Build the pool — one session per dataset user, " +
+        "shuffled — against the database the silo is SERVING (the seeder and the " +
+        "script must be the same size):\n" +
         rebuildCommands(Math.max(vus, POOL_TARGET)),
     );
   }
@@ -304,17 +309,19 @@ export function preflight(sessions, vus) {
         `${Math.ceil(vus / sessions.length)} concurrent VUs, and real users do not ` +
         "share sessions — it shrinks the session working set and the last-seen write " +
         "set inside the measured database time, and biases the very number this rig " +
-        "produces. The pool is sized to PEAK VUs (one session per client), not to one " +
-        "run. Rebuild it against the database the silo is SERVING, seeder and script " +
-        "at the same size:\n" +
+        "produces. The pool holds one session per dataset user (20,000), not one " +
+        "per run. Rebuild it against the database the silo is SERVING, seeder and " +
+        "script at the same size:\n" +
         rebuildCommands(Math.max(vus, POOL_TARGET)),
     );
   }
 
   // The pool's entry count travels in `setup_data` like the mix and the scale:
-  // it is a fact about the LOAD (how many distinct client identities it used),
-  // the recorder writes it into every result's `session` block, and
-  // `results/compare.sh` refuses to diff two results whose pool sizes differ.
+  // it is a fact about the SETUP the load drew from — which pool, shuffled
+  // how far back — the recorder writes it into every result's `session`
+  // block, and `results/compare.sh` refuses to diff two results whose pool
+  // sizes differ. The number of distinct identities a run actually carried is
+  // its own `vus` field; the pool is never smaller than that.
   const pool = { pool_size: sessions.length };
   if (Number(__ENV.PREFLIGHT ?? 1) === 0) {
     return { ...params, ...pool, preflight: "skipped (PREFLIGHT=0)" };

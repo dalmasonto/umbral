@@ -5,8 +5,8 @@
 #
 # The refusals are the point. Two numbers measured against different datasets,
 # inside different container envelopes, on different DATABASE BACKENDS, under a
-# different workload mix, or carrying a different number of distinct session
-# identities (the k6 pool, `session.pool_size`) are not two samples of the same
+# different workload mix, or drawing from a different k6 session pool
+# (`session.pool_size`) are not two samples of the same
 # thing — subtracting them produces a delta that does not mean what it looks
 # like, and a delta that does not mean anything is worse than no comparison. So
 # this script refuses (exit 3) rather than comparing, and it also refuses when
@@ -128,8 +128,8 @@ for f in "$A" "$B"; do
        before the pool fix do not carry it, so whether their VUs shared session
        identities is not knowable from the file — and an unknown pool is an unknown
        workload. Re-record it with the current record.sh to make it comparable."
-  jq -e '.session.pool_size | type == "number"' "$f" >/dev/null 2>&1 \
-    || die 3 "'$f': session.pool_size is not a number."
+  jq -e '.session.pool_size | type == "number" and . > 0 and . == floor' "$f" >/dev/null 2>&1 \
+    || die 3 "'$f': session.pool_size is not a positive whole number."
   jq -e '.envelope.cpuset? != null' "$f" >/dev/null 2>&1 \
     || die 3 "'$f' records no envelope.cpuset: an unverified envelope is not comparable."
   # The backend is the outermost fact of all — it decides whether the database
@@ -170,13 +170,13 @@ if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].mix == $b[0].mix' >/dev
        comparison across a mix change is not a comparison."
 fi
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].session.pool_size == $b[0].session.pool_size' >/dev/null; then
-  die 3 "the session pool size differs: $A carried $(jq -r '.session.pool_size' "$A") distinct
-       session identities, $B carried $(jq -r '.session.pool_size' "$B"). The pool is how many
-       clients the load actually modelled (one pooled session per VU); a smaller
-       pool means concurrent VUs shared sessions, so the session working set
-       inside the measured database time was smaller. That is a different
-       workload, not a slower one. Size the pool to the peak VU count and
-       re-measure both sides."
+  die 3 "the session pool size differs: $A drew from a $(jq -r '.session.pool_size' "$A")-entry
+       pool, $B from a $(jq -r '.session.pool_size' "$B")-entry pool. The pool is the set of
+       identities the load could draw on (one session per dataset user, shuffled), so a
+       different pool is a different session working set inside the measured database
+       time — and one smaller than the VU count would mean concurrent VUs shared
+       sessions. That is a different workload, not a slower one. Rebuild the pool at
+       one size and re-measure both sides."
 fi
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].rps > 0' >/dev/null; then
   die 3 "$A has rps = $(jq -r '.rps' "$A"): a relative change from zero is undefined."

@@ -37,12 +37,13 @@ use umbral_bench::{prod_handlers, seed};
 /// default `needs_ready() == true` is right — plugins are up and the pool is
 /// open before the first `set_password`.
 ///
-/// Size comes from `BENCH_SESSION_POOL_SIZE` (default 10000 — the peak VU
-/// count, one pooled session per VU) and the password from `BENCH_PASSWORD`
-/// (default `bench-password-123`), the same two variables the pool builder
-/// script reads, so the two halves cannot drift on the default. The users are
-/// the dataset's own rows: nothing is created, nothing is deleted, and a
-/// missing `bench_user_i` (a pool sized past the dataset) is a hard error.
+/// Size comes from `BENCH_SESSION_POOL_SIZE` (default 20000 — the whole
+/// dataset, so every user is eligible to be active) and the password from
+/// `BENCH_PASSWORD` (default `bench-password-123`), the same two variables the
+/// pool builder script reads, so the two halves cannot drift on the default.
+/// The users are the dataset's own rows: nothing is created, nothing is
+/// deleted, and a missing `bench_user_i` (a pool sized past the dataset) is a
+/// hard error.
 struct SeedSessions;
 
 #[umbral::async_trait]
@@ -53,8 +54,8 @@ impl PluginCommand for SeedSessions {
             .long_about(
                 "Give the first `bench_user_1..bench_user_N` dataset users the password in \
                  BENCH_PASSWORD, so `bench/seed-sessions.sh` can log them in and build \
-                 `bench/session_pool.json` — one pooled session per VU.\n\n\
-                 N comes from BENCH_SESSION_POOL_SIZE (default 10000). Idempotent and \
+                 `bench/session_pool.json` — one pooled session per dataset user.\n\n\
+                 N comes from BENCH_SESSION_POOL_SIZE (default 20000 — the whole dataset). Idempotent and \
                  non-destructive: the users are the dataset's own rows, so nothing is \
                  created and nothing is deleted — `auth_user` keeps its row count and id \
                  range, and only `password_hash` changes. A user whose stored hash already \
@@ -65,7 +66,7 @@ impl PluginCommand for SeedSessions {
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), CliError> {
-        seed::seed_session_pool(&seed::SessionPoolConfig::from_env()).await
+        seed::seed_session_pool(&seed::SessionPoolConfig::from_env()?).await
     }
 }
 

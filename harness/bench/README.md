@@ -11,7 +11,7 @@
 
 **Neither is comparable to the other, and no artifact may diff them.** SQLite's database is a function call inside the measured process; Postgres's is a TCP round trip to a sibling container. Each is a fixed point only for itself — the only meaningful comparisons are sqlite-vs-sqlite and postgres-vs-postgres across code changes. `compare.sh` enforces this by refusing (exit 3) when two results name different backends.
 
-**Both baselines also ran the pre-fix 200-entry session pool, and that is a second incomparability.** The rig pins each VU to one pooled session, so the pool size is how many distinct client identities the load carried — and at 2,500 VUs a 200-entry pool made `(VU-1) % 200` hand each identity to 12–13 concurrent VUs. Real users do not share sessions; the sharing shrinks the session working set and the last-seen write set inside the measured database time, i.e. it biases the session-read layer (83% of all measured server time) in the direction that flatters `DbStore`. Both result files predate the `session.pool_size` field, and `compare.sh` now **refuses any result that does not carry it** — so the two baselines can no longer be diffed at all, not even against each other, until they are re-recorded against the 1:1 pool. The defect, the layer it lands in, and this fix are documented in `results/reports/2026-10-14-phase2-closeout-and-layer-ledger.md`; the pool is now sized 1:1 with the ramp's peak (10,000) and every result records it.
+**Both baselines also ran the pre-fix 200-entry session pool, and that is a second incomparability.** The rig pins each VU to one pooled session, so the pool size is how many distinct client identities the load carried — and at 2,500 VUs a 200-entry pool made `(VU-1) % 200` hand each identity to 12–13 concurrent VUs. Real users do not share sessions; the sharing shrinks the session working set and the last-seen write set inside the measured database time, i.e. it biases the session-read layer (83% of all measured server time) in the direction that flatters `DbStore`. Both result files predate the `session.pool_size` field, and `compare.sh` now **refuses any result that does not carry it** — so the two baselines can no longer be diffed at all, not even against each other, until they are re-recorded against the current pool. The defect, the layer it lands in, and this fix are documented in `results/reports/2026-10-14-phase2-closeout-and-layer-ledger.md`; the pool now holds one session per dataset user (20,000, shuffled) and every result records its size.
 
 Both baselines carry a caveat that governs what their numbers can be used for: 2,500 VUs pins throughput to the workload's think time, so **RPS is a regression guard and p95/p99 is the signal** — and on Postgres the p99 spread (27–54%) is wide enough that `compare.sh`'s own 20% p99 limit sits inside the noise. Read `results/README.md`'s section on the tail's spread before quoting a p99 change from either.
 
@@ -110,13 +110,14 @@ cp /tmp/umbral-bench-seed/bench-seed.db harness/bench/data/bench-run.db
 harness/bench/run.sh build && harness/bench/run.sh serve
 harness/bench/run.sh verify                 # the envelope MUST match before anything runs
 
-# Both halves of the credential chain, against the SERVED database. The pool is
-# 1:1 with the ramp's PEAK VU count (2,500 → 5,000 → 10,000), so it is built
-# once, for 10,000; the seeder's BENCH_SESSION_POOL_SIZE and the script's
-# argument must be the same number. Idempotent — `auth_user` keeps its row
-# count; the seeder gives the dataset's own first 10,000 rows the password.
+# Both halves of the credential chain, against the SERVED database. The pool
+# holds one session per DATASET USER (20,000) and `seed-sessions.sh` shuffles
+# it, so the VUs a run activates are a random sample of the user base rather
+# than always the lowest ids; the seeder's BENCH_SESSION_POOL_SIZE and the
+# script's argument must be the same number. Idempotent — `auth_user` keeps its
+# row count; the seeder gives the dataset's own rows the password.
 docker exec umbral-bench /app/umbral-bench-prod seed-sessions
-harness/bench/seed-sessions.sh 8114 10000
+harness/bench/seed-sessions.sh 8114 20000
 
 # Warm up, then the three scored holds (see the header of results/record.sh):
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \

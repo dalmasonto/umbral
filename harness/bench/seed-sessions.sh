@@ -5,11 +5,17 @@
 # k6 reads this via SharedArray, exactly as the twelve-dollar challenge reads
 # its seed/tokens.json — real sessions, built once, verified per request.
 #
-# The pool is 1:1 with PEAK VUs: k6 pins every VU to one pooled session
-# (one VU = one client, bench/workload.md), so a pool smaller than the VU count
-# would hand several concurrent VUs the same identity — identity sharing that
-# `k6/lib.js` now refuses to start a run with. The ramp targets 2,500 → 5,000 →
-# 10,000, and the pool is sized once, for the peak.
+# The pool holds one session per DATASET USER (20,000), SHUFFLED: k6 pins every
+# VU to one pooled session (one VU = one client, bench/workload.md), so a pool
+# smaller than the VU count would hand several concurrent VUs the same identity
+# — identity sharing that `k6/lib.js` refuses to start a run with — and the
+# positional mapping (VU i -> sessions[i-1]) means the pool's ORDER decides
+# which identities a run activates. Minting in login order would make the
+# active set the lowest user ids, the same contiguous slice in every run;
+# shuffling makes it a random sample of the user base, so the session working
+# set and last-seen write set spread across the dataset the way real traffic
+# spreads them. The shuffled file IS the assignment record, and it is kept
+# fixed across runs so Phase 3 comparisons stay comparable.
 #
 # The pool USERS are the dataset's own rows (`bench_user_1..bench_user_N`), not
 # a parallel namespace: the seeder inside the container gives the first N
@@ -23,7 +29,7 @@
 #
 #   harness/bench/run.sh serve
 #   docker exec umbral-bench /app/umbral-bench-prod seed-sessions
-#   harness/bench/seed-sessions.sh 8114 10000
+#   harness/bench/seed-sessions.sh 8114 20000
 #
 # The seeder's size and this script's N are two halves of ONE pool and must be
 # the same number: the seeder gives users 1..BENCH_SESSION_POOL_SIZE their
@@ -52,7 +58,7 @@
 set -euo pipefail
 
 PORT="${1:-8114}"
-N="${2:-${BENCH_SESSION_POOL_SIZE:-10000}}"
+N="${2:-${BENCH_SESSION_POOL_SIZE:-20000}}"
 BASE="http://127.0.0.1:${PORT}"
 OUT="$(cd "$(dirname "$0")" && pwd)/session_pool.json"
 PASSWORD="${BENCH_PASSWORD:-bench-password-123}"
@@ -89,7 +95,8 @@ echo "logging in $N pooled users (bench_user_1..bench_user_$N) against $BASE ...
 tmp=$(mktemp)
 hdr=$(mktemp)
 body=$(mktemp)
-trap 'rm -f "$tmp" "$hdr" "$body"' EXIT
+shuffled="$(mktemp)"
+trap 'rm -f "$tmp" "$hdr" "$body" "$shuffled"' EXIT
 
 printf '[' > "$tmp"
 ok=0
@@ -141,5 +148,21 @@ if [ "$ok" -eq 0 ]; then
   exit 1
 fi
 
-mv "$tmp" "$OUT"
-echo "wrote $ok sessions to $OUT"
+# The pool's ORDER is the assignment: k6 maps VU i to sessions[i-1], so the
+# first `vus` entries are the identities a run activates. Login order would
+# make that the lowest user ids in every run — a contiguous slice of the user
+# table, always the same one; shuffling makes it a random sample of the user
+# base. `shuf` works on lines, so the array is flattened and rebuilt; every
+# element is a session UUID (no newlines, no whitespace, no JSON metacharacters).
+jq -r '.[]' "$tmp" | shuf | jq -R -s -c 'split("\n") | map(select(length > 0))' > "$shuffled"
+
+# Prove the shuffle wrote what the counters say: a shuffle that silently
+# dropped or duplicated entries would be a pool nothing downstream could catch.
+shuffled_n="$(jq 'length' "$shuffled")"
+if [ "$shuffled_n" -ne "$ok" ]; then
+  echo "ERROR: the shuffle produced $shuffled_n entries for $ok sessions — no pool written." >&2
+  exit 1
+fi
+
+mv "$shuffled" "$OUT"
+echo "wrote $ok sessions to $OUT (shuffled)"

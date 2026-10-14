@@ -30,7 +30,7 @@ Every iteration reads the feed, thinks, performs one deeper read, and then may r
 | 3 | `POST /api/posts/{id}/like` | engagement write: an existence check then an insert, on a fresh id | `LIKE_P` |
 | 4 | `POST /api/posts` | a write: insert a post row | `POST_P` |
 
-Every request carries a pooled session cookie, reads included: the session middleware performs its real store lookup on each one, and that lookup is part of the honest cost of a `DbStore` deployment (spec locked decision #3). VUs are pinned to one pooled session each — **the pool is 1:1 with the run's VU count, sized once for the whole ramp's peak (10,000)** — so a VU's traffic is one coherent user rather than a new identity per call. The preflight enforces it: with a pool smaller than the VU count, `(VU-1) % pool.length` would hand each identity to several concurrent VUs, shrinking the session working set inside the measured database time and flattering exactly the number a session-store comparison exists to produce. That check runs without a request and is **not** skippable by `PREFLIGHT=0`, and a failing pool aborts the run (k6 exit 107) before a single iteration. The pool's size travels in every result (`session.pool_size`), and `compare.sh` refuses to diff two results across a change in it.
+Every request carries a pooled session cookie, reads included: the session middleware performs its real store lookup on each one, and that lookup is part of the honest cost of a `DbStore` deployment (spec locked decision #3). VUs are pinned to one pooled session each — **the pool holds one session per dataset user (20,000), shuffled at mint, so the identities a run activates are a random sample of the user base rather than always the lowest ids** — so a VU's traffic is one coherent user rather than a new identity per call. The preflight enforces the part that matters for measurement: with a pool smaller than the VU count, `(VU-1) % pool.length` would hand each identity to several concurrent VUs, shrinking the session working set inside the measured database time and flattering exactly the number a session-store comparison exists to produce. That check runs without a request and is **not** skippable by `PREFLIGHT=0`, and a failing pool aborts the run (k6 exit 107) before a single iteration. The pool's size travels in every result (`session.pool_size`), and `compare.sh` refuses to diff two results across a change in it.
 
 With the ratified values that is **2.17 requests per iteration — 2.0 reads and 0.17 writes, a 92.2% / 7.8% read/write split by request count** — spread over one 3–8 s think (mean 5.5 s), so ≈0.39 requests per second per VU before latency is counted: ≈986 RPS at 2,500 VUs in the steady state, less in practice because server latency adds to the think time.
 
@@ -55,13 +55,14 @@ So a hold is a **6.5-minute wall clock**, and the 5-minute hold is a real 5 minu
 harness/bench/run.sh serve
 harness/bench/run.sh verify          # envelope first: a number from an unverified cpuset is not a number
 
-# The session pool — once per dataset, against the SERVED database, sized 1:1
-# with the ramp's peak VU count. The seeder and the script must be the same
-# size (the script refuses when they visibly disagree); both halves are
-# idempotent, and `auth_user` keeps its row count throughout — the seeder gives
-# the dataset's own first N rows the pool password, it creates no users.
+# The session pool — once per dataset, against the SERVED database, one session
+# per dataset user (20,000), shuffled so each run's active set is a random
+# sample of the user base. The seeder and the script must be the same size (the
+# script refuses when they visibly disagree); both halves are idempotent, and
+# `auth_user` keeps its row count throughout — the seeder gives the dataset's
+# own rows the pool password, it creates no users.
 docker exec umbral-bench /app/umbral-bench-prod seed-sessions
-harness/bench/seed-sessions.sh 8114 10000
+harness/bench/seed-sessions.sh 8114 20000
 
 # Warm-up (unscored, 1000 VUs, ~3.5 min).
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
@@ -89,7 +90,7 @@ harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 "$K6"
 Three rules decide whether a run is worth anything, and the preflight checks all of them before the first request:
 
 - **`USERS`/`POSTS` must match the served dataset, not the mix.** They are the id ranges, and they default to the challenge's quoted scale (50,000 users / 500,000 posts). A development-scale database (spec §2a's 20,000 users / 200,000 posts) needs `-e USERS=20000 -e POSTS=200000`. A run whose ranges disagree with the rows is not a slower run, it is a different, cheaper run.
-- **The session pool must hold at least one session per VU.** The pool is 1:1 with the VU count, sized for the ramp's peak (10,000 today); a pool smaller than the run's VU count shares identities between concurrent VUs, which is what the preflight refuses (107) before any load. `PREFLIGHT=0` does **not** skip this one — it is knowable from two numbers, no request needed.
+- **The session pool must hold at least one session per VU.** The pool holds one session per dataset user (20,000 today), shuffled; a pool smaller than the run's VU count shares identities between concurrent VUs, which is what the preflight refuses (107) before any load. `PREFLIGHT=0` does **not** skip this one — it is knowable from two numbers, no request needed.
 - **The session pool must have been built against the served database.** Sessions are rows in the database the server opened, so cookies minted against another file authenticate nothing — the failure reads as the server rejecting writes under load, which it is not. With writes in the mix the preflight calls `GET /api/auth/me` with the first pooled session and refuses to run on a 401.
 
 The preflight spends a handful of requests (`/api/ping`, `/api/auth/me`, the tops of the two id ranges) and its failure messages name the fix. `-e PREFLIGHT=0` skips the server probes — the ids are then on their own honour. It costs a few requests inside a run that will issue hundreds of thousands of them, and it never touches the thresholds.
