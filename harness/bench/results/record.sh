@@ -632,7 +632,11 @@ case "$exit_class" in
         warn "the sampler's window opened at ${sampler_first_max} C: the machine was already hot when sampling began, so peak_c may include heat this run did not generate (a previous run, or other work). Start the sampler after the cooldown and stop it when k6 exits."
       fi
     elif [ "$sampler_exists" = "true" ]; then
-      warn "the sampler file $SAMPLE_FILE does not cover this run (its last sample is $(iso "${SAMPLER_LAST:-0}"), the run ended $(iso "$SUMMARY_MTIME")): falling back to the post-run window. Was the sampler started for THIS run?"
+      if [ -n "${SAMPLER_LAST:-}" ]; then
+        warn "the sampler file $SAMPLE_FILE does not cover this run (its last sample is $(iso "$SAMPLER_LAST"), the run ended $(iso "$SUMMARY_MTIME")): falling back to the post-run window. Was the sampler started for THIS run?"
+      else
+        warn "the sampler file $SAMPLE_FILE has no samples: it cannot cover this run. Was the sampler started for THIS run, and left running until k6 exited?"
+      fi
     else
       warn "no sampler at $SAMPLE_FILE: the thermal and load readings are post-hoc substitutes (temperature sampled ${SAMPLED_AFTER_RUN_S}s after the run ended, load average read at record time), not in-run readings. Start 'record.sh --thermal-sample' before the run and stop it after."
     fi
