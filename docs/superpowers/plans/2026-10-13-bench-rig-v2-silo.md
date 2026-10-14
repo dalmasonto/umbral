@@ -1739,6 +1739,58 @@ git commit -m "docs(bench): first trustworthy baseline"
 
 ---
 
+## Task 9b — The Postgres baseline
+
+Task 9 measures SQLite, where the database is in-process and costs the app nothing but its own CPU. This task measures the other half: the same application, the same workload, the same VUs, against **Postgres in a sibling container**. It exists because "how fast is umbral" has two answers and only one of them was going to be measured, and because the ORM's Postgres path is the one the framework actually recommends.
+
+The spec parked this deliberately — "a Postgres variant needs a second container, which changes the resource envelope, so it is a separate exercise" — and this is that exercise. It must not be run as a variant of Task 9; it is its own baseline with its own envelope.
+
+### The envelope, and why it is what it is
+
+| | SQLite run (Task 9) | Postgres run (this task) |
+|---|---|---|
+| App cpuset | `0,2,4,6` | `0,2,4,6` |
+| App memory | 4 GB, no swap | 4 GB, no swap |
+| Database | in-process, same envelope | sibling container, `--cpuset-cpus=0,2,4,6 --memory=1g` |
+| Database port | — | **55432** (host-native Postgres owns 5432/5434) |
+| Database storage | SQLite file on NVMe | Postgres data dir on NVMe |
+| Postgres settings | — | **stock defaults, deliberately** |
+
+**The database shares the app's cpuset rather than getting its own.** Giving Postgres the other sixteen threads would hand it more CPU than the application under measurement — which flatters every database-bound path and makes the result uninterpretable. Pinning both to `0,2,4,6` reproduces the reference deployment shape (one box, everything on it) and keeps the total CPU available to the pair equal to the SQLite run's.
+
+**Stock Postgres settings, not tuned ones.** `shared_buffers` and friends stay at their defaults because tuning them would mean measuring this rig's configuration expertise rather than the framework. If Postgres's defaults turn out to be the binding constraint, that is a *finding* — a real one, and one a framework claiming Postgres-first should care about. Tuning is a separate change, made deliberately and recorded as such.
+
+### Two rules that keep this honest
+
+1. **The two baselines are not directly comparable, and every report must say so.** SQLite's database is a function call in the measured process; Postgres's is a network round trip to another container. Neither is "better" — they are different architectures, and the only meaningful comparisons are SQLite-vs-SQLite and Postgres-vs-Postgres across code changes. `compare.sh` refuses to diff across `dataset_scale`, cpuset and mix; **the backend must be added to that refusal list** before this task runs, or the first careless diff will produce a number that looks like a 10× regression.
+2. **Both backends get the same workload, dataset shape, VUs and cooldowns.** The mix lives in one place precisely so this cannot drift.
+
+### Steps
+
+- [ ] **Step 1: Add the backend to `compare.sh`'s refusal set**
+
+`record.sh` already captures the backend (Task 9's results carry it). `compare.sh` must refuse when two results name different backends, exactly as it refuses differing `dataset_scale`. Without this, the Postgres result's first comparison against the SQLite one reads as a catastrophic regression.
+
+- [ ] **Step 2: Bring up Postgres, pinned and documented**
+
+A sibling container on host networking, `-c port=55432`, `--cpuset-cpus=0,2,4,6 --memory=1g`, data on a bind mount under `harness/bench/data/pg`. Verify before trusting it: the port is not the host's 5432/5434, the cpuset matches, and the app can reach it.
+
+- [ ] **Step 3: Seed it, at the same scale as Task 9**
+
+Same row counts — 20,000 users / 200,000 posts — so `USERS` and `POSTS` stay identical across both baselines. Migrate via the app against the Postgres URL rather than hand-writing schema; the migrations are the framework's contract and this is a chance to exercise them on the backend they were designed for.
+
+- [ ] **Step 4: Rebuild the session pool against the Postgres database**
+
+Same rule as Task 9 and for the same reason: sessions live in the served database, so a pool built against SQLite names rows Postgres does not have and every authenticated request returns `401`.
+
+- [ ] **Step 5: The same three holds, the same cooldowns, the same sampler bracket**
+
+`SCALE` and `POSTS` identical to Task 9, `VUS=2500`, three 5-minute holds, 2–3 minute cooldowns, `taskset -c 12` sampler around each. Warm up first; wait for `[bench-seed] done:`.
+
+- [ ] **Step 6: Report**
+
+The three runs' individual RPS / p95 / p99 / error rate / exit class / thermal peak, the spread, whether the thresholds held, and both envelopes. State plainly that this is not comparable to Task 9's number.
+
 ## Phase 2 — The boundaries
 
 ### Task 10: `search.sh` — the limit search
@@ -1817,6 +1869,34 @@ git commit -m "feat(bench): saturation test for the RPS ceiling"
 ```
 
 ---
+
+## Phase 3 — The optimization loop
+
+Phase 3 has no task list, by design: its shape depends on what the baselines say, and a spec written before the measurements would be a guess with a plan attached. What it *does* have is a fixed rhythm, set by the operator, so that a long series of changes stays legible as a series rather than becoming an undifferentiated churn.
+
+**One change per cycle. Two or three holds per cycle. A report per cycle. Then the next.**
+
+### The cycle
+
+1. **Pick one change**, and only one. If a change needs a second change to be correct, that is one change.
+2. **Justify it from a measurement, not a guess.** Every cycle opens with *where the time is going* — the instrumented binary's layer ledger for the same workload — and names the bucket the change targets. A change nobody can point at a bucket for does not get a cycle.
+3. **Run two or three holds** at the established VU count, on the backend the change targets, with the cooldowns and the sampler bracket. Two if they agree closely, three if they do not.
+4. **Compare, and report the spread.** `compare.sh` against the previous result for the same backend. A change that improves RPS by less than the run-to-run spread has not been demonstrated to do anything — say that rather than claiming the win.
+5. **Report to TaskFlow** — a markdown file attached to a message, the message describing what it is.
+6. **Next cycle.**
+
+### The rules that keep the series honest
+
+- **No `unsafe`.** Spec locked decision #8. An optimization requiring it is out of scope, not deferred, and the ceiling it imposes is reported with its measured cost.
+- **No removing work the application has to do.** Security headers, CSRF, sessions, real authentication, real durable writes — all stay in the measured path. A change that only wins by deleting them is the exact failure this rig exists to catch.
+- **One variable at a time.** If two things change in a cycle, a move in the number cannot be attributed and the cycle is wasted.
+- **A null result is a result.** "This change did nothing measurable" is worth reporting, and worth more than a re-run until it looks like something.
+- **The baselines are the fixed points.** SQLite numbers compare to SQLite, Postgres to Postgres. Never across backends.
+- **Each cycle leaves the branch working.** `cargo fmt`, `clippy --all-targets`, `build`, `test` across the workspace before each commit — the verification Task 9's `db.rs` commit deliberately deferred because a build would have landed on the cores being measured, and which must not be deferred again.
+
+### Where to look first
+
+Not yet known — but the standing hypothesis, recorded in `project_bench_harness` from the v1 rig's one large run, is that **the database bucket dominates by orders of magnitude while middleware is nearly free** (14.9 s average against 0.2 ms). That run was untrustworthy for every other reason, but the *shape* is the first thing the diagnostic should confirm or kill, because it points the entire effort at how the ORM awaits SQLite rather than at the middleware chain that looks like the overhead.
 
 ## Self-Review
 
