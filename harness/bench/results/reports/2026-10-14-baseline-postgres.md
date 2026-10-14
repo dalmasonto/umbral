@@ -8,7 +8,11 @@
 
 **≈863 RPS at 2,500 VUs, p95 3.0–3.5 ms, p99 4.07–6.74 ms, zero failed requests, every run `exit.class: passed`** — against **Postgres 18.6 in a sibling container**, on the ORM path the framework recommends.
 
-**The baseline proper is the second series** (runs B1–B3): **≈863 RPS, p95 3.0–3.3 ms, p99 4.07–5.29 ms, RPS spread 0.29%, p99 spread 30.1%.**
+**The baseline proper is the second series** (runs B1–B3): **≈863 RPS, p95 3.0–3.3 ms, p99 4.07–5.29 ms, RPS spread 0.29%, p99 spread 27.1%.** (Spreads are range ÷ mean — see "Spread" in `../README.md`; the figures in the first draft of this report divided by the minimum, which inflated the p99 spread by about a third. Every table below carries min/max/mean/range so either can be recomputed.)
+
+**Why B1–B3 and not the other three, stated with the number so the two are read together:** set B is **the three lowest-p99 runs of the six**, chosen after seeing all six. That is a biased selection, and the failure mode is asymmetric — every future on-protocol run will tend to look about 1.2 ms *worse* on p99 than this baseline for reasons that have nothing to do with the code. **The six-run population is the honest reference** (RPS spread 0.41%, p99 spread 53.7%), and a Phase 3 result should be read against that as much as against the three-run figure.
+
+**Set B is also not reproducible by following the plan.** Its cooldown protocol was ≥180 s and then a hold until the package sensor read ≤ 50 °C, capped at **900 s** — not the plan's 2–3 minutes. Anyone reproducing "the Postgres baseline" from the plan's recipe will produce a set A, and should expect set A's spread.
 
 ### Series A — the plan's 2–3 minute cooldowns
 
@@ -18,7 +22,13 @@
 | A2 | 08:06:40 | 865.282 | 1.348 ms | 3.536 ms | **6.744 ms** | 32.802 ms | 0 | passed | 95 °C | 65 °C | 2.18 |
 | A3 | 08:16:20 | 861.741 | 1.276 ms | 3.221 ms | 5.539 ms | 27.026 ms | 0 | passed | 96 °C | 63 °C | 4.12 |
 
-RPS spread **0.41%** · p95 **11.3%** · p99 **64.2%** · max 216.8%.
+| Metric | min | max | mean | range | **spread** (range ÷ mean) |
+|---|---|---|---|---|---|
+| RPS | 861.741 | 865.282 | 863.027 | 3.541 | **0.41%** |
+| p50 | 1.276 | 1.607 | 1.410 | 0.331 | 23.5% |
+| p95 | 3.178 | 3.536 | 3.312 | 0.358 | 10.8% |
+| p99 | 4.108 | 6.744 | 5.464 | 2.636 | **48.2%** |
+| max | 10.355 | 32.802 | 23.394 | 22.447 | 96.0% |
 
 ### Series B — cooldown gated on the package sensor
 
@@ -28,9 +38,25 @@ RPS spread **0.41%** · p95 **11.3%** · p99 **64.2%** · max 216.8%.
 | B2 | 09:06:14 | 865.223 | 1.346 ms | 3.035 ms | **4.065 ms** | 13.094 ms | 0 | passed | 96 °C | 65 °C | 1.88 |
 | B3 | 09:27:54 | 863.251 | 1.310 ms | 3.050 ms | 4.210 ms | 15.212 ms | 0 | passed | 96 °C | 65 °C | 0.67 |
 
-RPS spread **0.29%** · p95 **8.3%** · p99 **30.1%** · max 96.0%.
+| Metric | min | max | mean | range | **spread** (range ÷ mean) |
+|---|---|---|---|---|---|
+| RPS | 862.722 | 865.223 | 863.732 | 2.501 | **0.29%** |
+| p50 | 1.310 | 1.346 | 1.327 | 0.036 | 2.7% |
+| p95 | 3.035 | 3.287 | 3.124 | 0.252 | 8.1% |
+| p99 | 4.065 | 5.290 | 4.522 | 1.225 | **27.1%** |
+| max | 13.094 | 25.660 | 17.989 | 12.566 | 69.9% |
 
-**All six runs together:** RPS spread **0.41%** (861.741–865.282), p95 16.5%, p99 65.9%. All six: 0 failed requests, 0 failed checks, all thresholds cleared, `git_dirty: false`.
+**All six runs together** (the population, not the nomination):
+
+| Metric | min | max | mean | range | **spread** (range ÷ mean) |
+|---|---|---|---|---|---|
+| RPS | 861.741 | 865.282 | 863.380 | 3.541 | **0.41%** |
+| p50 | 1.276 | 1.607 | 1.369 | 0.331 | 24.2% |
+| p95 | 3.035 | 3.536 | 3.218 | 0.501 | 15.6% |
+| p99 | 4.065 | 6.744 | 4.993 | 2.679 | **53.7%** |
+| max | 10.355 | 32.802 | 20.692 | 22.447 | 108.5% |
+
+All six: 0 failed requests, 0 failed checks, all thresholds cleared, `git_dirty: false`.
 
 ---
 
@@ -51,28 +77,32 @@ RPS spread **0.29%** · p95 **8.3%** · p99 **30.1%** · max 96.0%.
 Two consequences:
 
 1. **RPS here is a one-sided regression detector.** A server that stopped keeping up would show up as failed requests and timeouts at almost unchanged RPS; a server that got faster would show up as almost unchanged RPS too. **p95/p99 is the metric a Phase 3 win has to move.**
-2. **The design predicted this exercise's shape — "p95 rising while RPS holds means the hop costs latency without costing throughput" — and that is exactly what Postgres produced.** RPS moved by 0.41% across six runs in which p99 varied by 66%.
+2. **The design predicted this exercise's shape — "p95 rising while RPS holds means the hop costs latency without costing throughput" — and that is what Postgres produced.** RPS moved by 0.41% across six runs in which p99 varied by a factor of 1.66 (4.065 → 6.744 ms).
 
 ---
 
-## ⚠️ The p99 spread is 30–64%, and the host is why
+## ⚠️ The p99 spread is 27–54%, and the tail's cause is not established
 
-This is the most important caveat in this report, and it is a **rig** finding, not a framework one.
+This is the most important caveat in this report, and it is a **rig** finding, not a framework one. It has a solid half and an open half, and they should not be read as one claim.
 
-**Series A could not serve as a comparator.** A p99 spread of 64% is larger than any effect a Phase 3 change could plausibly produce, so the second series was run with the cooldown gated on the package sensor, intended to make every window open cool.
+**Established: heat does not explain this spread, and a longer cooldown is not the fix.**
 
-**The gate did not work.** On all three occasions the cooldown ran to its 900-second cap and the machine still read 55–56 °C; it never reached the 50 °C target. Every series-B window opened at **63–65 °C — the same as series A's hot runs.** The host carries a continuous ambient load (a Chrome renderer at ~100% of a core, a video-capture service, `gnome-shell`; load average 1.9–4.9 throughout, with the measured cores 0/2/4/6 sitting at 15–22% busy *at idle*). There is no cool state to return to while that load is running.
+**Series A could not serve as a comparator.** Its p99 spread is 48.2% (range ÷ mean), larger than any effect a Phase 3 change could plausibly produce, so the second series was run with the cooldown gated on the package sensor, intended to make every window open cool.
 
-**That falsifies temperature as the explanation.** Ranked by window-opening temperature, two runs opening at the same 65 °C differ by 66% in p99 (4.065 vs 6.744). Temperature does not order the runs. **The host's load average at the window's start does**:
+**The gate did not work.** On all three occasions the cooldown ran to its 900-second cap and the machine still read 55–56 °C; it never reached the 50 °C target. Every series-B window opened at **63–65 °C — the same as series A's hot runs.** The host carries a continuous ambient load (a Chrome renderer at ~100% of a core, a video-capture service, `gnome-shell`; the measured cores 0/2/4/6 sitting at 15–22% busy *at idle*). There is no cool state to return to while that load is running.
+
+**That falsifies temperature as the explanation.** Ranked by window-opening temperature, two runs opening at the same 65 °C differ by 66% in p99 (4.065 vs 6.744). Temperature does not order the runs — so the failed gate is a *result*, and the plan's 2–3 minute cooldown should not be lengthened in response to it.
+
+**Open: what does explain the spread.** Across the six runs, `host.loadavg_before_run` is the best *in-sample* predictor of p99:
 
 ```
 load1 < 2  ->  p99 = 4.108, 4.210, 4.065
 load1 >= 2 ->  p99 = 6.744, 5.290, 5.539
 ```
 
-The separation is perfect, and it holds *across* the temperature split — one low-load run opened at 65 °C, one high-load run at 63 °C. p99 tracks `max` at r = +0.97, i.e. it is one or two 25–33 ms outliers per run, not a broad shift: a scheduling hiccup on a shared core, which moves the tail and does not move think-pinned RPS.
+The separation is perfect and holds *across* the temperature split (one low-load run opened at 65 °C, one high-load run at 63 °C). **It is nonetheless a hypothesis, not a finding, and the report states it that way deliberately.** Six points; a threshold chosen after seeing the six; a partition worth roughly p ≈ 0.05 under a random null; and a linear relation of only r = +0.58, which the split already shows. The counter-datapoint is in this rig's own records: **the SQLite baseline ran at load 2.06 / 2.25 / 2.68 — all at or above the threshold — with a 1.43% p99 spread and no wide tail.** Load average counts runnable processes and does not say what they are doing. Requote this at a larger n before treating it as causal; until then it is a fact to record, not a mechanism to rely on.
 
-**What this means for the next cycle.** On this host, as it stands, a Phase 3 change will not be demonstrable on p99 unless its effect exceeds ~30%. RPS is stable enough (0.3–0.4%) to serve as the regression guard, but it is structurally incapable of registering an improvement at this VU count. Quieting the host — or accepting the noise floor and quoting it — is a prerequisite for Phase 3, not a detail of it.
+**What is safe to act on.** The measured p99 spread is **27.1%** on the tighter series and 53.7% across all six. **`compare.sh`'s p99 limit is 20%, which sits inside that noise**: diffing B1 → B2 — two runs of identical code — returns `p99_ms 5.29 -> 4.065  -23.16%  IMPROVEMENT (limit 20%)` with **exit 1**. The comparator's verdict lines are a change *detector*; on this host they will call noise a win the moment Phase 3 starts, and its "IMPROVEMENT" is not evidence. RPS is stable enough (0.3–0.4%) to serve as the regression guard, but is structurally incapable of registering an improvement at this VU count. Quieting the host — or accepting the noise floor and quoting it beside every result — is a prerequisite for Phase 3, not a detail of it.
 
 **The thermal-throttle counters, for the record.** Cumulative since boot, read after each run, so each delta spans the preceding cooldown plus the following run. The pre-measurement baseline was core 44,290 / package 190,336 — **identical** to A1's post-run reading, so the 3.5-minute warm-up and A1's whole run moved them by zero.
 
@@ -105,7 +135,9 @@ The counters are recorded, not used as an explanation: B3 moved more than B2 and
 
 **Schema provenance.** The served database (`umbral_bench_pg`) was created empty and built entirely by the app's own migrations — `auth/0001_auto`, `bench/0001_auto`, `bench/0002_auto`, `sessions/0001_create_session`. No schema was hand-written for Postgres.
 
-**One binary note.** The app binary and image were rebuilt for this task, so the measured binary's sha256 differs from the SQLite baseline's. The rebuild was required: the image's `migrations/` COPY still carried the damaged `0001_auto.json`, and the already-committed `crates/` migration fixes had to be compiled in. No source was modified — the rebuild compiles the committed tree.
+**One binary note, and a consequence that only prose can carry.** The app binary and image were rebuilt for this task, so the measured binary's sha256 (`00a65b45…91ad88`) differs from the SQLite baseline's (`bcc4479a…2418eb`). The rebuild was required: the image's `migrations/` COPY still carried the damaged `0001_auto.json`, and the already-committed `crates/` migration fixes had to be compiled in. No source was modified — the rebuild compiles the committed tree.
+
+**Therefore no future SQLite run may be diffed against the SQLite baseline until the Cycle 0 null-result re-run confirms the framework fix was behaviour-preserving.** The plan requires that re-run — a validation fix that touches no hot path should reproduce ≈865 RPS unchanged, and proving that is what settles whether the fix was genuinely behaviour-preserving. **`compare.sh` gates nothing on binary identity**: it refuses on backend, `dataset_scale`, cpuset and mix, and prints the two `git_sha`s as context, so it will happily diff a post-Cycle-0 SQLite run against the pre-Cycle-0 baseline and report the framework change as if it were the only difference. Nothing in the result files prevents that either — both would be `sqlite` at scale 20,000 on the same cpuset with the same mix. The binary sha is recorded in every result and is the only thing that distinguishes them; until the null result lands, that check is the reader's to make.
 
 ## Honest caveats
 
@@ -156,4 +188,6 @@ harness/bench/results/record.sh /tmp/hold.json 2500 20000 "$K6"
 
 ## What's next
 
-Phase 3 optimization cycles on the Postgres backend, reporting **latency percentiles as the primary signal** and RPS as the regression guard — **after** the p99 noise floor in the section above is addressed or explicitly accepted. A change that improves p99 by less than 30% on this host has not been demonstrated to do anything.
+Phase 3 optimization cycles on the Postgres backend, reporting **latency percentiles as the primary signal** and RPS as the regression guard — **after** the p99 noise floor above is addressed or explicitly accepted. A change that improves p99 by less than **27.1%** has not been demonstrated to do anything on this host, and `compare.sh` will announce it as an `IMPROVEMENT` regardless, because its own p99 limit is 20%.
+
+Before any of that, the **Cycle 0 SQLite null-result re-run** (see the binary note above) — it is the only thing that licenses diffing against the SQLite baseline again.

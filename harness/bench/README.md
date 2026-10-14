@@ -1,12 +1,25 @@
 # The baseline — the first number this rig produces
 
-**≈865 RPS at 2,500 VUs, p95 ≈3.3 ms, p99 ≈4.8 ms, zero failed requests — with a run-to-run spread of 0.10% on RPS across three consecutive holds.**
+**≈865 RPS at 2,500 VUs, p95 ≈3.3 ms, p99 ≈4.8 ms, zero failed requests — with a run-to-run spread of 0.10% on RPS across three consecutive holds.** These figures are **SQLite**; the rest of this file is about that run.
+
+## There are two baselines, and they are not comparable
+
+| Baseline | Backend | Headline | Report | Result files |
+|---|---|---|---|---|
+| **SQLite** (2026-10-14) | in-process, same envelope | ≈865 RPS, p95 3.3 ms, p99 4.8 ms, RPS spread 0.10% | `results/reports/2026-10-14-baseline-sqlite.md` | `results/1819ddbc-*.json`, `results/52e800a9-*.json` |
+| **Postgres** (2026-10-14) | Postgres 18.6, sibling container on port 55432 | ≈863 RPS, p95 3.0–3.5 ms, p99 4.07–6.74 ms, RPS spread 0.41% over six holds | `results/reports/2026-10-14-baseline-postgres.md` | `results/ad956af2-*.json` |
+
+**Neither is comparable to the other, and no artifact may diff them.** SQLite's database is a function call inside the measured process; Postgres's is a TCP round trip to a sibling container. Each is a fixed point only for itself — the only meaningful comparisons are sqlite-vs-sqlite and postgres-vs-postgres across code changes. `compare.sh` enforces this by refusing (exit 3) when two results name different backends.
+
+Both baselines carry a caveat that governs what their numbers can be used for: 2,500 VUs pins throughput to the workload's think time, so **RPS is a regression guard and p95/p99 is the signal** — and on Postgres the p99 spread (27–54%) is wide enough that `compare.sh`'s own 20% p99 limit sits inside the noise. Read `results/README.md`'s section on the tail's spread before quoting a p99 change from either.
+
+The rest of this file describes the SQLite baseline, which is what "the baseline" meant before the Postgres one existed.
 
 This is the first measurement from the fixed-resource silo: `bench-prod` inside a 4-CPU cgroup, under real session authentication, with no telemetry middleware in the measured path, driven by an external k6 on the cores the container does not own. Everything it says *no* to is in the sections below, because a number is only worth its caveats.
 
 **Read it as a demand figure, not a capacity figure.** The mix offers **986 requests/s** at 2,500 VUs — 2.17 requests per iteration ÷ 5.5 s of think — and this run delivered 865 (a run-level rate, with the ramp and the drain in its denominator, so the two are not directly comparable). The run's own counters close the gap: mean in-flight VUs 2,195 × (2.17 ÷ 5.5 s) = 866 requests/s offered against 865.4 delivered, i.e. **99.9% of what the load asked for**; and the mean iteration took 5.502 s against a mean think of 5.500 s, so all ~2.17 requests in an iteration together added **2 ms to a 5.5-second loop**. Umbral kept up with essentially everything thrown at it, and the observed request concurrency — 865 req/s × 1.55 ms mean latency ≈ **1.3 requests in flight**, at most a third of the silo's four CPUs — says the same thing from the other side. **865 is a statement about this workload's think time, not about a limit of the framework's.**
 
-**No earlier number from this repository is comparable to it.** The old harness ran its load generator inside the server process, bypassed authentication with an `x-bench-user` header, and kept instrumentation middleware in the path; its best figure described a 20-thread laptop under a hammer with a `sleep(0.01)`, not umbral under a workload. The instrumented binary on :8113 (which does emit `Server-Timing`) is a diagnostic tool and no number from it is a performance result. This file is the only baseline; when it is superseded, its successor replaces it here rather than accumulating beside it.
+**No earlier number from this repository is comparable to it.** The old harness ran its load generator inside the server process, bypassed authentication with an `x-bench-user` header, and kept instrumentation middleware in the path; its best figure described a 20-thread laptop under a hammer with a `sleep(0.01)`, not umbral under a workload. The instrumented binary on :8113 (which does emit `Server-Timing`) is a diagnostic tool and no number from it is a performance result. Within a backend, a successor replaces its predecessor here rather than accumulating beside it.
 
 ## The three runs
 
