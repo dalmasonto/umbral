@@ -76,6 +76,10 @@ The preflight spends a handful of requests (`/api/ping`, `/api/auth/me`, the top
 
 k6 is pinned to cores 8–11 (`taskset`) so it never shares a physical core with the container, which owns 0, 2, 4 and 6. Each VU holds a socket, so a run needs a file-descriptor limit well above the VU count — `ulimit -n` is recorded with every result so a client-side `EMFILE` is never mistaken for a server ceiling.
 
+## The first measurement under this mix
+
+These values were measured for the first time on 2026-10-14, at 2,500 VUs against a 20,000-user / 200,000-post dataset in the silo: **≈865 RPS, p95 3.3 ms, p99 4.8 ms, zero failed requests, a 0.10% run-to-run spread over three holds**. The three results, what they do and do not include, and the traps in reproducing them are in `README.md`; the raw records are in `results/`. A result is only comparable to another result with this mix and this think time, which is why `compare.sh` refuses to diff across a mix change — and why the ratified values above are quoted into every result file as `mix`.
+
 ## Known properties, and what the number does not include
 
 - **No `Server-Timing`.** `bench-prod` constructs no telemetry, so it sends no `Server-Timing` header; nothing in these scripts reads one, and no trend here is fed by one. The instrumented binary on :8113 does emit it, and the older `harness/k6/*.js` scripts collect it there — that is a diagnostic number, never a performance result.
