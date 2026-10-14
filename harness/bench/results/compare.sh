@@ -277,6 +277,25 @@ if jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].host.hostname == $b[0].ho
     else "cumulative core events \($t1.core_throttle_count) -> \($t2.core_throttle_count) (\($t2.core_throttle_count - $t1.core_throttle_count) since a), package \($t1.package_throttle_count) -> \($t2.package_throttle_count) (\($t2.package_throttle_count - $t1.package_throttle_count) since a); a nonzero delta means the CPU throttled between the two records" end')"
 fi
 
+# The clock state at record time. Cumulative throttle counters say "the CPU
+# throttled at some point between the records"; this says WHERE the clock
+# sat, which is the difference between a 2x-slower machine and a slower
+# framework. Recorded since schema 1 and silent until now — a cycle compared
+# a 3.8 GHz baseline to a 1.9 GHz treatment and read half a millisecond of
+# p50 as a code change (2026-10-14). A materially different band is called
+# out loudly; it is context, not a refusal, because the run that matters is
+# usually the one already taken.
+mhz_a="$(jq -r '.throttling.cpu_current_mhz.max // empty' "$A" 2>/dev/null)"
+mhz_b="$(jq -r '.throttling.cpu_current_mhz.max // empty' "$B" 2>/dev/null)"
+if [ -n "$mhz_a" ] && [ -n "$mhz_b" ]; then
+  line="record-time max ${mhz_a} MHz -> ${mhz_b} MHz"
+  if [ "$mhz_a" -gt 0 ] \
+     && { [ $((mhz_b * 100)) -gt $((mhz_a * 125)) ] || [ $((mhz_a * 100)) -gt $((mhz_b * 125)) ]; }; then
+    line="$line — DIFFERENT BANDS (>25%): the CPU was clocking differently around the two records, so a latency movement is not attributable to the code without a same-session re-pair"
+  fi
+  ctx "cpu clock" "$line"
+fi
+
 if ! jq -en --slurpfile a "$A" --slurpfile b "$B" '$a[0].vus == $b[0].vus' >/dev/null; then
   ctx "vus" "DIFFERENT ($(jq -r '.vus' "$A") vs $(jq -r '.vus' "$B")) — the offered load differs, so an rps change is not a like-for-like movement"
 fi
