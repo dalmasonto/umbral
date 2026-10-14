@@ -1,0 +1,93 @@
+# The results store
+
+Every number this rig quotes is written by `record.sh` and argued from `compare.sh`. The point of the pair is that a performance number is not a number: it is a number *plus* every fact needed to decide whether it means anything — which commit and which binary, what container envelope, what dataset scale, what workload mix, whether the machine was throttling, whether the container was OOM-killed, whether the run's checks actually held. A number without those facts is an anecdote, and six weeks later nobody can tell the difference.
+
+`record.sh` writes one JSON per run into this directory (`results/<git-sha>-<utc>.json`); `compare.sh` diffs two of them and refuses to when they describe different things. The JSONs are gitignored (`harness/.gitignore`: `bench/results/*.json`) — the store is local and machine-specific, and a result is only meaningful beside the envelope facts it carries. The scripts and this file are committed.
+
+## Recording a run
+
+```bash
+# the run (scored hold; the summary export is what record.sh reads)
+taskset -c 8,9,10,11 ~/.local/bin/k6 run \
+  -e BASE=http://127.0.0.1:8114 -e VUS=2500 -e USERS=20000 -e POSTS=200000 \
+  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js; echo "exit=$?"
+
+# the record
+harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
+```
+
+Arguments are the summary path, the VU count, the dataset scale, and the **k6 exit code**. The exit code is not a boolean; `record.sh` classifies it:
+
+| Exit | Meaning | Recorded as |
+|---|---|---|
+| `0` | thresholds held | `exit.class: "passed"`, `verdict: "pass"` |
+| `99` | a threshold failed (latency or error rate) | `exit.class: "threshold_failed"`, `verdict: "fail"` — a real load result |
+| `107` | aborted in `setup()`/preflight | `exit.class: "preflight_abort"`, `verdict: "not_a_load_result"` — a **rig-configuration** failure (wrong id ranges, a pool that does not match the served database), not a server failure |
+| anything else | unclassified | `exit.class: "unclassified"`, `verdict: "unknown"` — recorded as-is, never folded into either bucket |
+
+Filing a `107` as a load result would blame umbral for a typo'd `-e USERS=`; the two are read weeks apart by someone who was not there.
+
+**The recorder refuses to write anything** when the envelope cannot be verified: no container named `umbral-bench`, or a `HostConfig.CpusetCpus` that is not `0,2,4,6` (read with `docker inspect` — what took effect, not what was asked for). It also refuses on unusable arguments or a missing/corrupt summary export. Its exit codes: `0` written, `2` bad invocation, `3` envelope refusal.
+
+Facts that cannot be verified but should not be silent — a memory envelope other than 4 GiB/no-swap, a dirty working tree, a container that is not running, a check that failed, a VU count or dataset scale that disagrees with what the run's own `setup_data` records, `OOMKilled`, a missing `setup_data`, a suspicious latency spike — are written into `.warnings[]` and echoed at the end of the recorder's output. `compare.sh` surfaces them again when two results are diffed.
+
+## What a result contains
+
+Flat where comparison happens, grouped where reading happens. Schema `1`:
+
+| Field | Meaning |
+|---|---|
+| `git_sha`, `git_sha_short`, `git_dirty` | the commit the rig believes it measured; `git_dirty: true` means the tree did not match it |
+| `recorded_at`, `summary.written_at`, `summary.recorded_after_run_s` | when the result was filed, when k6 wrote the summary (≈ when the run ended), and the gap between them |
+| `vus`, `dataset_scale` | the run's own parameters, cross-checked against the summary (`.vus_max`) and the workload's verified id range (`.workload_range`) |
+| `mix` | `LIKE_P` / `POST_P` / `PAGE_P` **and** `think_ms`, read from the run's own `setup_data` — never re-typed |
+| `rps`, `p50_ms`, `p95_ms`, `p99_ms`, `max_ms`, `error_rate` | the measurement. `rps` is k6's `http_reqs.rate`; percentiles are in **milliseconds** (the summary export's own unit — do not re-scale it); `error_rate` is a ratio 0..1 |
+| `requests`, `iterations`, `vus_max` | supporting counts |
+| `checks` | per-check `passes`/`fails` from the summary (the thresholds cover latency and error rate, **not** the checks — a run where `page 200` never passes can still exit 0) plus `held` |
+| `thresholds` | the summary's own threshold map, verbatim (in k6's export a `true` means **violated**) |
+| `exit`, `verdict` | the classified exit code and the verdict |
+| `k6_setup_data` | the summary's `setup_data`, verbatim — the run's own record of its parameters |
+| `envelope` | container, image and image id, the binary's path/args/`sha256`, cpuset, CPU cap, memory and swap limits, the in-container `nproc` / `memory.max` / `memory.swap.max` / `nofile`, `container_running`, `oom_killed`, `verified` |
+| `thermal` | peak thermal-zone temperature, per zone, from a ~10 s sample taken as soon as the recorder starts (see the caveat below) |
+| `throttling` | the CPUs' thermal-throttle counters, cumulative since boot, restricted to the container's cpuset CPUs |
+| `wal` | the served database's `db_bytes`/`wal_bytes`/`shm_bytes`, the container log's busy/error line counts, and `checkpoint_stall_suspected` with its rule in `basis` |
+| `session` | the session backend, cookie, TTL and max age the measured binary runs with |
+| `host` | hostname, kernel, CPU, the load average at record time, and the recorder shell's `ulimit -n` |
+| `warnings` | everything above that a reader should not miss |
+
+## Comparing two results
+
+```bash
+harness/bench/results/compare.sh results/<a>.json results/<b>.json
+```
+
+It prints one line per metric — `rps`, `p95_ms`, `p99_ms`, `error_rate` — then a `context` block (checks, thermal, throttling, differing VU counts, recorded warnings), then a verdict.
+
+| Exit | Meaning |
+|---|---|
+| `0` | comparable, every thresholded metric within its limit |
+| `1` | comparable, but a metric moved beyond its limit |
+| `2` | a file cannot be read or parsed (or is not a `record.sh` result) |
+| `3` | **refused**: these results are not comparable |
+
+Limits: `rps` beyond **±10%**, `p99_ms` beyond **±20%**. Both directions count — a run that got 30% faster is as much a change as one that got 30% slower, and the verdict line says which (`REGRESSION` / `IMPROVEMENT`). `p95_ms` and `error_rate` are printed with `(no limit)`: they are shown, not judged.
+
+It **refuses** (exit 3, no comparison at all) when:
+
+- either file is not a load result (`preflight_abort`, `unclassified`, or any class other than `passed`/`threshold_failed`);
+- `dataset_scale` differs — the same code against a bigger dataset is a different measurement;
+- the container `cpuset` differs — different CPU sets are different machines;
+- `mix` differs, **including `think_ms`** — the mix is what "fast" means for this rig;
+- `rps` is zero (a relative change from zero is undefined), or any comparison fact is missing/null.
+
+It **fails closed**: a file it cannot parse, or one missing `schema`, is an error (exit 2) — never a silent pass.
+
+## Reading the facts that cannot be measured in a single file
+
+Three facts are recorded in forms that only mean something when read correctly:
+
+- **Thermal.** Nothing on this host keeps thermal history, and the recorder runs *after* k6 exits. `thermal.peak_c` is therefore the top of the **cooling curve**, sampled for ~10 s immediately after the run — close to, but not equal to, the in-run peak. It is there to be compared *between* results: run 3 of a heat-soaked baseline reading hotter than run 1 is heat-soak, not a code change.
+- **Throttling.** The per-CPU throttle counters (`/sys/devices/system/cpu/cpu*/thermal_throttle/`) are cumulative since boot, so one file cannot say whether throttling happened during its own run. `compare.sh` prints the delta between two results: a non-zero delta means the CPU throttled *between the two records*, which includes the second run. The counters are restricted to the container's cpuset CPUs, which also carry other processes' work.
+- **Load average and `ulimit -n`.** Both are recorded at *record* time, not at the run's start — a post-run invocation cannot see the past. The load average is contaminated by the run that just ended; `nofile` is the limit of the shell that invoked `record.sh`, which in the documented flow is the same shell that ran k6.
+
+The `wal` block is the same idea for storage: `bench-prod` deliberately carries no per-request instrumentation, so a SQLite checkpoint stall cannot be observed directly. `checkpoint_stall_suspected` is inferred by the explicit rule in `.wal.basis` (`max_ms > 200` **and** `max_ms > 10 × p99_ms`) from the raw numbers stored beside it; the log counters are cumulative since container start and are meant to be diffed across results.
