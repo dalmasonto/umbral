@@ -269,7 +269,7 @@ if [ -f "$SAMPLE_FILE" ]; then
     END { if (n==0) { printf "\n"; exit }
           c=0; for (t in ticks) c++
           iv = (c > 1) ? (last - first) / (c - 1) : 0
-          printf "%d %d %d %.3f\n", first, last, c, iv }
+          printf "%d %d %d %.3g\n", first, last, c, iv }
   ' "$SAMPLE_FILE")" || true
 fi
 
