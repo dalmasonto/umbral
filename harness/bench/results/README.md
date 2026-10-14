@@ -14,13 +14,17 @@ SAMPLER=$!
 # the run (scored hold; the summary export is what record.sh reads)
 taskset -c 8,9,10,11 ~/.local/bin/k6 run \
   -e BASE=http://127.0.0.1:8114 -e VUS=2500 -e USERS=20000 -e POSTS=200000 \
-  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js; echo "exit=$?"
+  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js
+K6=$?                        # k6's OWN status, captured before anything else runs
+echo "exit=$K6"
 
 kill "$SAMPLER"; wait "$SAMPLER"
 
-# the record
-harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
+# the record — the captured code, never a bare `$?`
+harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 "$K6"
 ```
+
+**Capture k6's exit code immediately, as above — never a bare `$?` on the `record.sh` line.** By then `$?` belongs to `wait`, and the sampler exits **0** (it traps `TERM`/`INT` and returns explicitly), so a bare `$?` hands the recorder `0` for every run: a hold that exited `99` on a failed threshold, or `107` on a preflight abort, would be filed as `exit.class: "passed"` — the exact field `compare.sh` keys on — with only the recorder's cross-check warnings hinting otherwise. It fails *silently*, and a regression recorded as a pass is the one failure this store exists to prevent. (An earlier version of this example used the bare `$?`; it has been corrected here and in `bench/README.md`.)
 
 **Run the sampler around every hold you intend to quote.** It samples the thermal zones and the load average once a second on the host — never in the container, whose cores are the measurement; its cost is a handful of sysfs reads a second, and it is not CPU-pinned (start it under `taskset -c` with a spare core if you want it off the k6 cores entirely) — and the recorder reads the run's peak out of its file (`results/.thermal-sample.tsv` by default; `BENCH_THERMAL_SAMPLE` overrides it, and the sampler truncates it at start, so one file is one run's window). Without it there is no in-run temperature at all, and the recorder says so in the result: see [Reading the facts that cannot be measured in a single file](#reading-the-facts-that-cannot-be-measured-in-a-single-file). A sampler file that does not cover the run it is being recorded against is rejected, not used.
 
