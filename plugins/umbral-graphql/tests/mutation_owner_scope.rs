@@ -52,6 +52,13 @@ impl umbral::auth::Authentication for HeaderUser {
 
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
+/// Serializes this binary's tests: they share ONE seeded row (`os_post` 1),
+/// so a concurrent test's mutation lands inside another test's assertion
+/// window — the anonymous-mutation test once observed the owner test's
+/// "ada-edited" title (2-in-6 flake, 2026-10-15, found while a workspace
+/// suite run gated an unrelated change).
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn boot() -> axum::Router {
     BOOT.get_or_init(|| async {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -134,6 +141,7 @@ async fn title_of(id: i64) -> Option<String> {
 
 #[tokio::test]
 async fn owner_can_update_their_own_row() {
+    let _g = SERIAL.lock().await;
     let _ = boot().await;
     let out = gql_as(
         Some("1"),
@@ -147,6 +155,7 @@ async fn owner_can_update_their_own_row() {
 
 #[tokio::test]
 async fn a_user_cannot_update_another_users_row() {
+    let _g = SERIAL.lock().await;
     let _ = boot().await;
     // ada (user 1) tries to edit grace's post (id 2, author 2).
     let out = gql_as(
@@ -169,6 +178,7 @@ async fn a_user_cannot_update_another_users_row() {
 
 #[tokio::test]
 async fn a_user_cannot_delete_another_users_row() {
+    let _g = SERIAL.lock().await;
     let _ = boot().await;
     let out = gql_as(Some("1"), r#"mutation { deleteOsPost(id: "2") }"#).await;
     assert_eq!(
@@ -183,7 +193,15 @@ async fn a_user_cannot_delete_another_users_row() {
 
 #[tokio::test]
 async fn an_anonymous_caller_cannot_mutate_an_owned_model() {
+    let _g = SERIAL.lock().await;
     let _ = boot().await;
+    // Relative, not absolute: this file shares one seeded row and
+    // `owner_can_update_their_own_row` RENAMES it ("ada-edited") as its
+    // point — asserting the original literal made this test pass or fail by
+    // execution order (exposed when the lock first forced serial order,
+    // 2026-10-15). What the anonymous path must guarantee is that the row is
+    // unchanged BY ITS OWN attempt.
+    let before = title_of(1).await;
     let out = gql_as(
         None,
         r#"mutation { updateOsPost(id: "1", data: { title: "anon" }) { title } }"#,
@@ -194,8 +212,8 @@ async fn an_anonymous_caller_cannot_mutate_an_owned_model() {
         "an anonymous caller has no 'self' to own a row: {out}"
     );
     assert_eq!(
-        title_of(1).await.as_deref(),
-        Some("ada-post"),
+        title_of(1).await,
+        before,
         "the row must be untouched by an anonymous mutation"
     );
 }

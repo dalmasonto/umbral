@@ -276,6 +276,12 @@ async fn seed_software(name: &str, cost: i64) -> i64 {
 
 #[tokio::test]
 async fn without_expand_response_is_unchanged() {
+    // Every test in this binary takes the lock, not only the counting one:
+    // `query_count` is process-global, so a concurrent test's seeding and
+    // requests land inside the measuring test's reset→count window — seen as
+    // a 4-vs-7 flake in a loaded workspace run (2026-10-15), the same class
+    // as the `select_related` suite's the day before.
+    let _g = count_lock().await;
     let router = boot().await.clone();
     let rust_id = seed_software("rust-1", 10).await;
     let pg_id = seed_software("pg-1", 20).await;
@@ -305,6 +311,7 @@ async fn without_expand_response_is_unchanged() {
 
 #[tokio::test]
 async fn expand_embeds_reverse_fk_array_and_expands_m2m_on_retrieve() {
+    let _g = count_lock().await;
     let router = boot().await.clone();
     let rust_id = seed_software("rust-2", 11).await;
     let pg_id = seed_software("pg-2", 22).await;
@@ -361,6 +368,7 @@ async fn expand_embeds_reverse_fk_array_and_expands_m2m_on_retrieve() {
 
 #[tokio::test]
 async fn undeclared_expand_name_is_bad_input() {
+    let _g = count_lock().await;
     let router = boot().await.clone();
     let dev_id = seed_developer(router.clone(), "ada-3", &[], 0).await;
     let (status, body) = get_json(router, &format!("/api/developer/{dev_id}?expand=nope")).await;
