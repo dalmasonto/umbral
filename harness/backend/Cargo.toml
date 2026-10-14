@@ -51,6 +51,14 @@ axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
+# Cycle B treatment: a drop-in global allocator. A CPU profile at saturation
+# put >=17% (lower bound) of the silo's four cores inside glibc's allocator
+# internals (small-object churn: every request builds JSON payloads, decoded
+# rows, headers), so the allocator is the single largest identifiable pool the
+# framework can't reach from the ORM alone. This is app-level configuration,
+# not a framework change — any umbral app can add these two lines.
+mimalloc = "0.1"
+
 # Telemetry: custom tracing layer (captures sqlx events per request) + fmt.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
