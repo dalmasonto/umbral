@@ -127,6 +127,47 @@ fn damage_group(mut file: MigrationFile, group: &[&str]) -> MigrationFile {
     file
 }
 
+/// The reviewer's shape (fix-round 1) on Postgres: a NEW column that a
+/// `unique_together` group names, plus an alter of an existing column on the
+/// same table — the diff that used to carry the group onto an `AlterColumn`
+/// whose `new_columns` could not build it.
+fn add_grouped_column_and_alter(table: &str) -> (Snapshot, Snapshot) {
+    let mut prev = Snapshot::current();
+    prev.models
+        .iter_mut()
+        .find(|m| m.name == "FollowPg")
+        .expect("FollowPg is registered")
+        .table = table.to_string();
+
+    let mut curr = prev.clone();
+    let model = curr
+        .models
+        .iter_mut()
+        .find(|m| m.name == "FollowPg")
+        .expect("FollowPg is registered");
+
+    let mut slug = model
+        .fields
+        .iter()
+        .find(|c| c.name == "following")
+        .expect("following column")
+        .clone();
+    slug.name = "slug".to_string();
+    slug.ty = umbral::orm::SqlType::Text;
+    slug.nullable = true;
+    model.fields.push(slug);
+
+    model.unique_together = vec![vec!["follower".to_string(), "slug".to_string()]];
+    model
+        .fields
+        .iter_mut()
+        .find(|c| c.name == "following")
+        .expect("following column")
+        .nullable = true;
+
+    (prev, curr)
+}
+
 fn write_migration(dir: &std::path::Path, file: &MigrationFile) {
     let plugin_dir = dir.join(&file.plugin);
     std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
@@ -378,6 +419,109 @@ async fn invalid_add_index_is_refused(pool: &PgPool) {
     .await;
 }
 
+/// fix-round 1: a grouped NEW column alongside an alter on the same table must
+/// produce a file that applies — not one the read-path check refuses.
+async fn grouped_new_column_alongside_an_alter_applies(pool: &PgPool) {
+    clean_slate(
+        pool,
+        &["pg_grp_follow"],
+        &[
+            "0001_create_pg_grp_follow",
+            "0002_alter_pg_grp_follow_add_slug",
+        ],
+    )
+    .await;
+
+    let (prev, curr) = add_grouped_column_and_alter("pg_grp_follow");
+    let create = MigrationFile {
+        id: "0001_create_pg_grp_follow".to_string(),
+        plugin: "app".to_string(),
+        depends_on: Vec::new(),
+        operations: diff(&Snapshot::default(), &prev).expect("create table"),
+        snapshot_after: prev.clone(),
+        replaces: Vec::new(),
+    };
+    let alter = MigrationFile {
+        id: "0002_alter_pg_grp_follow_add_slug".to_string(),
+        plugin: "app".to_string(),
+        depends_on: Vec::new(),
+        operations: diff(&prev, &curr).expect("the model change must diff cleanly"),
+        snapshot_after: curr,
+        replaces: Vec::new(),
+    };
+
+    // The shape is really present, and the alter does not carry the group.
+    let carried = alter
+        .operations
+        .iter()
+        .find_map(|op| match op {
+            Operation::AlterColumn {
+                table,
+                unique_together,
+                ..
+            } if table == "pg_grp_follow" => Some(unique_together.clone()),
+            _ => None,
+        })
+        .expect("an AlterColumn must be emitted");
+    assert!(
+        carried.is_empty(),
+        "the AlterColumn must not carry a group naming the to-be-added `slug`; got {carried:?}"
+    );
+
+    let dir = TempDir::new().expect("tempdir");
+    write_migration(dir.path(), &create);
+    write_migration(dir.path(), &alter);
+
+    let applied = run_in(dir.path())
+        .await
+        .expect("a grouped new column alongside an alter must apply on Postgres too");
+    assert_eq!(applied, 2);
+
+    let def = index_definition(pool, "uniq_pg_grp_follow_follower_slug")
+        .await
+        .expect("the composite UNIQUE index must exist");
+    assert!(
+        def.contains("(follower, slug)"),
+        "the index must be over the two real columns; got: {def}"
+    );
+
+    // The pair is (follower, slug); `slug` is nullable here, so insert it
+    // explicitly — two NULL slugs would be distinct under a UNIQUE index and
+    // prove nothing.
+    for (id, follower, slug) in [(1i64, 1i64, "a"), (2, 2, "a")] {
+        sqlx::query(
+            "INSERT INTO \"pg_grp_follow\" (id, follower, following, slug) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(follower)
+        .bind(follower)
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("({follower}, {slug}) must insert: {e}"));
+    }
+    let dup = sqlx::query(
+        "INSERT INTO \"pg_grp_follow\" (id, follower, following, slug) VALUES (3, 1, 1, 'a')",
+    )
+    .execute(pool)
+    .await;
+    let err = dup.expect_err("a repeated (follower, slug) pair must violate the composite UNIQUE");
+    assert!(
+        err.to_string().contains("duplicate key"),
+        "expected a unique violation, got: {err}"
+    );
+
+    clean_slate(
+        pool,
+        &["pg_grp_follow"],
+        &[
+            "0001_create_pg_grp_follow",
+            "0002_alter_pg_grp_follow_add_slug",
+        ],
+    )
+    .await;
+}
+
 // ------------------------------------------------------------------------- //
 // One test drives all four phases.                                      //
 //                                                                        //
@@ -402,4 +546,5 @@ async fn postgres_refuses_invalid_index_columns_and_still_applies_valid_ones() {
     invalid_add_index_is_refused(&pool).await;
     valid_unique_together_applies(&pool).await;
     valid_add_index_applies(&pool).await;
+    grouped_new_column_alongside_an_alter_applies(&pool).await;
 }

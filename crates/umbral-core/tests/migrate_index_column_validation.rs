@@ -120,6 +120,53 @@ fn damage_group(mut file: MigrationFile, group: &[&str]) -> MigrationFile {
     file
 }
 
+/// The two snapshots of the reviewer's shape (fix-round 1): the model as
+/// declared, then the same model with a **new** column, a group naming that new
+/// column, and an existing column altered — all on one table, so `diff_columns`
+/// emits an `AlterColumn` whose `new_columns` deliberately do NOT contain the
+/// new column (it is added by the follow-on `AddColumn`).
+fn add_grouped_column_and_alter(table: &str) -> (Snapshot, Snapshot) {
+    let mut prev = Snapshot::current();
+    prev.models
+        .iter_mut()
+        .find(|m| m.name == "Follow")
+        .expect("Follow is registered")
+        .table = table.to_string();
+
+    let mut curr = prev.clone();
+    let model = curr
+        .models
+        .iter_mut()
+        .find(|m| m.name == "Follow")
+        .expect("Follow is registered");
+
+    // A new nullable text column (nullable because a NOT NULL add on a
+    // populated table is refused without a default).
+    let mut slug = model
+        .fields
+        .iter()
+        .find(|c| c.name == "following")
+        .expect("following column")
+        .clone();
+    slug.name = "slug".to_string();
+    slug.ty = umbral::orm::SqlType::Text;
+    slug.nullable = true;
+    model.fields.push(slug);
+
+    // ...grouped, so the group names a column the old table does not have.
+    model.unique_together = vec![vec!["follower".to_string(), "slug".to_string()]];
+
+    // ...and an existing column altered in the same diff.
+    model
+        .fields
+        .iter_mut()
+        .find(|c| c.name == "following")
+        .expect("following column")
+        .nullable = true;
+
+    (prev, curr)
+}
+
 fn write_migration(dir: &Path, file: &MigrationFile) {
     let plugin_dir = dir.join(&file.plugin);
     std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
@@ -441,5 +488,113 @@ async fn invalid_add_index_is_refused_on_sqlite() {
     assert!(
         !table_exists(&pool, "c3_follow").await,
         "no file in the plugin's set may be applied when one of them is invalid"
+    );
+}
+
+// ------------------------------------------------------------------------- //
+// Fix round 1 — a grouped NEW column alongside an alter on the same table.  //
+//                                                                           //
+// `diff_columns` shapes an `AlterColumn`'s `new_columns` like the PREVIOUS   //
+// table (the SAME diff's `AddColumn` introduces the new column afterwards),  //
+// while `diff_indexes` emits the standalone `AddIndex` that builds the new   //
+// group. Carrying the current group on the `AlterColumn` too made the        //
+// operation name a column that does not exist at that instant, which the     //
+// read-path check rightly refuses — so the engine must not emit it. This is  //
+// the reviewer's reproduction: without the filter in `diff_columns` the file //
+// below is refused on BOTH backends.                                         //
+// ------------------------------------------------------------------------- //
+
+#[tokio::test]
+async fn a_new_grouped_column_alongside_an_alter_still_applies() {
+    let pool = boot().await;
+
+    let (prev, curr) = add_grouped_column_and_alter("c4_alter_follow");
+    let create = MigrationFile {
+        id: "0001_create_c4_alter_follow".to_string(),
+        plugin: "app".to_string(),
+        depends_on: Vec::new(),
+        operations: diff(&Snapshot::default(), &prev).expect("create table"),
+        snapshot_after: prev.clone(),
+        replaces: Vec::new(),
+    };
+    let alter = MigrationFile {
+        id: "0002_alter_c4_alter_follow_add_slug".to_string(),
+        plugin: "app".to_string(),
+        depends_on: Vec::new(),
+        operations: diff(&prev, &curr).expect("the model change must diff cleanly"),
+        snapshot_after: curr,
+        replaces: Vec::new(),
+    };
+
+    // The shape under test is really present: an `AlterColumn` on the table…
+    let alter_col = alter
+        .operations
+        .iter()
+        .find_map(|op| match op {
+            Operation::AlterColumn {
+                table,
+                column,
+                unique_together,
+                ..
+            } if table == "c4_alter_follow" => Some((column.clone(), unique_together.clone())),
+            _ => None,
+        })
+        .expect("the diff must emit an AlterColumn for the altered column");
+    assert_eq!(alter_col.0, "following");
+    assert!(
+        alter_col.1.is_empty(),
+        "the AlterColumn must not carry a group naming the to-be-added `slug` — the \
+         follow-on AddIndex owns it; got {:?}",
+        alter_col.1
+    );
+    // …and the group survives as its own `AddIndex`.
+    assert!(
+        alter.operations.iter().any(|op| matches!(
+            op,
+            Operation::AddIndex { table, columns, unique: true }
+                if table == "c4_alter_follow"
+                    && columns == &vec!["follower".to_string(), "slug".to_string()]
+        )),
+        "the new group must be created by an AddIndex: {:?}",
+        alter.operations
+    );
+
+    let dir = TempDir::new().expect("tempdir");
+    write_migration(dir.path(), &create);
+    write_migration(dir.path(), &alter);
+
+    let applied = run_in(dir.path())
+        .await
+        .expect("a grouped new column alongside an alter must apply, not be refused");
+    assert_eq!(applied, 2);
+    assert!(table_exists(&pool, "c4_alter_follow").await);
+
+    // The constraint is real and over the RIGHT columns…
+    assert_eq!(
+        index_columns(&pool, "uniq_c4_alter_follow_follower_slug").await,
+        vec!["follower".to_string(), "slug".to_string()]
+    );
+    // …and enforces exactly the pair (not a narrower or constant key).
+    for (id, follower, slug) in [(1i64, 1i64, "a"), (2, 1, "b")] {
+        sqlx::query(
+            "INSERT INTO \"c4_alter_follow\" (id, follower, following, slug) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(follower)
+        .bind(follower)
+        .bind(slug)
+        .execute(&pool)
+        .await
+        .unwrap_or_else(|e| panic!("({follower}, {slug}) must insert: {e}"));
+    }
+    let dup = sqlx::query(
+        "INSERT INTO \"c4_alter_follow\" (id, follower, following, slug) VALUES (3, 1, 1, 'a')",
+    )
+    .execute(&pool)
+    .await;
+    let err = dup.expect_err("the repeated (follower, slug) pair must violate the UNIQUE");
+    assert!(
+        err.to_string().to_lowercase().contains("unique"),
+        "expected a UNIQUE violation, got: {err}"
     );
 }
