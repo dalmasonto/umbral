@@ -64,7 +64,18 @@ taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
 # development-scale dataset, or the preflight will refuse the run.
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
   -e USERS=20000 -e POSTS=200000 \
-  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js; echo "exit=$?"
+  --summary-export=/tmp/hold-1.json harness/bench/k6/hold.js
+K6=$?                                # k6's OWN status, captured immediately: the
+echo "exit=$K6"                      # recorder classifies 0/99/107, and anything
+                                     # between here and record.sh would clobber $?
+```
+
+Then record it — `results/README.md` has the full flow, including the thermal
+sampler that has to bracket the run — passing the captured code, never a bare
+`$?`:
+
+```bash
+harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 "$K6"
 ```
 
 Two rules decide whether a run is worth anything, and the preflight checks both before the first request:
