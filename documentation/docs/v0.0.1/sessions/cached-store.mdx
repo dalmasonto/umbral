@@ -1,0 +1,48 @@
+---
+title: Cached session store
+description: CachedDbStore — the DbStore behind an in-process read cache, with signal-driven invalidation and a TTL bound. Turns the per-request session read into zero statements.
+sidebar_position: 1
+icon: zap
+tags: [sessions, cache, performance]
+---
+
+`CachedDbStore` is the DB-backed session store with an in-process read cache in front of it (the `cached_db` shape). Reads that hit the cache issue **zero statements**; every authenticated request in a typical app pays exactly one session read, so this is where that read disappears. It is a drop-in swap — same records, same semantics for every ORM-mediated write.
+
+## One-line swap
+
+```rust
+use umbral_sessions::{CachedDbStore, SessionsPlugin};
+
+let app = App::builder()
+    // ... settings, database, model, other plugins
+    .plugin(SessionsPlugin::default().store(CachedDbStore::default()))
+    .build()?;
+```
+
+## How correctness is kept
+
+1. **Signal-driven invalidation.** The plugin subscribes to the ORM's `post_save:session` / `post_delete:session` signals (and the bulk variants) and evicts the changed key wherever the write came from — a logout, a rotation, an admin revocation. This rides the same events an audit subscriber sees, so it does not depend on the write passing through the store.
+2. **A TTL** (default 5 minutes) bounds everything signals cannot see: writes from another process, or raw SQL against the `session` table. Keep it short when several processes share the table; a single-process deployment can raise it.
+
+The cache never serves past the session's own expiry, and `destroy_user` ("log out everywhere") evicts that user's entries directly as well as through the per-row signals.
+
+## Tuning
+
+```rust
+use std::time::Duration;
+use umbral_sessions::store::{CachedDbStore, SessionCacheConfig};
+
+let store = CachedDbStore::new(SessionCacheConfig {
+    ttl: Duration::from_secs(60),   // staleness bound for out-of-band writes
+    max_entries: 65_536,            // soft cap; eviction prefers expired entries
+});
+```
+
+## When not to use it
+
+- **Multiple app processes sharing one sessions table**: each process caches independently; a write in process A invalidates A immediately and reaches B only after B's TTL. Use a short TTL, or the `RedisStore` (feature `redis`) for cross-process correctness.
+- **You need every request to observe another process's revocation immediately**: same answer — TTL-bounded, not instantaneous.
+
+## Design notes
+
+The underlying mechanism and its measurement live in the bench rig: the session read was ~13.6% of all server-side statement time at the baseline operating point, and the cache's contribution was measured as its own cycle (`harness/bench/results/reports/`, 2026-10-15). The signal-side prerequisite — `upsert` emitting `post_save`/`pre_save` — shipped with it: before that, the store's own write path was invisible to every subscriber.

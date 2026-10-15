@@ -5696,22 +5696,36 @@ impl<T: Model> Manager<T> {
         }
         stmt.on_conflict(on_conflict);
 
-        match pool {
+        // `upsert` was the one write terminal invisible to the signal
+        // system: a row written through it (e.g. the session store's own
+        // save path) emitted nothing, so any cache or audit built on
+        // `post_save:<table>` had a silent hole — found while designing the
+        // session cache's signal-driven invalidation (2026-10-15).
+        //
+        // `created` is `false` by documented contract, not by ignorance:
+        // INSERT vs conflict-UPDATE is not distinguishable without an extra
+        // round trip (PG's `xmax = 0` trick has no SQLite counterpart), and
+        // claiming `true` when wrong would be worse than a conservative
+        // `false` — callers needing creation semantics use `create` /
+        // `update_or_create`, which detect it.
+        crate::signals::emit_pre_save::<T>(&instance, false).await;
+
+        let row = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
-                Ok(row)
+                    .await?
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
-                Ok(row)
+                    .await?
             }
-        }
+        };
+        crate::signals::emit_post_save::<T>(&row, false).await;
+        Ok(row)
     }
 
     /// `create` against an explicit Postgres pool. The Postgres
