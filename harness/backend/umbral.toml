@@ -1,0 +1,14 @@
+# umbral settings for the bench harness.
+# Environment variables (UMBRAL_*) override these at runtime.
+
+database_url = "sqlite://bench.db?mode=rwc"
+
+# Bind address for `cargo run --bin umbral-bench-instrumented -- serve`.
+# 8113 to stay clear of the dev example apps on 8000.
+bind_addr = "127.0.0.1:8113"
+
+environment = "Dev"
+
+# CHANGE THIS IN PRODUCTION. The framework errors at boot when this
+# default key is used with environment = "prod".
+secret_key = "umbral-insecure-dev-key-change-me"

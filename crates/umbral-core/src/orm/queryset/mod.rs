@@ -3655,7 +3655,8 @@ impl<T: Model> QuerySet<T> {
         R: serde::de::DeserializeOwned,
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + crate::orm::HydrateRelated,
     {
         let rows = self.fetch_annotated().await?;
         let mut out = Vec::with_capacity(rows.len());
@@ -3688,7 +3689,8 @@ impl<T: Model> QuerySet<T> {
     ) -> Result<Vec<(T, serde_json::Map<String, JsonValue>)>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + crate::orm::HydrateRelated,
     {
         self.check_annotations()?;
         // Child-column types for SUM/MAX/MIN decoding, resolved from
@@ -3721,9 +3723,26 @@ impl<T: Model> QuerySet<T> {
                 let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
                     .fetch_all(&pool)
                     .await?;
-                let mut out = Vec::with_capacity(rows.len());
+                let mut models = Vec::with_capacity(rows.len());
                 for row in &rows {
-                    let t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                    models.push(<T as sqlx::FromRow<_>>::from_row(row)?);
+                }
+                // `select_related` COMPOSES with annotations. Without this the
+                // terminal silently returned unhydrated rows — related slots
+                // empty, callers falling back to raw FK ids — the same
+                // silent-composition class as the prefetch hydration bug
+                // (2026-10-14). Annotated rows are still parent rows; they
+                // hydrate exactly like any other fetch.
+                if !self.select_related.is_empty() {
+                    hydrate_select_related::<T>(
+                        &mut models,
+                        &self.select_related,
+                        &DbPool::Sqlite(pool.clone()),
+                    )
+                    .await?;
+                }
+                let mut out = Vec::with_capacity(rows.len());
+                for (row, t) in rows.iter().zip(models) {
                     let mut anns = serde_json::Map::with_capacity(source_types.len());
                     for (alias, agg, ty) in &source_types {
                         anns.insert(
@@ -3741,9 +3760,21 @@ impl<T: Model> QuerySet<T> {
                 let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
                     .fetch_all(&pool)
                     .await?;
-                let mut out = Vec::with_capacity(rows.len());
+                let mut models = Vec::with_capacity(rows.len());
                 for row in &rows {
-                    let t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                    models.push(<T as sqlx::FromRow<_>>::from_row(row)?);
+                }
+                // See the SQLite arm above — same composition guarantee.
+                if !self.select_related.is_empty() {
+                    hydrate_select_related::<T>(
+                        &mut models,
+                        &self.select_related,
+                        &DbPool::Postgres(pool.clone()),
+                    )
+                    .await?;
+                }
+                let mut out = Vec::with_capacity(rows.len());
+                for (row, t) in rows.iter().zip(models) {
                     let mut anns = serde_json::Map::with_capacity(source_types.len());
                     for (alias, agg, ty) in &source_types {
                         anns.insert(alias.clone(), backend_pg::decode_agg(row, alias, agg, *ty)?);
@@ -4770,7 +4801,8 @@ impl<T: Model> Manager<T> {
     ) -> Result<Vec<(T, serde_json::Map<String, JsonValue>)>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + crate::orm::HydrateRelated,
     {
         self.queryset().fetch_annotated().await
     }
@@ -5664,22 +5696,36 @@ impl<T: Model> Manager<T> {
         }
         stmt.on_conflict(on_conflict);
 
-        match pool {
+        // `upsert` was the one write terminal invisible to the signal
+        // system: a row written through it (e.g. the session store's own
+        // save path) emitted nothing, so any cache or audit built on
+        // `post_save:<table>` had a silent hole — found while designing the
+        // session cache's signal-driven invalidation (2026-10-15).
+        //
+        // `created` is `false` by documented contract, not by ignorance:
+        // INSERT vs conflict-UPDATE is not distinguishable without an extra
+        // round trip (PG's `xmax = 0` trick has no SQLite counterpart), and
+        // claiming `true` when wrong would be worse than a conservative
+        // `false` — callers needing creation semantics use `create` /
+        // `update_or_create`, which detect it.
+        crate::signals::emit_pre_save::<T>(&instance, false).await;
+
+        let row = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
-                Ok(row)
+                    .await?
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
-                Ok(row)
+                    .await?
             }
-        }
+        };
+        crate::signals::emit_post_save::<T>(&row, false).await;
+        Ok(row)
     }
 
     /// `create` against an explicit Postgres pool. The Postgres

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}post #{{ post_id }} — umbral bench{% endblock %}
+{% block content %}
+  <div class="card" style="padding: 1rem;">
+    <div class="who" style="font-weight:600"><a href="/u/{{ author_id }}" style="text-decoration:none">{{ author }}</a></div>
+    <p style="margin:.5rem 0 0">{{ body }}</p>
+    <div class="meta" style="color:var(--muted);font-size:.8rem;font-family:var(--mono);display:flex;gap:1rem;margin-top:.6rem">
+      <span>{{ created_at }}</span>
+      <span>{{ likes }} likes</span>
+      <span>{{ comments }} comments</span>
+    </div>
+  </div>
+{% endblock %}

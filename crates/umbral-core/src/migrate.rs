@@ -1886,6 +1886,47 @@ pub enum MigrateError {
     /// already contains a squash (nested squashing isn't supported yet). Carries
     /// the plugin and a human-readable reason.
     CannotSquash { plugin: String, reason: String },
+    /// gaps7 #176 — a migration OPERATION would create a composite index (a
+    /// `unique_together` group, an `indexes` entry, or a standalone `AddIndex`)
+    /// over a column its target table does not have.
+    ///
+    /// This is the backend-disagreement fix. Postgres rejects the rendered
+    /// `CREATE INDEX ... ("follower_id")` with `42703` and the process refuses
+    /// to start — correct. SQLite's long-standing misfeature reads an unknown
+    /// *double-quoted* token as a **string literal**, so the same migration
+    /// built a UNIQUE index over the two constants `'follower_id'` and
+    /// `'following_id'` — a constant key, at most one row can ever satisfy it —
+    /// and reported success. Refusing the operation before it is rendered makes
+    /// both backends agree: neither one applies a file whose index names a
+    /// column the table does not have.
+    InvalidIndexTarget {
+        /// The migration file the operation came from, so the reader lands on
+        /// the file (a generated artifact) rather than on the model or the DB.
+        file: String,
+        /// Where the index group was declared: `unique_together`, `indexes`, or
+        /// `AddIndex`.
+        kind: String,
+        table: String,
+        /// The full column list of the offending index group.
+        group: Vec<String>,
+        /// The group's columns that are NOT on the target table — the typo.
+        missing: Vec<String>,
+        /// The columns the target table does have.
+        available: Vec<String>,
+    },
+    /// gaps7 #176 — a MODEL declares `unique_together` / `indexes` over a field
+    /// it does not have. Caught by [`diff`], so `makemigrations` refuses before
+    /// writing such a group into a file that would then apply differently on
+    /// different backends (see [`MigrateError::InvalidIndexTarget`]).
+    InvalidDeclaredIndex {
+        /// `Model::NAME` (the Rust struct name) — what the developer edits.
+        model: String,
+        table: String,
+        kind: String,
+        group: Vec<String>,
+        missing: Vec<String>,
+        available: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1975,6 +2016,45 @@ impl std::fmt::Display for MigrateError {
             MigrateError::CannotSquash { plugin, reason } => write!(
                 f,
                 "umbral squashmigrations: can't squash `{plugin}`: {reason}"
+            ),
+            MigrateError::InvalidIndexTarget {
+                file,
+                kind,
+                table,
+                group,
+                missing,
+                available,
+            } => write!(
+                f,
+                "umbral migrate: invalid index in `{file}`: the `{kind}` group ({group}) on table \
+                 `{table}` names column `{missing}`, which does not exist on that table. The \
+                 table's columns are: {available}. Postgres rejects this SQL (`42703`) and this \
+                 engine refuses to render it — on SQLite the same statement would silently build \
+                 a UNIQUE index over the quoted names as string constants (a constant key, so no \
+                 second row could ever be inserted). Fix the group in `{file}` (or regenerate the \
+                 migration) so it names real columns.",
+                group = group.join(", "),
+                missing = missing.join(", "),
+                available = available.join(", "),
+            ),
+            MigrateError::InvalidDeclaredIndex {
+                model,
+                table,
+                kind,
+                group,
+                missing,
+                available,
+            } => write!(
+                f,
+                "umbral makemigrations: model `{model}` declares a `{kind}` group ({group}) on \
+                 table `{table}` naming column `{missing}`, which is not a field of `{model}`. \
+                 Its fields are: {available}. Fix the `#[umbral({kind} = ...)]` attribute — a \
+                 group that names a column the model does not have would otherwise be written \
+                 into a migration file and then apply differently per backend (Postgres rejects \
+                 it, SQLite silently indexes the names as string constants).",
+                group = group.join(", "),
+                missing = missing.join(", "),
+                available = available.join(", "),
             ),
         }
     }
@@ -3958,11 +4038,177 @@ fn list_migration_files(plugin_dir: &Path) -> Result<Vec<PathBuf>, MigrateError>
     Ok(paths)
 }
 
-/// Read and parse one migration file.
+/// Read and parse one migration file, refusing one whose operations would
+/// create an index over a column its target table does not have
+/// ([`MigrateError::InvalidIndexTarget`], gaps7 #176).
+///
+/// The check lives on the READ path rather than in the apply loop on purpose:
+/// a migration file is a self-describing unit (its operations plus the snapshot
+/// they produce), so "this file's index groups name columns its own tables do
+/// not have" is decidable without a database — and it must hold for every
+/// consumer of the file, not just the one that happens to be applying it today.
+/// `makemigrations` (which reads the previous snapshot through this function)
+/// therefore refuses to build on a damaged history, and `migrate` refuses to
+/// apply one, on both backends.
 fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
     let text = std::fs::read_to_string(path)?;
     let file: MigrationFile = serde_json::from_str(&text)?;
+    validate_migration_indexes(&file, path)?;
     Ok(file)
+}
+
+/// The composite index groups an operation CREATES, as `(kind, columns)` pairs.
+///
+/// `CreateTable` / `AlterColumn` / `DropColumn`-with-rebuild render their
+/// carried `unique_together` / `indexes` groups as follow-up
+/// `CREATE [UNIQUE] INDEX` statements; `AddIndex` *is* one. `DropIndex` is
+/// deliberately absent: it only REMOVES an index (rendered `DROP INDEX IF
+/// EXISTS`), so a name that no longer resolves is a harmless no-op, not a
+/// corruption.
+fn created_index_groups(op: &Operation) -> Vec<(&'static str, &[String])> {
+    match op {
+        Operation::CreateTable {
+            unique_together,
+            indexes,
+            ..
+        }
+        | Operation::AlterColumn {
+            unique_together,
+            indexes,
+            ..
+        }
+        | Operation::DropColumn {
+            unique_together,
+            indexes,
+            ..
+        } => unique_together
+            .iter()
+            .map(|g| ("unique_together", g.as_slice()))
+            .chain(indexes.iter().map(|g| ("indexes", g.as_slice())))
+            .collect(),
+        Operation::AddIndex { columns, .. } => vec![("AddIndex", columns.as_slice())],
+        _ => Vec::new(),
+    }
+}
+
+/// The columns the target table will have once `op` has run — the column set an
+/// index it creates is built over. `None` for operations whose target table
+/// shape the operation itself does not carry (`AddIndex`/`DropIndex` on an
+/// existing table), and for operations that create no index at all.
+fn op_target_columns(op: &Operation) -> Option<(&str, Vec<&str>)> {
+    match op {
+        Operation::CreateTable { table, columns, .. } => Some((table, column_names(columns))),
+        Operation::AlterColumn {
+            table, new_columns, ..
+        } => Some((table, column_names(new_columns))),
+        // `new_columns: Some(..)` is the only shape that re-creates the table
+        // (and therefore its composite indexes) on SQLite; a bare `DropColumn`
+        // renders no index statement.
+        Operation::DropColumn {
+            table,
+            new_columns: Some(new_columns),
+            ..
+        } => Some((table, column_names(new_columns))),
+        _ => None,
+    }
+}
+
+/// The column names of a column list, in order.
+fn column_names(cols: &[Column]) -> Vec<&str> {
+    cols.iter().map(|c| c.name.as_str()).collect()
+}
+
+/// gaps7 #176 — every index group a migration file's operations create must
+/// name columns its target table has.
+///
+/// The table's columns come from the file itself: the operation's own column
+/// list when it carries one (`CreateTable` / `AlterColumn` / `DropColumn`
+/// rebuild), otherwise the post-migration model snapshot (`AddIndex` on a table
+/// this file's snapshot owns). An `AddIndex` targeting a table the snapshot does
+/// not know is left alone — the file cannot be wrong about a shape it does not
+/// describe (a hand-written cross-plugin index, where the only authority is the
+/// database, which rejects a bad column on Postgres on its own).
+fn validate_migration_indexes(file: &MigrationFile, path: &Path) -> Result<(), MigrateError> {
+    let source = path.display().to_string();
+    for op in &file.operations {
+        let target: Option<(&str, Vec<&str>)> = match op_target_columns(op) {
+            Some(from_op) => Some(from_op),
+            None => match op {
+                Operation::AddIndex { table, .. } => file
+                    .snapshot_after
+                    .models
+                    .iter()
+                    .find(|m| &m.table == table)
+                    .map(|m| {
+                        (
+                            m.table.as_str(),
+                            m.fields.iter().map(|c| c.name.as_str()).collect(),
+                        )
+                    }),
+                _ => None,
+            },
+        };
+        let Some((table, available)) = target else {
+            continue;
+        };
+        for (kind, group) in created_index_groups(op) {
+            let missing: Vec<String> = group
+                .iter()
+                .filter(|c| !available.contains(&c.as_str()))
+                .cloned()
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            return Err(MigrateError::InvalidIndexTarget {
+                file: source.clone(),
+                kind: kind.to_string(),
+                table: table.to_string(),
+                group: group.to_vec(),
+                missing,
+                available: available.iter().map(|c| (*c).to_string()).collect(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// gaps7 #176 — every `unique_together` / `indexes` group a snapshot's models
+/// declare must name columns those models actually have.
+///
+/// This is the generation-time half of the same contract: `diff` runs it over
+/// both of its inputs, so `makemigrations` fails on the declaration instead of
+/// writing a group into a file — where it would apply as a real constraint on
+/// Postgres and as a silent constant index on SQLite.
+fn validate_snapshot_indexes(snapshot: &Snapshot) -> Result<(), MigrateError> {
+    for model in &snapshot.models {
+        let available: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
+        let kinds: [(&str, &Vec<Vec<String>>); 2] = [
+            ("unique_together", &model.unique_together),
+            ("indexes", &model.indexes),
+        ];
+        for (kind, groups) in kinds {
+            for group in groups {
+                let missing: Vec<String> = group
+                    .iter()
+                    .filter(|c| !available.contains(&c.as_str()))
+                    .cloned()
+                    .collect();
+                if missing.is_empty() {
+                    continue;
+                }
+                return Err(MigrateError::InvalidDeclaredIndex {
+                    model: model.name.clone(),
+                    table: model.table.clone(),
+                    kind: kind.to_string(),
+                    group: group.clone(),
+                    missing,
+                    available: available.iter().map(|c| (*c).to_string()).collect(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Diff the previous snapshot against the current one and produce the
@@ -4019,6 +4265,40 @@ fn rename_intent() -> RenameIntent {
         },
         Err(_) => RenameIntent::Undecided,
     }
+}
+
+/// Filter composite index groups down to those every column of which exists in
+/// `columns` — i.e. the groups an operation carrying them can actually build.
+///
+/// `diff_columns` shapes an `AlterColumn`'s / rebuild-`DropColumn`'s
+/// `new_columns` like the **previous** table on purpose (a same-diff ADDED
+/// column must be absent, or the SQLite recreation dance's `INSERT … SELECT`
+/// names a column the old table does not have; see the comment there), but the
+/// groups it carries come from the CURRENT model. A group naming a to-be-added
+/// column can't be built by that operation — the `AddColumn` that introduces
+/// the column runs *after* it — so carrying it would emit an index over a
+/// column that does not exist yet. On SQLite that is accepted as an index over
+/// a string CONSTANT (the table briefly enforces a narrower uniqueness), and it
+/// takes the deterministic index NAME, so the follow-on `AddIndex` from
+/// [`diff_indexes`] becomes a no-op via `IF NOT EXISTS`; on a backend that
+/// resolves index columns strictly it is a hard error.
+///
+/// The filtered-out groups are not lost: any group naming a column that is new
+/// in `current` cannot have existed in `previous` — `diff` validates both
+/// snapshots' groups against their own fields before any of this runs — so
+/// [`diff_indexes`], called right after `diff_columns` on every path that emits
+/// these ops, sees it as an added group and emits the standalone `AddIndex`
+/// that builds it on both backends.
+fn groups_buildable_on(groups: &[Vec<String>], columns: &[Column]) -> Vec<Vec<String>> {
+    groups
+        .iter()
+        .filter(|group| {
+            group
+                .iter()
+                .all(|name| columns.iter().any(|col| &col.name == name))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Emit `AddIndex` / `DropIndex` ops for changes to a model's TABLE-level
@@ -4107,6 +4387,15 @@ fn diff_indexes(previous: &ModelMeta, current: &ModelMeta) -> Vec<Operation> {
 
 pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::{BTreeMap, HashSet};
+
+    // gaps7 #176 — a model whose declared composite groups name fields it does
+    // not have can't be diffed meaningfully: the group would be rendered into an
+    // index over nonexistent columns, which Postgres rejects (`42703`) and
+    // SQLite silently accepts as an index over string constants. Refusing BOTH
+    // inputs here means `makemigrations` stops on the declaration instead of
+    // writing it into a file, where the damage would already be on disk.
+    validate_snapshot_indexes(previous)?;
+    validate_snapshot_indexes(current)?;
 
     // features #73 — views are diffed on a separate track, for a reason that runs
     // deeper than tidiness: every pass below exists to AVOID destroying data (the
@@ -5080,9 +5369,13 @@ fn diff_columns(
             new_columns: new_columns.clone(),
             prev_columns: Some(prev_columns_snapshot.clone()),
             // audit_2 core-migrate #10: carry the table-level constraints so the
-            // SQLite recreation dance re-creates them instead of dropping them.
-            unique_together: current.unique_together.clone(),
-            indexes: current.indexes.clone(),
+            // SQLite recreation dance re-creates them instead of dropping them —
+            // filtered to the ones this op can actually build (see
+            // `groups_buildable_on`; a same-diff ADDED column is absent from
+            // `new_columns`, and its group is created by the follow-on
+            // `AddIndex` instead).
+            unique_together: groups_buildable_on(&current.unique_together, &new_columns),
+            indexes: groups_buildable_on(&current.indexes, &new_columns),
         });
     }
 
@@ -5185,11 +5478,11 @@ fn diff_columns(
                 .filter(|c| c.name != col.name && !removed.contains(&c.name))
                 .cloned()
                 .collect();
-            (
-                Some(survivors),
-                current.unique_together.clone(),
-                current.indexes.clone(),
-            )
+            // Same filter as the `AlterColumn` carry above: the rebuild carries
+            // only the groups it can build from `survivors`.
+            let unique_together = groups_buildable_on(&current.unique_together, &survivors);
+            let indexes = groups_buildable_on(&current.indexes, &survivors);
+            (Some(survivors), unique_together, indexes)
         } else {
             (None, Vec::new(), Vec::new())
         };

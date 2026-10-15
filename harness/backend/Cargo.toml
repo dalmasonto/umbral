@@ -1,0 +1,92 @@
+[package]
+name = "umbral-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "umbral_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "umbral-bench-instrumented"
+path = "src/bin/bench-instrumented.rs"
+
+[[bin]]
+name = "umbral-bench-prod"
+path = "src/bin/bench-prod.rs"
+
+# harness/backend — the umbral benchmark & profiling harness app.
+# STANDALONE project (outside the framework workspace): path-deps the local
+# umbral crates. Run from this directory:
+#   cargo run --bin umbral-bench-instrumented -- migrate   # create the bench schema
+#   cargo run --bin umbral-bench-instrumented -- serve     # boot the app (seed runs on serve)
+# Real numbers: `cargo build --release` then
+# `cargo run --release --bin umbral-bench-instrumented -- serve`.
+
+# Own workspace root, so the package is standalone by construction: cargo
+# stops its upward search here instead of walking out of the repo. Two things
+# depend on it. The `[profile.*]` sections below only apply at a workspace
+# root, and without it cargo refuses to build this package at all from a
+# nested checkout path (a worktree under `.worktrees/` still has the main
+# checkout's manifest above it, which neither member-lists nor excludes this
+# package).
+[workspace]
+
+[features]
+# Diagnostic build: swaps the mimalloc global allocator for dhat's, so the
+# ignored `alloc_profile` test can attribute heap traffic to call sites.
+# Never enable this for a measured binary — since Cycle B the allocator IS
+# part of the measurement (+20.5% capacity; 2026-10-14).
+dhat-alloc = ["dep:dhat"]
+
+[dependencies]
+# Framework core + CLI (dispatch, migrate, makemigrations, ...).
+umbral = { path = "../../crates/umbral" }
+umbral-cli = { path = "../../crates/umbral-cli" }
+
+# Plugins under measurement. Each contributes real wrap_router layers that
+# the telemetry probes bracket (see src/probes.rs).
+umbral-auth = { path = "../../plugins/umbral-auth" }
+umbral-sessions = { path = "../../plugins/umbral-sessions" }
+umbral-security = { path = "../../plugins/umbral-security" }
+umbral-health = { path = "../../plugins/umbral-health" }
+
+# HTTP substrate: the SSE endpoint and the bench middleware impls need the
+# axum types directly (umbral re-exports most of them; Sse is app-level).
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Cycle B treatment: a drop-in global allocator. A CPU profile at saturation
+# put >=17% (lower bound) of the silo's four cores inside glibc's allocator
+# internals (small-object churn: every request builds JSON payloads, decoded
+# rows, headers), so the allocator is the single largest identifiable pool the
+# framework can't reach from the ORM alone. This is app-level configuration,
+# not a framework change — any umbral app can add these two lines.
+mimalloc = "0.1"
+
+# Heap-allocation profiler for the `dhat-alloc` diagnostic build (see the
+# [features] block). Optional: a normal build never links it.
+dhat = { version = "0.3", optional = true }
+
+# Telemetry: custom tracing layer (captures sqlx events per request) + fmt.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Load generator HTTP client (loopback against this same server).
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+# Models use `#[derive(sqlx::FromRow)]`; the derive needs the macros feature.
+sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio"] }
+
+# Disk discipline: without this the debug build embeds full DWARF and the
+# harness target dir balloons (see the workspace Cargo.toml's profile note).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

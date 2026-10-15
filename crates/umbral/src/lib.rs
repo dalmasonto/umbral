@@ -881,6 +881,12 @@ pub mod orm {
     //! full query API by implementing one trait, by hand or via derive.
 
     pub use umbral_core::orm::write::{SaveError, WriteError, slugify};
+    // Macro-emitted diagnosability hook: `#[derive(Model)]`'s hydration arms
+    // call `::umbral::orm::__hydrate_failed(..)` when a decoded related row
+    // fails to deserialize, so the failure is a warning instead of a silent
+    // drop. Not for direct use.
+    #[doc(hidden)]
+    pub use umbral_core::orm::__hydrate_failed;
     pub use umbral_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DecimalSpec,
         DynError, DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction,

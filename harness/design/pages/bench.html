@@ -1,0 +1,159 @@
+<bench-app-header></bench-app-header>
+
+<main class="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold tracking-tight">Both backends pass at 2,500 virtual users</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        r-248 · feed workload (read-heavy) · 5:00 run · 50k users / 500k posts seeded · <span class="font-mono">e0d5e18</span>
+      </p>
+    </div>
+    <a href="/bench-live" class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Watch a run live</a>
+  </div>
+
+  <section class="grid gap-4 sm:grid-cols-2" aria-label="Backend score summary">
+    <article class="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="h-2.5 w-2.5 rounded-sm bg-chart-1"></span>
+          <h2 class="text-sm font-semibold">SQLite</h2>
+        </div>
+        <span class="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs font-mono">pass</span>
+      </div>
+      <div class="mt-3 flex items-baseline gap-2">
+        <span class="font-mono text-3xl font-medium tabular-nums">42</span>
+        <span class="text-sm text-muted-foreground">ms p95 · budget 500 ms</span>
+      </div>
+      <dl class="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3 text-xs">
+        <div><dt class="text-muted-foreground">p50</dt><dd class="mt-0.5 font-mono tabular-nums">1.9 ms</dd></div>
+        <div><dt class="text-muted-foreground">p99</dt><dd class="mt-0.5 font-mono tabular-nums">118 ms</dd></div>
+        <div><dt class="text-muted-foreground">errors</dt><dd class="mt-0.5 font-mono tabular-nums">0.02%</dd></div>
+      </dl>
+      <p class="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+        Held its budget up to <span class="font-mono text-foreground">5,000</span> VUs at
+        <span class="font-mono text-foreground">4,180</span> req/s
+      </p>
+    </article>
+
+    <article class="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="h-2.5 w-2.5 rounded-sm bg-chart-2"></span>
+          <h2 class="text-sm font-semibold">Postgres</h2>
+        </div>
+        <span class="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs font-mono">pass</span>
+      </div>
+      <div class="mt-3 flex items-baseline gap-2">
+        <span class="font-mono text-3xl font-medium tabular-nums">61</span>
+        <span class="text-sm text-muted-foreground">ms p95 · budget 500 ms</span>
+      </div>
+      <dl class="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3 text-xs">
+        <div><dt class="text-muted-foreground">p50</dt><dd class="mt-0.5 font-mono tabular-nums">2.6 ms</dd></div>
+        <div><dt class="text-muted-foreground">p99</dt><dd class="mt-0.5 font-mono tabular-nums">147 ms</dd></div>
+        <div><dt class="text-muted-foreground">errors</dt><dd class="mt-0.5 font-mono tabular-nums">0.05%</dd></div>
+      </dl>
+      <p class="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+        Held its budget up to <span class="font-mono text-foreground">4,750</span> VUs at
+        <span class="font-mono text-foreground">3,640</span> req/s
+      </p>
+    </article>
+  </section>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+      <div>
+        <h2 class="text-base font-semibold tracking-tight">Latency as load climbs</h2>
+        <p class="text-sm text-muted-foreground">A virtual-user run passes while p95 &lt; 500 ms, p99 &lt; 1 s and errors &lt; 1%; the ramp binary-searches for the highest passing level.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
+        <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-chart-1"></span>SQLite</span>
+        <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-chart-2"></span>Postgres</span>
+        <span>solid p95 · dashed p99</span>
+      </div>
+    </div>
+    <bench-chart mode="ceiling"></bench-chart>
+  </section>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="mb-3">
+      <h2 class="text-base font-semibold tracking-tight">Throughput</h2>
+      <p class="text-sm text-muted-foreground">Postgres plateaus at 3,640 req/s and dips once p95 crosses budget — the queue forming — while SQLite keeps climbing to 4,180.</p>
+    </div>
+    <bench-chart mode="throughput"></bench-chart>
+  </section>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+      <h2 class="text-base font-semibold tracking-tight">Scenarios in this run</h2>
+      <span class="text-xs text-muted-foreground">at 2,500 VUs · Δ vs r-247</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[40rem] text-sm">
+        <thead>
+          <tr class="text-xs text-muted-foreground">
+            <th class="py-2 pr-3 text-left font-medium">Scenario</th>
+            <th class="py-2 pr-3 text-left font-medium">Mix</th>
+            <th class="py-2 pr-3 text-right font-medium">SQLite req/s</th>
+            <th class="py-2 pr-3 text-right font-medium">Postgres req/s</th>
+            <th class="py-2 pr-3 text-right font-medium">p95 (S / P)</th>
+            <th class="py-2 text-right font-medium">Verdict</th>
+          </tr>
+        </thead>
+        <tbody class="font-mono tabular-nums">
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">feed</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">8% writes</td>
+            <td class="py-2 pr-3 text-right">4,180</td>
+            <td class="py-2 pr-3 text-right">3,640</td>
+            <td class="py-2 pr-3 text-right">42 / 61 ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-2 py-0.5 text-xs">pass</span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">post detail</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">single-row + join</td>
+            <td class="py-2 pr-3 text-right">5,910</td>
+            <td class="py-2 pr-3 text-right">5,240</td>
+            <td class="py-2 pr-3 text-right">21 / 29 ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-2 py-0.5 text-xs">pass</span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">create post</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">write-heavy</td>
+            <td class="py-2 pr-3 text-right">1,460</td>
+            <td class="py-2 pr-3 text-right">1,180</td>
+            <td class="py-2 pr-3 text-right">96 / 138 ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-2 py-0.5 text-xs">pass</span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">authed dashboard</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">session + template</td>
+            <td class="py-2 pr-3 text-right">2,310</td>
+            <td class="py-2 pr-3 text-right">2,040</td>
+            <td class="py-2 pr-3 text-right">88 / 121 ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-3 py-0.5 text-xs text-destructive">▼ 6%</span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">json api</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">serde only</td>
+            <td class="py-2 pr-3 text-right">9,840</td>
+            <td class="py-2 pr-3 text-right">9,610</td>
+            <td class="py-2 pr-3 text-right">7 / 9 ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-2 py-0.5 text-xs">pass</span></td>
+          </tr>
+          <tr class="border-t border-border/60">
+            <td class="py-2 pr-3 font-sans font-medium">static asset</td>
+            <td class="py-2 pr-3 font-sans text-muted-foreground">no DB</td>
+            <td class="py-2 pr-3 text-right" colspan="2">18,400</td>
+            <td class="py-2 pr-3 text-right">3 / — ms</td>
+            <td class="py-2 text-right"><span class="rounded-md border border-border px-2 py-0.5 text-xs">pass</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="pb-2 text-xs text-muted-foreground">
+    Sample data for the interface design — real runs are executed by the umbral bench backend and persisted per run;
+    the delta column flags regressions against the previous run of the same scenario.
+  </p>
+</main>

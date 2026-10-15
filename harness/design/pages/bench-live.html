@@ -1,0 +1,71 @@
+<bench-app-header></bench-app-header>
+
+<main class="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold tracking-tight">Feed workload, ramping to the ceiling</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Both backends run the same virtual-user script from two isolated processes on the bench rig.</p>
+    </div>
+    <div class="flex items-center gap-2 font-mono text-xs">
+      <span class="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
+        <span class="h-2 w-2 animate-pulse rounded-full bg-destructive"></span>recording
+      </span>
+      <span class="rounded-md border border-border px-2 py-1 text-muted-foreground">02:41 elapsed</span>
+    </div>
+  </div>
+
+  <section class="grid gap-4 lg:grid-cols-[2fr_1fr]">
+    <div class="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="text-base font-semibold tracking-tight">Live p95</h2>
+        <span class="text-xs font-mono text-muted-foreground">reporting every 15 s</span>
+      </div>
+      <bench-chart mode="live"></bench-chart>
+    </div>
+
+    <div class="space-y-4">
+      <section class="rounded-lg border border-border bg-card p-4">
+        <h2 class="text-sm font-semibold">Ceiling search</h2>
+        <p class="mt-1 text-xs text-muted-foreground">Binary search over virtual users; a level passes while p95, p99 and errors stay inside budget.</p>
+        <ul class="mt-3 space-y-2 font-mono text-xs">
+          <li class="flex items-center justify-between rounded-md bg-muted px-2 py-1.5"><span>4,500 vus</span><span class="text-muted-foreground">pass</span></li>
+          <li class="flex items-center justify-between rounded-md bg-muted px-2 py-1.5"><span>4,750 vus</span><span class="text-muted-foreground">pass</span></li>
+          <li class="flex items-center justify-between rounded-md border border-border px-2 py-1.5"><span>5,000 vus</span><span>testing now</span></li>
+          <li class="flex items-center justify-between rounded-md px-2 py-1.5 text-muted-foreground"><span>5,500 vus</span><span>bracket → fail</span></li>
+        </ul>
+      </section>
+
+      <section class="rounded-lg border border-border bg-card p-4">
+        <h2 class="text-sm font-semibold">This machine</h2>
+        <dl class="mt-3 space-y-3 text-xs">
+          <div class="flex items-center justify-between"><dt class="text-muted-foreground">umbral API cpu</dt><dd class="font-mono tabular-nums">62%</dd></div>
+          <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full bg-foreground/50" style="width:62%"></div></div>
+          <div class="flex items-center justify-between"><dt class="text-muted-foreground">Postgres cpu</dt><dd class="font-mono tabular-nums">71%</dd></div>
+          <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full bg-chart-2" style="width:71%"></div></div>
+          <div class="flex items-center justify-between"><dt class="text-muted-foreground">disk write</dt><dd class="font-mono tabular-nums">4.2 MB/s</dd></div>
+          <div class="flex items-center justify-between"><dt class="text-muted-foreground">load-gen cpu</dt><dd class="font-mono tabular-nums">18%</dd></div>
+        </dl>
+        <p class="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">Load is generated on a separate process pool so generator cost never lands in the API's numbers.</p>
+      </section>
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div class="flex flex-wrap items-center gap-3">
+      <h2 class="text-sm font-semibold">Run controls</h2>
+      <div class="flex flex-wrap items-center gap-2 text-xs font-mono">
+        <span class="rounded-md bg-muted px-2 py-1 font-medium text-foreground">feed</span>
+        <span class="rounded-md border border-transparent px-2 py-1 text-muted-foreground">post detail</span>
+        <span class="rounded-md border border-transparent px-2 py-1 text-muted-foreground">create post</span>
+        <span class="rounded-md border border-transparent px-2 py-1 text-muted-foreground">authed dashboard</span>
+      </div>
+      <div class="ml-auto flex items-center gap-2 text-xs font-mono">
+        <span class="rounded-md bg-muted px-2 py-1 font-medium text-foreground">read-heavy</span>
+        <span class="rounded-md border border-transparent px-2 py-1 text-muted-foreground">write-heavy</span>
+        <span class="rounded-md border border-transparent px-2 py-1 text-muted-foreground">both backends</span>
+      </div>
+    </div>
+  </section>
+
+  <p class="pb-2 text-xs text-muted-foreground">Sample data for the interface design — live numbers stream from the run process and are written async to the run record and JSONL traces.</p>
+</main>

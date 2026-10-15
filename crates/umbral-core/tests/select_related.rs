@@ -122,6 +122,28 @@ pub struct Post {
     pub reviewer: ForeignKey<User>,
 }
 
+// The datetime pair. `sr_user` above carries no date columns, which is why the
+// whole suite stayed green while hydration of any related row WITH a datetime
+// was broken (found on the bench rig, 2026-10-14): the row→JSON decode in
+// `fetch_related_as_json_by_pk` could not represent a timestamp, the typed
+// deserialize then failed on the missing value, and `hydrate_fk`'s
+// forgive-and-continue posture dropped the row without a word.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "sr_member")]
+pub struct Member {
+    pub id: i64,
+    pub username: String,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "sr_note")]
+pub struct Note {
+    pub id: i64,
+    pub body: String,
+    pub member: ForeignKey<Member>,
+}
+
 // =========================================================================
 // Pool helper
 // =========================================================================
@@ -164,6 +186,28 @@ async fn fresh_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("CREATE TABLE sr_post");
+
+    sqlx::query(
+        "CREATE TABLE sr_member (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            joined_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("CREATE TABLE sr_member");
+
+    sqlx::query(
+        "CREATE TABLE sr_note (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL,
+            member INTEGER NOT NULL REFERENCES sr_member(id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("CREATE TABLE sr_note");
 
     pool
 }
@@ -232,6 +276,13 @@ async fn without_select_related_accessor_still_queries() {
 /// Without `.select_related`, `serde_json::to_value` emits author as a bare i64.
 #[tokio::test]
 async fn without_select_related_serialises_as_integer() {
+    // Every test in this binary takes the lock, not only the ones that read
+    // the counter: `QUERY_COUNT` is process-global, so a test that merely
+    // calls `fresh_pool()` still emits counted CREATE/INSERT statements, and
+    // under load those landed inside a measuring test's reset→count window
+    // (seen once as a 1-vs-0 flake in a workspace run). The lock covers the
+    // whole binary's query traffic.
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let user = insert_user(&pool, "Alice", "alice").await;
     let _ = insert_post(&pool, "Hello", user.id, user.id).await;
@@ -290,6 +341,7 @@ async fn select_related_single_fk_makes_accessor_zero_query() {
 /// "alice" when `post` is passed as the context after `select_related("author")`.
 #[tokio::test]
 async fn select_related_serialises_as_full_object() {
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let user = insert_user(&pool, "Alice", "alice").await;
     let _ = insert_post(&pool, "Hello", user.id, user.id).await;
@@ -324,6 +376,7 @@ async fn select_related_serialises_as_full_object() {
 /// (the ID is never lost — it's preserved in `raw`).
 #[tokio::test]
 async fn select_related_raw_id_preserved() {
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let user = insert_user(&pool, "Bob", "bob").await;
     let _ = insert_post(&pool, "test", user.id, user.id).await;
@@ -349,6 +402,7 @@ async fn select_related_raw_id_preserved() {
 /// `.select_related_many(&["author", "reviewer"])` populates both FKs.
 #[tokio::test]
 async fn select_related_many_populates_both_fks() {
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let alice = insert_user(&pool, "Alice", "alice").await;
     let bob = insert_user(&pool, "Bob", "bob").await;
@@ -371,6 +425,7 @@ async fn select_related_many_populates_both_fks() {
 /// With two FKs resolved, serde emits both as objects.
 #[tokio::test]
 async fn select_related_many_both_serialise_as_objects() {
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let alice = insert_user(&pool, "Alice", "alice").await;
     let bob = insert_user(&pool, "Bob", "bob").await;
@@ -467,6 +522,7 @@ async fn select_related_fetch_populates_all_rows() {
 /// an extra round-trip. The result is the same as the awaited accessor's.
 #[tokio::test]
 async fn resolve_returns_cached_row_after_select_related() {
+    let _g = query_lock().await;
     let pool = fresh_pool().await;
     let user = insert_user(&pool, "Charlie", "charlie").await;
     let _ = insert_post(&pool, "cached", user.id, user.id).await;
@@ -483,4 +539,62 @@ async fn resolve_returns_cached_row_after_select_related() {
 
     assert_eq!(via_resolve.id, via_accessor.id);
     assert_eq!(via_resolve.username, "charlie");
+}
+
+// =========================================================================
+// A related row with a datetime column — the bench-rig regression
+// =========================================================================
+
+/// `select_related` must hydrate a related model that has a `DateTime<Utc>`
+/// field. It did not: the prefetch decodes each related row to
+/// `serde_json::Value` through a blind try-everything cascade
+/// (`row_to_json`), which cannot represent a timestamp — so the JSON carried
+/// a shape the model's `Deserialize` rejects, `from_value` failed, and the
+/// macro's `if let Ok(...)` dropped the hydration in silence. The visible
+/// symptom on the bench app was fallback author names (`user_4538`) on
+/// Postgres while the naive path resolved the real ones.
+///
+/// Regression shape: whatever the decode produces must round-trip through
+/// the model's own `Deserialize` — same contract `FromRow` obeys.
+#[tokio::test]
+async fn select_related_hydrates_a_related_model_with_a_datetime_column() {
+    let _g = query_lock().await;
+    let pool = fresh_pool().await;
+
+    let joined = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+        .expect("parse fixture timestamp")
+        .with_timezone(&chrono::Utc);
+    let member = sqlx::query_as::<sqlx::Sqlite, Member>(
+        "INSERT INTO sr_member (username, joined_at)
+         VALUES (?, ?) RETURNING id, username, joined_at",
+    )
+    .bind("ada")
+    .bind(joined)
+    .fetch_one(&pool)
+    .await
+    .expect("insert member");
+    sqlx::query("INSERT INTO sr_note (body, member) VALUES (?, ?)")
+        .bind("hello")
+        .bind(member.id)
+        .execute(&pool)
+        .await
+        .expect("insert note");
+
+    let note = Note::objects()
+        .on(&pool)
+        .select_related("member")
+        .get()
+        .await
+        .expect("get note");
+
+    let resolved = note.member.__resolved().expect(
+        "select_related must hydrate a related row containing a datetime column; \
+         None here means the row→JSON decode dropped a column and the typed \
+         deserialize failed (hydrate_fk swallows that error by design)",
+    );
+    assert_eq!(resolved.username, "ada");
+    assert_eq!(
+        resolved.joined_at, joined,
+        "the hydrated timestamp must survive the JSON round trip exactly"
+    );
 }
