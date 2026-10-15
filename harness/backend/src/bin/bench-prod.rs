@@ -23,7 +23,7 @@ use umbral::prelude::*;
 use umbral_auth::AuthPlugin;
 use umbral_health::HealthPlugin;
 use umbral_security::SecurityPlugin;
-use umbral_sessions::SessionsPlugin;
+use umbral_sessions::{CachedDbStore, SessionsPlugin};
 
 use umbral_bench::models::BenchPlugin;
 use umbral_bench::{prod_handlers, seed};
@@ -102,9 +102,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // already in `umbral_migrations` as applied-but-missing and refuses
         // to boot.
         .plugin(BenchPlugin)
-        // Real plugins only. `SessionsPlugin::default()` is `DbStore` — a real
-        // session read per authenticated request, which is the honest cost.
-        .plugin(SessionsPlugin::default())
+        // Sessions: `CachedDbStore` = the real `DbStore` behind an in-process
+        // read cache with signal-driven invalidation (every ORM-mediated
+        // write to the session table revokes the key; the TTL bounds what
+        // signals cannot see). This is the statement-level cycle's target:
+        // the session read was one statement per authenticated request —
+        // 13.6% of all server-side statement time — and a cache hit issues
+        // zero. Semantics are unchanged: a logout, a rotation, an admin
+        // revocation all reach the cache through `post_save:session` /
+        // `post_delete:session`, covered by the plugin's own tests.
+        .plugin(SessionsPlugin::default().store(CachedDbStore::default()))
         .plugin(SecurityPlugin::new().csrf_exempt(["/api"]))
         .plugin(AuthPlugin::new().with_default_routes())
         .plugin(HealthPlugin::default())
