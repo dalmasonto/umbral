@@ -58,7 +58,10 @@ pub use cookie_store::CookieStore;
 #[cfg(feature = "redis")]
 pub use redis_store::RedisStore;
 pub use request_session::{RequestSession, current, current_mut};
-pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
+pub use store::{
+    CachedDbStore, DbStore, SessionCacheConfig, SessionRecord, SessionStore, active_store,
+    install_store,
+};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
