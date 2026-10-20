@@ -267,8 +267,11 @@ It is filled in Task 3; this step only makes the crate compile.
 - [ ] **Step 4: Move `main.rs` to `src/bin/bench-instrumented.rs`**
 
 ```bash
+mkdir -p harness/backend/src/bin
 git mv harness/backend/src/main.rs harness/backend/src/bin/bench-instrumented.rs
 ```
+
+(`git mv` requires the destination directory to exist.)
 
 Then edit `src/bin/bench-instrumented.rs`: **delete** its `mod` declarations (the library now owns them) and replace each `crate::` path with `umbral_bench::`. Specifically delete lines 28–35 (`mod api; mod lab; ... mod views;`) and change the `use crate::{...}` block at lines 44–48 to `use umbral_bench::{...}`.
 
@@ -317,11 +320,14 @@ Expected: builds clean. Fix any unresolved `crate::` paths the same way as Step 
 - [ ] **Step 8: Verify against the golden captures**
 
 ```bash
-./target/release/umbral-bench-instrumented serve &
+UMBRAL_BENCH_USERS=50 UMBRAL_BENCH_POSTS_PER_USER=3 UMBRAL_BENCH_LIKES_PER_USER=2 \
+  ./target/release/umbral-bench-instrumented serve &
 sleep 20
-../../harness/bench/golden/capture.sh 8113 harness/bench/golden/after-task2
-diff -r harness/bench/golden/before harness/bench/golden/after-task2 && echo "NO BEHAVIOUR CHANGE"
+../bench/golden/capture.sh 8113 ../bench/golden/after-task2
+diff -r ../bench/golden/before ../bench/golden/after-task2 && echo "NO BEHAVIOUR CHANGE"
 ```
+
+Run from `harness/backend`, and **with the same seed env Task 1 captured against**, against the same `bench.db`. A different dataset changes the response bodies, and the gate then fails for a reason that has nothing to do with your refactor. (Both facts are recorded in `harness/bench/golden/README.md`.)
 
 Expected: `NO BEHAVIOUR CHANGE`. Any diff is an unintended change — fix it, do not update the golden.
 
@@ -491,11 +497,14 @@ Expected: clean build, all tests pass. Warnings about unused imports mean a left
 - [ ] **Step 7: Verify against the golden captures**
 
 ```bash
-./target/release/umbral-bench-instrumented serve &
+UMBRAL_BENCH_USERS=50 UMBRAL_BENCH_POSTS_PER_USER=3 UMBRAL_BENCH_LIKES_PER_USER=2 \
+  ./target/release/umbral-bench-instrumented serve &
 sleep 20
-./bench/golden/capture.sh 8113 harness/bench/golden/after-task3
-diff -r harness/bench/golden/before harness/bench/golden/after-task3 && echo "NO BEHAVIOUR CHANGE"
+../bench/golden/capture.sh 8113 ../bench/golden/after-task3
+diff -r ../bench/golden/before ../bench/golden/after-task3 && echo "NO BEHAVIOUR CHANGE"
 ```
+
+Run from `harness/backend`, with the same seed env as Task 1 and Task 2, against the same `bench.db` — see `harness/bench/golden/README.md`.
 
 Expected: `NO BEHAVIOUR CHANGE`. This is the gate that proves the extraction preserved both the response bodies and the `Server-Timing` metric names the diagnostic tool depends on.
 
@@ -550,7 +559,7 @@ use umbral_health::HealthPlugin;
 use umbral_security::SecurityPlugin;
 use umbral_sessions::SessionsPlugin;
 
-use umbral_bench::{prod_handlers, seed, views};
+use umbral_bench::{prod_handlers, seed};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -581,9 +590,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .templates_dir("templates")
         .routes(
             Routes::new()
-                .get("/", views::feed_page)
-                .get("/u/{id}", views::profile_page)
-                .get("/posts/{id}", views::post_page)
+                .get("/", prod_handlers::feed_page)
+                .get("/u/{id}", prod_handlers::profile_page)
+                .get("/posts/{id}", prod_handlers::post_page)
                 .get("/api/ping", prod_handlers::ping)
                 .get("/api/feed", prod_handlers::feed)
                 .get("/api/feed-naive", prod_handlers::feed_naive)
@@ -600,7 +609,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 ```
 
-**One thing you must verify rather than assume:** `Settings` must expose a mutable `bind_addr` field for the override above to compile, and `views::*` must not reference `BenchUser` or `Trace`. Run `grep -n 'pub bind_addr' crates/umbral-core/src/settings.rs` and `grep -n 'BenchUser\|Trace' harness/backend/src/views.rs`. If `bind_addr` is not directly mutable, set the bind through whatever env var `Settings::from_env` reads instead. If `views.rs` does reference `BenchUser` or `Trace`, report it before proceeding — that is a coupling the spec did not anticipate and it needs a decision, not a workaround.
+**One thing you must verify rather than assume:** `Settings` must expose a mutable `bind_addr` field for the override above to compile. Run `grep -n 'pub bind_addr' crates/umbral-core/src/settings.rs`. If it is not directly mutable, set the bind through whatever env var `Settings::from_env` reads instead.
+
+The `views.rs` coupling this step originally asked you to check is **already resolved — do not treat it as a blocker and do not re-open it.** `views.rs`'s three page handlers do take `Extension<Trace>`, and Step 2b is the answer: `bench-prod` gets its own page handlers over `domain`'s page functions. A `Trace` reference in `views.rs` is expected and correct; it is why `bench-prod` cannot mount `views::*` directly.
 
 - [ ] **Step 2: Write the prod handlers**
 
@@ -682,6 +693,27 @@ pub async fn follow_user(
 }
 ```
 
+**The `domain` surface changed during Task 3's fix round — use these names, not the ones earlier text implies.** The read paths were re-cut at a query/assemble seam so each half gets its own measurement window in the instrumented binary. What exists now:
+
+| Old shape | Current shape |
+|---|---|
+| `recent_posts(limit)` + `engage_counts(&ids)` + `feed_payload(...)` | `recent_posts(limit)` + `engage_rows(&ids)` + `feed_payload(&posts, &rows, kind)` |
+| `naive_feed_payload(limit)` | `naive_feed_query(limit)` + `naive_feed_payload(...)` |
+| `profile_payload(user_id)` | `profile_query(user_id)` + `profile_payload(...)` |
+| inline `q.limit.unwrap_or(25).clamp(1, 100) as u64` | `feed_limit(&q.limit)` |
+
+Read `harness/backend/src/domain.rs` for the exact current signatures rather than trusting this table — it is a map, not the territory, and it was written from the fix report.
+
+`feed_limit` matters for parity: it is the one place the default-and-clamp lives, so both binaries agree on `/api/feed?limit=0` and `?limit=999`. Call it; do not re-inline the expression.
+
+**The self-follow guard is not in `domain` — reproduce it here.** `domain::follow_user(user_id, target_id)` performs no `user_id == target_id` check; the guard deliberately lives in the handler (before the timer starts) to preserve stamp ordering. If `bench-prod` omits it, it returns `200 {"created":true}` where `bench-instrumented` returns `400`. Copy the guard exactly as the instrumented handler has it.
+
+- [ ] **Step 2b: Add the prod page handlers**
+
+The instrumented binary's page handlers in `src/views.rs` take `Extension<Trace>` and therefore cannot be mounted here — a missing axum extension is a runtime 500 on every HTML route, not a compile error. Task 3 therefore split each page's data-gathering into `domain`; `views.rs` keeps only rendering. `bench-prod` gets its own thin page handlers.
+
+For each of `feed_page`, `profile_page` and `post_page`, write a `prod_handlers` function that calls the corresponding `domain::*_page_query` / `domain::*_page_payload` pair and renders the same template with the same context as `views.rs` does. **Open `src/views.rs` and mirror its context construction exactly** — the template expects the same keys, and a missing key renders as an empty section rather than an error, so a mismatch would be silent. The golden gate covers `/`, `/u/1` and `/posts/1`, so a body difference fails loudly once Task 4's verification runs — but the gate compares the *instrumented* binary against its own past, not prod against instrumented. **Before committing, diff prod's rendered output against the instrumented binary's for all three pages** and confirm they match.
+
 **The extractor is `OptionalIdentity`** — verified, not guessed. `plugins/umbral-auth/src/auth_routes.rs:911-939` uses it on `/api/auth/me` to resolve an identity session-first and then from a bearer token, which is exactly what this app needs: a browser sends `umbral_session`, and an API client could send `Authorization: Bearer`. It filters on `is_active = true`.
 
 Confirm its accessor before wiring, since the exact method name is not asserted here:
@@ -742,10 +774,29 @@ done
 
 Expected: `404` for all three. Any `200` means a bench control surface was mounted into the measured app.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Clear Task 2's disclosed leftovers**
+
+Task 2 renamed the binary but deliberately deferred three loose ends. They belong here, because this task owns the new binary and the widening gap between the two.
+
+**7a. Two runtime-rendered strings still name the old command.** `harness/backend/src/loadgen.rs:435` (the run-start error message) and `harness/backend/templates/feed.html:18` (the empty-feed page) both say `cargo run -- serve`, which now fails with cargo's "could not determine which binary to run". Update them to name `umbral-bench-instrumented` explicitly.
+
+Both branches are unreachable against a seeded database, so the golden gate does not pin them and this edit cannot cause a false `after` failure — but do not regenerate `golden/before`.
+
+**7b. Delete the stale pre-rename binary.**
 
 ```bash
-git add harness/backend/src/bin/bench-prod.rs harness/backend/src/prod_handlers.rs
+rm -f harness/backend/target/release/umbral-bench
+```
+
+Goodbye to ~44 MB of pre-refactor code that cargo will never clean and that is now one tab-completion away from being run by accident. This is a build artifact, not a database — the "never delete" constraint does not apply to it.
+
+**7c. Do NOT delete `harness/backend/target/release/umbral-bench-instrumented`** — it is the binary the golden gate runs against.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add harness/backend/src/bin/bench-prod.rs harness/backend/src/prod_handlers.rs \
+        harness/backend/src/loadgen.rs harness/backend/templates/feed.html
 git commit -m "feat(bench): add bench-prod, the measured application"
 ```
 
@@ -968,19 +1019,62 @@ RUN apt-get update \
 WORKDIR /app
 COPY target/release/umbral-bench-prod /app/umbral-bench-prod
 COPY templates /app/templates
+COPY migrations /app/migrations
 
 # Data lives on a bind mount so the SQLite file is on the host's NVMe and not
 # on overlayfs (which copy-up's on every write).
 VOLUME ["/data"]
 
-ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db" \
-    UMBRAL_BIND="0.0.0.0:8114" \
+# `migrations/` MUST be copied, and its absence is not a harmless omission.
+# The migration engine reads a missing migrations directory as "every applied
+# migration is missing" and fails boot with
+# `DriftDetected { missing: [("bench","0001_auto"), ...] }` — a startup failure
+# that looks like a schema problem and is actually a missing COPY. Task 4 hit
+# exactly this drift from a different cause (no plugin registered to own the
+# bench migrations) and it cost a diagnosis cycle there.
+
+# Two of these are REQUIRED and were not in the first draft of this plan. Both
+# were found the hard way — each produces a boot failure that reads as something
+# else entirely — so do not "tidy" them away:
+#
+#   `?mode=rwc` — sqlx opens a file-backed SQLite URL read-only unless told to
+#   create (`crates/umbral-core/src/db.rs:714-720`; `settings.rs:41-44` documents
+#   it). `bench/data/` is empty by design, so this container is always the cold
+#   start that creates the file. Without it, boot dies in `connect()` with
+#   `SqliteError { code: 14, "unable to open database file" }`.
+#
+#   `UMBRAL_SECRET_KEY` — `Environment`'s default is build-dependent
+#   (`settings.rs:630-642`): a DEBUG build defaults to `Dev`, a RELEASE build to
+#   `Prod`. This image runs a release binary with no `umbral.toml`, so it is
+#   `Prod`, and in `Prod` the framework refuses to boot while `secret_key` is the
+#   built-in dev default. The value is a FIXTURE for a loopback-only container,
+#   not a deployment secret, and it is fixed **on purpose** — a per-boot random
+#   key would invalidate every session whenever the container is recreated, and
+#   Task 9's pool must survive that.
+#
+# `UMBRAL_BIND` is this binary's own knob, not the framework's (which is
+# `UMBRAL_BIND_ADDR`, `settings.rs:190,445`). `bench-prod.rs:73-80` implements it
+# because a near-miss name lands silently in `#[serde(flatten)] extra` with no
+# error and no warning. It is bound to **loopback**, not `0.0.0.0`: k6 runs on the
+# same host and reaches loopback directly, so listening on every interface buys
+# nothing and would expose a container carrying a committed key to whatever
+# network the laptop is on.
+ENV UMBRAL_DATABASE_URL="sqlite:///data/bench-run.db?mode=rwc" \
+    UMBRAL_BIND="127.0.0.1:8114" \
+    UMBRAL_SECRET_KEY="bench-silo-fixture-key-not-for-deployment-0001" \
     RUST_LOG="warn"
 
 EXPOSE 8114
 ENTRYPOINT ["/app/umbral-bench-prod"]
 CMD ["serve"]
 ```
+
+**⚠️ The silo runs `Prod`; every host-side run so far ran `Dev`.** `harness/backend/umbral.toml:10` sets `environment = "Dev"` and is *not* copied into the image, so Tasks 4 and 5's host verification exercised a different environment from the one this container serves. That difference is material and was confirmed rather than assumed: in `Dev`, `dev_mode_active()` rebuilds the minijinja environment from disk on **every render** (`crates/umbral-core/src/templates.rs:1090-1099`) — a dev-only cost on exactly the HTML-weighted paths the workload exercises — and the prod host-guard, prod error pages and the HSTS/CSP posture apply only in the silo.
+
+The container deliberately stays `Prod`. Forcing `Dev` to make the two agree would inflate the page-path numbers with a cost no real deployment pays, which is the opposite of what this rig is for. **Two consequences to carry forward:**
+
+- **No host number is comparable to a silo number.** A figure measured against a host-side binary, in any task, is not a smaller or larger version of the silo's — it is a different measurement. Task 9 must not mix them, and neither may any later comparison.
+- **The baseline must not claim "real security headers" without naming what is off.** `bench-prod.rs` mounts `SecurityPlugin::new().csrf_exempt(["/api"])` with no `.with_hsts(true)` and no CSP, so the framework emits two warnings per boot in `Prod`. They are correct — the framework is telling the truth — but the baseline write-up must say HSTS and CSP are disabled rather than implying the full production posture was measured.
 
 - [ ] **Step 3: Write the .dockerignore**
 
@@ -1096,15 +1190,26 @@ case "${1:-serve}" in
 esac
 ```
 
+**The committed `run.sh` is authoritative and is a good deal more than this sketch.** It was hardened during implementation and review in ways worth knowing before you read it, so treat the block above as the shape and the file as the truth:
+
+- `verify` **asserts** rather than prints — it accumulates failures and exits 1, and it checks both what was requested and what took effect (deriving the CPU cap from whichever form Docker stored, and reading the container's own `memory.max`/`memory.swap.max`).
+- `serve` fails fast and informatively: it prints status, exit code, `OOMKilled` and the last 40 log lines, and its readiness loop exits as soon as the container is gone rather than waiting out the timeout.
+- It refuses a bare `UMBRAL_DATABASE_URL` in `-e`, which Docker would otherwise treat as a variable *name* rather than a value.
+- It refuses a cold start unless `BENCH_ALLOW_COLD_START` is set, for the reason in Step 5.
+
 - [ ] **Step 5: Build and boot the silo**
 
 ```bash
 chmod +x harness/bench/run.sh
 harness/bench/run.sh build
-harness/bench/run.sh serve
+BENCH_ALLOW_COLD_START=1 harness/bench/run.sh serve
 ```
 
+**The flag is required on this first boot, and only on a cold one.** `run.sh` refuses to start against a missing `bench/data/bench-run.db` unless the operator opts in explicitly, because `?mode=rwc` means a mistyped database path would otherwise create a silent empty database rather than failing — and a hold run against an empty database produces a number that is wrong in a way nothing in the output reveals. A fresh silo's first boot *is* legitimately cold, so it opts in; every later boot against an existing database needs no flag, and passing it then is a warning worth reading.
+
 Expected: image builds, container starts, `ready on 8114`.
+
+**This is also the project's first cold start, and it is the only one.** `bench/data/` is empty, so the container boots against a fresh `sqlite:///data/bench-run.db` and `auto_migrate_on_serve()` has to create the whole schema from the copied `migrations/`. Task 4's prod binary was only ever booted against the *already-seeded* `bench.db`, so the cross-plugin ordering that a fresh schema depends on — derived from FK edges rather than declared — is sound on paper but unexercised until this step. If boot fails, read the log; a `DriftDetected` here means the `migrations/` COPY is missing, and any other failure is a real ordering bug worth reporting rather than working around.
 
 - [ ] **Step 6: Verify the envelope is real**
 
@@ -1189,7 +1294,7 @@ Create `harness/bench/k6/lib.js` so warm-up, hold and saturation cannot drift ap
 // feed with occasional engagement writes), extended with an HTML page so the
 // template-render path is exercised — a dimension the challenge has none of.
 import http from "k6/http";
-import { check } from "k6";
+import { check, sleep } from "k6";
 import { Trend } from "k6/metrics";
 
 export const BASE = __ENV.BASE || "http://127.0.0.1:8114";
@@ -1221,8 +1326,6 @@ function think(minMs, maxMs) {
   if (hi <= 0) return;
   sleep((lo + Math.random() * (hi - lo)) / 1000);
 }
-
-import { sleep } from "k6";
 
 function jar(session) {
   // Every VU is pinned to one pooled session, so its requests are a single
@@ -1390,18 +1493,48 @@ git commit -m "feat(bench): k6 warm-up and 5-minute hold, with the mix in one pl
 
 `harness/bench/results/record.sh` takes the k6 summary path, the VU count, the dataset scale, and the exit code, and writes one JSON with every fact needed to judge whether the number means anything: git sha, binary name, container limits and cpuset (read from `docker inspect`), the host's load average at start, `ulimit -n`, peak thermal-zone temperature during the run, whether throttling was observed, `OOMKilled`, whether a WAL checkpoint stall was seen, the session max-age, the pass/fail verdict, and the mix parameters. It must refuse to write a result if `run.sh verify`'s cpuset does not match the expected value — a result from an unverified envelope is not a result.
 
+**The exit code is not a boolean, and treating it as one will misattribute failures.** Task 7's review found the contract incomplete and it matters here, because this script is what turns an exit code into a recorded verdict:
+
+| Exit | Meaning | What it is *not* |
+|---|---|---|
+| `0` | Thresholds held — the hold passed | |
+| `99` | A threshold failed: latency or error rate. **This is a real load result.** | |
+| `107` | The script aborted in `setup()`/preflight — a **rig-configuration** failure (wrong id ranges, a pool that does not match the served database) | **Not a server failure.** Recording it as one would blame umbral for a typo'd `-e USERS=`. |
+
+Anything else is an unclassified failure and must be recorded as such rather than folded into either bucket. A `107` in particular must be distinguishable in the result file from a `99`, because the first says "fix the rig" and the second says "umbral hit its limit" — and they will be read weeks apart by someone who was not here.
+
+**Also record whether the run's `check` results actually held.** Task 7's scripts record `check` outcomes but nothing thresholds them, so a run where `page 200` or `post 200` never passes can still exit `0` on the latency thresholds alone. The per-check counts do reach the summary export, so read them out and record them; do not infer a clean run from the exit code alone.
+
 - [ ] **Step 2: Write the comparator**
 
 `compare.sh` diffs two result files and exits non-zero when `rps` moves by more than 10% in either direction or `p99` by more than 20%, and refuses outright when `dataset_scale`, `cpuset`, or `mix` differ. It prints a one-line verdict per metric.
 
 - [ ] **Step 3: Verify the comparator**
 
+Build a synthetic pair first so this step is self-contained (no real run needed yet):
+
 ```bash
-# Same file twice: must be a no-op, exit 0.
-harness/bench/results/compare.sh /tmp/a.json /tmp/a.json; echo "exit=$?"
+mkdir -p /tmp/cmp && cd /tmp/cmp
+cat > a.json <<'JSON'
+{"git_sha":"aaa","rps":1000,"p99_ms":200,"dataset_scale":20000,
+ "cpuset":"0,2,4,6","mix":{"LIKE_P":0.15,"POST_P":0.02,"PAGE_P":0.10}}
+JSON
+cp a.json same.json
+python3 - <<'PY'
+import json
+d = json.load(open("a.json"))
+d["rps"] = 600            # -40%, beyond the 10% regression threshold
+json.dump(d, open("regressed.json", "w"))
+d2 = json.load(open("a.json")); d2["dataset_scale"] = 50000
+json.dump(d2, open("rescaled.json", "w"))
+PY
+
+harness/bench/results/compare.sh a.json same.json ; echo "identical -> exit=$? (expect 0)"
+harness/bench/results/compare.sh a.json regressed.json; echo "regressed -> exit=$? (expect non-zero, names rps)"
+harness/bench/results/compare.sh a.json rescaled.json; echo "rescaled  -> exit=$? (expect non-zero, refuses)"
 ```
 
-Expected: `exit=0`, "no change". Then hand-edit a copy's `rps` down 30% and confirm it exits non-zero and names `rps`.
+(Adjust the field names in the heredocs to whatever `record.sh` actually writes — the point is that all three behaviours are exercised.)
 
 - [ ] **Step 4: Commit**
 
@@ -1423,25 +1556,88 @@ This is the deliverable: three scored holds at one VU count, reported with varia
 - Consumes: everything above.
 - Produces: three result JSONs and a written baseline.
 
-- [ ] **Step 1: Bring the dataset to scale**
+- [ ] **Step 1: Bring the dataset to scale — in a scratch file, NOT in `bench.db`**
 
 Per spec §2a: 20,000 users for development, 50,000 for any number that gets quoted. Pick one and record it — `compare.sh` will refuse to diff across scales.
 
+**⚠️ Do not seed `harness/backend/bench.db`.** That file is the **golden gate's fixture**: Task 1 captured `golden/before` against it at 50 users / 150 posts, and Tasks 2 and 3 were verified by replaying that capture against it. Growing it to 20,000 users would silently invalidate the gate for every future task, and the failure would look like a behaviour change rather than a dataset change. The earlier plan said to seed it; that was wrong and this is the correction.
+
+Seed a **scratch copy** instead, then hand that to the silo:
+
 ```bash
 cd harness/backend
-UMBRAL_BENCH_USERS=20000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=4 \
-  ./target/release/umbral-bench-prod migrate
-# Seeding is resumable and never wipes: re-running tops up.
+SEED=/tmp/umbral-bench-seed/bench-seed.db
+mkdir -p "$(dirname "$SEED")"
+cp bench.db "$SEED"          # start from the gate fixture; this copy is disposable
+
+# Seeding is resumable and never wipes, so re-running tops up rather than resets.
+# `UMBRAL_BIND` is REQUIRED here: the default is 8114, which the silo already
+# holds, so without it this host-side seeder cannot bind and the step fails.
+UMBRAL_BIND=127.0.0.1:8199 \
+UMBRAL_DATABASE_URL="sqlite:///$SEED?mode=rwc" \
 UMBRAL_BENCH_USERS=20000 UMBRAL_BENCH_POSTS_PER_USER=10 UMBRAL_BENCH_LIKES_PER_USER=4 \
   ./target/release/umbral-bench-prod serve &
-# wait for "seed complete", then Ctrl-C / kill the host-side process
+# wait for "[bench-seed] done:" in its output, then stop the host-side process
 ```
 
-Then move the seeded file into the silo's data directory so the container uses it:
+Confirm the scale before going further — a hold whose id ranges describe more rows than exist returns `404`s for a fraction of its reads, and a `404` is not a failure any threshold catches:
 
 ```bash
-cp harness/backend/bench.db harness/bench/data/bench-run.db
+python3 -c "
+import sqlite3
+c = sqlite3.connect('file:$SEED?mode=ro', uri=True)
+for t in ('auth_user','post','like','follow'):
+    print(t, c.execute('select count(*) from \\\"%s\\\"' % t).fetchone()[0])
+"
 ```
+
+Expected: `auth_user` ≈ 20,000 and `post` ≈ 200,000. Those two numbers are `SCALE` and `POSTS` for every k6 command in Steps 2–4.
+
+Then hand the seeded file to the silo:
+
+```bash
+cp "$SEED" harness/bench/data/bench-run.db
+```
+
+**`harness/backend/bench.db` must be byte-identical afterwards**, because this is the one step in the whole plan that could quietly break the gate. Check it with a **hash**, not with git:
+
+```bash
+sha256sum harness/backend/bench.db    # expect 4e46744f7d39...af260, unchanged
+```
+
+**A `git status --short` check here is vacuous and must not be relied on.** `bench.db` is gitignored (`harness/.gitignore:8`), so git would stay silent even if the file had been rewritten — the check would pass on exactly the failure it exists to catch. The same is true of the `-shm`/`-wal` sidecars that appear beside it whenever something opens it in WAL mode: their presence is harmless, their content is not part of the fixture, and neither is visible to git.
+
+**Then create the pool users inside the silo's database, and build the pool from it.** Both halves are mandatory, they happen in this order, and this is the step most likely to be skipped.
+
+Sessions and users live in the same SQLite file as the dataset, so **anything built against one file is meaningless against another.** There are two independent ways to get this wrong and each produces `401`s on every authenticated request in the hold:
+
+- **The users may not exist in the served database at all.** `seed_session_pool` is *not* wired into `seed::all` — it runs only via the `seed-sessions` command. Task 5 built its pool against a scratch copy precisely so that seeding 200 users would not move the routes the golden gate pins, which means the silo's database has no `bench_N` users yet. Log in against it and all 200 attempts return `401`.
+- **The session rows must land in the served file.** Cookies minted anywhere else name rows that file does not contain.
+
+Everything below therefore runs *inside* the container (port 8114 is the silo; `/data/bench-run.db` is the file it serves):
+
+```bash
+harness/bench/run.sh serve
+
+# 1. Create the pool users in the served database.
+docker exec umbral-bench /app/umbral-bench-prod seed-sessions
+
+# 2. Mint the sessions against the same database.
+harness/bench/seed-sessions.sh 8114 200
+```
+
+Do **not** run `seed-sessions` on the host: with no database override it targets `harness/backend/bench.db` — the fixture this whole arrangement exists to keep untouched — while the pool build then talks to the silo. That mismatch is the second bullet above.
+
+Confirm both halves before continuing:
+
+```bash
+COOKIE=$(python3 -c 'import json; print(json.load(open("harness/bench/session_pool.json"))[0])')
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8114/api/posts \
+  -H "cookie: umbral_session=$COOKIE" \
+  -H 'content-type: application/json' -d '{"body":"pool matches the silo DB"}'
+```
+
+Expected `201` (or `200`). A `401` means the users, the sessions, and the served database disagree — fix it, do not proceed. Every authenticated request in the hold depends on this.
 
 **Never delete an existing bench database to "get a clean run"** — the resume logic tops up, and a wipe destroys the rows that make the seed meaningful. If the shape needs to change, change the scale parameters and let it top up.
 
@@ -1450,21 +1646,68 @@ cp harness/backend/bench.db harness/bench/data/bench-run.db
 ```bash
 harness/bench/run.sh build && harness/bench/run.sh serve
 harness/bench/run.sh verify          # envelope MUST match before proceeding
+```
+
+**Wait for the seed to settle, not just for the server to answer.** `run.sh`'s readiness probe hits `/api/ping`, but boot also runs the seed top-up, and on a 20,000-user dataset that can still be running when the probe passes. A hold started then measures the seed's writes competing with the workload — a number that is wrong in a way nothing in the output would reveal. Wait for the seed's own completion line instead:
+
+```bash
+until docker logs umbral-bench 2>&1 | grep -q '\[bench-seed\] done:'; do
+  sleep 5
+done
+echo "seed settled"
+```
+
+Then run the warm-up:
+
+```bash
+SCALE=20000            # MUST equal UMBRAL_BENCH_USERS from Step 1
+POSTS=$((SCALE * 10))
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   harness/bench/k6/warmup.js
 ```
+
+The warm-up needs the id ranges for the same reason the holds do — `preflight()` checks them against the served dataset and **aborts** rather than letting a wrongly-scaled run proceed. `SCALE` is defined here and reused by Steps 3 and 4, so all four runs describe the same dataset.
 
 - [ ] **Step 3: Run the first hold**
 
 Pick a starting VU count. The challenge starts its search at 2,500; do the same so the first data point is comparable.
 
 ```bash
+SCALE=20000          # MUST equal UMBRAL_BENCH_USERS from Step 1
+POSTS=$((SCALE * 10))  # MUST equal the seeded posts per user multiplier
+
+# Start the thermal sampler BEFORE the hold and stop it WHEN K6 EXITS. The
+# bracket is the whole point: it is the only way the result can carry the run's
+# actual peak temperature. Skip it and the recorder still works, but it says so
+# in the result — it falls back to a window sampled at record time, which
+# describes whatever the machine was doing then, not what the run did. That
+# matters here because this is the step whose whole purpose is a spread small
+# enough to trust, and heat-soak is the leading explanation when it is not.
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
+SAMPLER=$!
+
 taskset -c 8,9,10,11 ~/.local/bin/k6 run \
   -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
   --summary-export=/tmp/hold-1.json \
-  harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
+  harness/bench/k6/hold.js
+K6_EXIT=$?                        # capture IMMEDIATELY — see the note below
+
+kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
+
+harness/bench/results/record.sh /tmp/hold-1.json 2500 "$SCALE" "$K6_EXIT"
 ```
+
+**`K6_EXIT=$?` must be the very next statement after k6.** `$?` is clobbered by whatever runs next: written as a one-liner chained with `; echo "exit=$?"` and then followed by the sampler's `kill`/`wait`, the value handed to `record.sh` is **not** k6's.
+
+**The failure is quieter than it looks, and that is the whole danger.** The sampler traps `TERM INT` and exits 0 by design, so `wait "$SAMPLER"` returns **0** — meaning the brief's literal snippet would have produced files indistinguishable from correct ones. What it would actually do is file **a run that exited 99 or 107 as `exit.class: "passed"`**, which is the exact field `compare.sh` keys on. A genuine threshold failure or a preflight abort would be recorded as a pass, and the recorder's own cross-check warnings would be the only hint. A first implementation of this brief hit this; it was caught by noticing the results were suspiciously uniform, not by anything failing loudly.
+
+**Start the sampler *after* the cooldown, not before it.** If the machine is already hot when sampling opens, the recorded peak includes heat this run did not generate — the recorder detects that case and warns (`the sampler's window opened at N C`), but the warning means the number is contaminated. Its first reading is also where the run's starting load average comes from, which is what makes a busy machine visible in the result.
+
+**`taskset -c 12` is not optional.** The sampler reads sysfs in a loop and forks about nine processes per tick; measured, that is roughly **0.22 s of CPU per 5 s of wall time — some 4% of one core**, constant for the life of the hold. Unpinned, the scheduler is free to place it on cores 0, 2, 4, or 6, which are exactly the four the container owns and the four being measured. That would be a constant tax on the measured envelope in service of a tool that exists to explain the measured envelope. Core 12 is an E-core outside the container's set, so the sampler runs for free as far as the number is concerned.
+
+**`USERS` and `POSTS` are not optional and they must match the dataset.** k6 picks random ids to read (`/u/{id}`, `/posts/{id}`), so if they describe a *larger* dataset than was seeded, a fraction of reads return `404` — and `404` is not an error the thresholds catch, because `http_req_failed` counts transport and non-2xx failures by k6's rules while a `404` on a read simply returns a body nobody checks. The result is a hold that looks clean and is silently reading nothing for half its requests. `lib.js` defaults `USERS` to 50,000; the plan seeds 20,000, so the default is wrong here and must be overridden. Task 7's preflight catches the mismatch in about a second if you get it wrong — do not disable it.
 
 - [ ] **Step 4: Cool down, then repeat twice**
 
@@ -1472,13 +1715,23 @@ harness/bench/results/record.sh /tmp/hold-1.json 2500 20000 $?
 
 ```bash
 sleep 180
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
+SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
-  --summary-export=/tmp/hold-2.json harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-2.json 2500 20000 $?
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
+  --summary-export=/tmp/hold-2.json harness/bench/k6/hold.js
+K6_EXIT=$?
+kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
+harness/bench/results/record.sh /tmp/hold-2.json 2500 "$SCALE" "$K6_EXIT"
 sleep 180
+taskset -c 12 harness/bench/results/record.sh --thermal-sample &
+SAMPLER=$!
 taskset -c 8,9,10,11 ~/.local/bin/k6 run -e BASE=http://127.0.0.1:8114 -e VUS=2500 \
-  --summary-export=/tmp/hold-3.json harness/bench/k6/hold.js; echo "exit=$?"
-harness/bench/results/record.sh /tmp/hold-3.json 2500 20000 $?
+  -e USERS="$SCALE" -e POSTS="$POSTS" \
+  --summary-export=/tmp/hold-3.json harness/bench/k6/hold.js
+K6_EXIT=$?
+kill "$SAMPLER"; wait "$SAMPLER" 2>/dev/null
+harness/bench/results/record.sh /tmp/hold-3.json 2500 "$SCALE" "$K6_EXIT"
 ```
 
 - [ ] **Step 5: Report the spread, not the mean**
@@ -1498,6 +1751,58 @@ git commit -m "docs(bench): first trustworthy baseline"
 
 ---
 
+## Task 9b — The Postgres baseline
+
+Task 9 measures SQLite, where the database is in-process and costs the app nothing but its own CPU. This task measures the other half: the same application, the same workload, the same VUs, against **Postgres in a sibling container**. It exists because "how fast is umbral" has two answers and only one of them was going to be measured, and because the ORM's Postgres path is the one the framework actually recommends.
+
+The spec parked this deliberately — "a Postgres variant needs a second container, which changes the resource envelope, so it is a separate exercise" — and this is that exercise. It must not be run as a variant of Task 9; it is its own baseline with its own envelope.
+
+### The envelope, and why it is what it is
+
+| | SQLite run (Task 9) | Postgres run (this task) |
+|---|---|---|
+| App cpuset | `0,2,4,6` | `0,2,4,6` |
+| App memory | 4 GB, no swap | 4 GB, no swap |
+| Database | in-process, same envelope | sibling container, `--cpuset-cpus=0,2,4,6 --memory=1g` |
+| Database port | — | **55432** (host-native Postgres owns 5432/5434) |
+| Database storage | SQLite file on NVMe | Postgres data dir on NVMe |
+| Postgres settings | — | **stock defaults, deliberately** |
+
+**The database shares the app's cpuset rather than getting its own.** Giving Postgres the other sixteen threads would hand it more CPU than the application under measurement — which flatters every database-bound path and makes the result uninterpretable. Pinning both to `0,2,4,6` reproduces the reference deployment shape (one box, everything on it) and keeps the total CPU available to the pair equal to the SQLite run's.
+
+**Stock Postgres settings, not tuned ones.** `shared_buffers` and friends stay at their defaults because tuning them would mean measuring this rig's configuration expertise rather than the framework. If Postgres's defaults turn out to be the binding constraint, that is a *finding* — a real one, and one a framework claiming Postgres-first should care about. Tuning is a separate change, made deliberately and recorded as such.
+
+### Two rules that keep this honest
+
+1. **The two baselines are not directly comparable, and every report must say so.** SQLite's database is a function call in the measured process; Postgres's is a network round trip to another container. Neither is "better" — they are different architectures, and the only meaningful comparisons are SQLite-vs-SQLite and Postgres-vs-Postgres across code changes. `compare.sh` refuses to diff across `dataset_scale`, cpuset and mix; **the backend must be added to that refusal list** before this task runs, or the first careless diff will produce a number that looks like a 10× regression.
+2. **Both backends get the same workload, dataset shape, VUs and cooldowns.** The mix lives in one place precisely so this cannot drift.
+
+### Steps
+
+- [ ] **Step 1: Add the backend to `compare.sh`'s refusal set**
+
+`record.sh` already captures the backend (Task 9's results carry it). `compare.sh` must refuse when two results name different backends, exactly as it refuses differing `dataset_scale`. Without this, the Postgres result's first comparison against the SQLite one reads as a catastrophic regression.
+
+- [ ] **Step 2: Bring up Postgres, pinned and documented**
+
+A sibling container on host networking, `-c port=55432`, `--cpuset-cpus=0,2,4,6 --memory=1g`, data on a bind mount under `harness/bench/data/pg`. Verify before trusting it: the port is not the host's 5432/5434, the cpuset matches, and the app can reach it.
+
+- [ ] **Step 3: Seed it, at the same scale as Task 9**
+
+Same row counts — 20,000 users / 200,000 posts — so `USERS` and `POSTS` stay identical across both baselines. Migrate via the app against the Postgres URL rather than hand-writing schema; the migrations are the framework's contract and this is a chance to exercise them on the backend they were designed for.
+
+- [ ] **Step 4: Rebuild the session pool against the Postgres database**
+
+Same rule as Task 9 and for the same reason: sessions live in the served database, so a pool built against SQLite names rows Postgres does not have and every authenticated request returns `401`.
+
+- [ ] **Step 5: The same three holds, the same cooldowns, the same sampler bracket**
+
+`SCALE` and `POSTS` identical to Task 9, `VUS=2500`, three 5-minute holds, 2–3 minute cooldowns, `taskset -c 12` sampler around each. Warm up first; wait for `[bench-seed] done:`.
+
+- [ ] **Step 6: Report**
+
+The three runs' individual RPS / p95 / p99 / error rate / exit class / thermal peak, the spread, whether the thresholds held, and both envelopes. State plainly that this is not comparable to Task 9's number.
+
 ## Phase 2 — The boundaries
 
 ### Task 10: `search.sh` — the limit search
@@ -1514,6 +1819,14 @@ git commit -m "docs(bench): first trustworthy baseline"
 Per spec's resolved decision #3: start at 2,500, double until a hold fails, narrow to within 250, and **cap the doubling range at 40,000 VUs**. Enforce the 2–3 minute cooldown between every hold. Record every hold's result, including the failures.
 
 When the cap is reached without a failure, report the result as a **floor**, not a discovered maximum — the true breaking point is unknown and the summary must say so.
+
+**⚠️ The host cannot open 40,000 connections, so the cap is above a ceiling you cannot see and cannot raise from here.** `net.ipv4.ip_local_port_range` is `32768 60999` — **28,232 ephemeral ports**, and k6 holds roughly one connection per active VU. Above that, connections fail to *open*, which in a k6 summary is indistinguishable from the server refusing load: the search would report a client-side port exhaustion as umbral's ceiling. This is exactly the defect that was just fixed for file descriptors (the container was silently capped at 1,024 VUs by Docker's default `nofile`), and it is the same shape: a limit that belongs to the machine, discovered as a mysterious wall.
+
+It is not fixable by a `ulimit`, and `run.sh verify` cannot detect it — widening `ip_local_port_range` is a host sysctl and therefore the **operator's** call, not the rig's. So:
+
+- **Before the search**, check `sysctl net.ipv4.ip_local_port_range` and record the usable port count in the search summary.
+- **Treat that count as a hard cap on the search**, below the plan's 40,000. If a hold fails anywhere near it, that is a client-side artifact: say so in the summary rather than reporting a discovered maximum.
+- **Ask the operator before changing the sysctl.** They may prefer to keep the machine as-is and record a floor, which is a perfectly good answer — a documented "at least N" is worth more than a "maximum" that belongs to the network stack.
 
 - [ ] **Step 2: Verify the search logic without paying for it**
 
@@ -1534,7 +1847,9 @@ git commit -m "feat(bench): limit search with a 40k VU cap"
 
 ### Task 11: `saturation.js` — the RPS ceiling
 
-The VU score and "can it do 25,000 RPS" are different questions. The challenge-shaped workload is sleep-dominated (roughly `RPS ≈ VUs × 0.106`), so it can never answer the second one.
+The VU score and "can it do 25,000 RPS" are different questions. The workload is sleep-dominated — **0.394 req/s per VU** at the ratified mix (`2.17 req/iter ÷ 5.5 s think`), so 2,500 VUs offer ≈986 RPS and the Task 9 baseline's 865 RPS is **99% of what the load asked for, not a ceiling**. That is why this task exists: the hold test cannot answer "how much can it do", because at these VU counts it is measuring the workload's think time rather than the framework.
+
+(An earlier draft of this plan said `RPS ≈ VUs × 0.106`. That figure belongs to the *reference challenge's* script, which sleeps three times per iteration — roughly 20 s per 2.17 requests. Our mix sleeps once. The two are not interchangeable, and the measured baseline settles it: 865/2500 = 0.346 req/s/VU against a 0.394 offer.)
 
 **Files:**
 - Create: `harness/bench/k6/saturation.js`
@@ -1568,6 +1883,91 @@ git commit -m "feat(bench): saturation test for the RPS ceiling"
 ```
 
 ---
+
+## Task 9c — The session-store comparison
+
+Every authenticated request performs a session read. `SessionsPlugin::default()` uses `DbStore`, so on SQLite that read is an **in-process file lookup**, and on Postgres it is a **network round trip to the database**. This task measures what changes when that read is served from a fast key-value store instead.
+
+**The framework already supports it; nothing needs building.** `umbral-sessions` ships `RedisStore` (`plugins/umbral-sessions/src/redis_store.rs:149`, `impl SessionStore for RedisStore`) with `RedisStore::connect(url)` and `RedisStore::from_env()`, gated behind the crate's non-default `redis` feature and covered by its own tests. `umbral-cache` separately ships a `RedisBackend`. So this is a **configuration and measurement** task, not a feature task — which also means it cannot hide a framework change behind a benchmark result.
+
+Harness-side work is three small things: enable `umbral-sessions/redis` in `harness/backend/Cargo.toml`, run a Redis container, and mount `SessionsPlugin::default().store(RedisStore::connect(url).await?)` in `bench-prod` behind an env switch so both arms come from one binary.
+
+### Why this runs *after* the Postgres baseline
+
+**The prediction is that Redis helps Postgres and hurts SQLite, and that prediction is only testable with both.** On SQLite the current store is an in-process lookup — roughly a function call plus a file read on a page-cached file. A Redis GET is a **localhost TCP round trip**, which is plausibly *more* expensive than the thing it replaces. On Postgres the current store is a network query against a general-purpose RDBMS, and a purpose-built KV store is exactly where a session read should live.
+
+If that holds, the result is not "caching is faster" but "**caching moves the cost, and which way depends on where your database already is**" — a more useful finding, and one nobody can get from a single-backend measurement. **State the prediction before measuring**, so the result can falsify it rather than being rationalised after the fact.
+
+### The three arms
+
+| Arm | Store | What it costs per authenticated request |
+|---|---|---|
+| A | `DbStore` (current default) | one indexed lookup in the app's own database |
+| B | `RedisStore` | one localhost TCP round trip to Redis |
+| C | **`CookieStore`** | **nothing** — the session lives in the signed cookie |
+
+**Arm C is included deliberately and is the most interesting one.** It needs no container at all: the record travels in the cookie and no store is consulted. It is also what the *previous* harness chose, and the spec's locked decision #3 overrode it in favour of `DbStore` as "the honest default a developer gets". Measuring it settles a question that decision left open — **how much is that default costing?** — without reopening the decision, because the default stays `DbStore` either way.
+
+Arm C has a real cost of its own that the number will not show: the session payload travels on every request, the cookie is capped around 4 KB, and revocation stops working. The report must say so rather than presenting C as a free win.
+
+### Rules
+
+- **Same workload, VUs, dataset, envelope and cooldowns as Task 9**, one variable changed. The Redis container is pinned to the app's cpuset like Postgres is, for the same reason.
+- **Report per backend.** Four numbers, not one: SQLite × {DbStore, RedisStore}, Postgres × {DbStore, RedisStore} — plus arm C on at least the backend where it matters most. Never average across backends.
+- **The sensitivity rule from Task 9 applies.** These arms differ in per-request cost, and at this operating point throughput is pinned by think time, so **p95/p99 is the primary signal** and RPS is a regression guard.
+- **Revert to the default afterwards.** The operator's instruction is to measure caching and then continue without it; the point is a finding, not a new default. `bench-prod` keeps `DbStore` unless a later cycle argues otherwise on evidence.
+
+## Phase 3 — The optimization loop
+
+Phase 3 has no task list, by design: its shape depends on what the baselines say, and a spec written before the measurements would be a guess with a plan attached. What it *does* have is a fixed rhythm, set by the operator, so that a long series of changes stays legible as a series rather than becoming an undifferentiated churn.
+
+**One change per cycle. Two or three holds per cycle. A report per cycle. Then the next.**
+
+### Cycle 0 — the migration-validation fixes (correctness, before the Postgres baseline)
+
+Not a performance cycle. It is here because the rig found it, it blocks a baseline, and the failure mode is worse than any performance bug this plan will chase.
+
+**What happened.** Task 9b could not boot the app on Postgres. `harness/backend/migrations/bench/0001_auto.json` carries two `unique_together` groups naming columns that do not exist — `["follower_id","following_id"]` and `["user_id","post_id"]`, where the real columns are `follower`/`following` and `user`/`post`. Postgres rejects it (`42703`, `ComputeIndexAttrs`) and the process exits before binding.
+
+**SQLite does not reject it, and that is the bug.** The engine renders `CREATE UNIQUE INDEX "uniq_follow_follower_id_following_id" ON "follow" ("follower_id","following_id")`, and SQLite's long-standing misfeature reads an unknown *double-quoted* token as a **string literal**. So it builds a unique index over the constants `'follower_id'` and `'following_id'` — a constant key, meaning at most one row can ever satisfy it — and reports success.
+
+**So Postgres is the backend reporting the bug, not the one causing it.** A fresh SQLite build of this app produces a **corrupt index and no error**; every existing SQLite database in the repo is clean only because it was built before the file was damaged. That damage is the `umbra→umbral` rename rewriting snapshots — the failure the project's own notes already warn the engine cannot self-heal.
+
+**The two fixes.**
+
+1. **Validate index columns before rendering.** `Operation::CreateIndex`/`AddIndex` (`crates/umbral-core/src/migrate.rs:974-1005`) must check that every named column exists on the target table and **fail loudly** if one does not. This is the fix that matters most: it converts a silent corruption into an error on the backend that currently lies.
+2. **Validate `unique_together` against real fields at generation time**, so `makemigrations` refuses a group naming a nonexistent column rather than writing it into a file that will later apply differently on different backends.
+
+Both are logged as **`gaps7 #176`**; this cycle closes that entry rather than adding a third instance of it.
+
+**Constraints.**
+
+- **Fix, don't patch.** A validation error is the fix. A `#[allow]`, a warning-only path, or an SQLite-specific special case is not — the whole finding is that one backend silently disagrees with the other, so a fix that preserves that disagreement has fixed nothing.
+- **The error must name the table, the column, and the migration file** — the person hitting it will be holding a generated file they did not write by hand, and "unknown column" alone sends them looking at the wrong layer.
+- **Tests must demonstrate both halves:** a valid `unique_together` still applies on SQLite and Postgres, and an invalid one **errors on both**. A test that only shows the error leaves the success path unproven.
+- **This changes `crates/`, so it changes the measured binary.** The SQLite baseline's binary sha will no longer match. That is expected and is the first Phase 3 result: after the fix, **re-run the SQLite baseline and confirm the number is unchanged.** A validation fix that touches no hot path *should* be a null result, and a null result here is what proves the fix was genuinely behaviour-preserving. Report it as a result, not as a formality.
+
+### The cycle
+
+1. **Pick one change**, and only one. If a change needs a second change to be correct, that is one change.
+2. **Justify it from a measurement, not a guess.** Every cycle opens with *where the time is going* — the instrumented binary's layer ledger for the same workload — and names the bucket the change targets. A change nobody can point at a bucket for does not get a cycle.
+3. **Run two or three holds** at the established VU count, on the backend the change targets, with the cooldowns and the sampler bracket. Two if they agree closely, three if they do not.
+4. **Compare, and report the spread.** `compare.sh` against the previous result for the same backend. A change that improves RPS by less than the run-to-run spread has not been demonstrated to do anything — say that rather than claiming the win.
+5. **Report to TaskFlow** — a markdown file attached to a message, the message describing what it is.
+6. **Next cycle.**
+
+### The rules that keep the series honest
+
+- **No `unsafe`.** Spec locked decision #8. An optimization requiring it is out of scope, not deferred, and the ceiling it imposes is reported with its measured cost.
+- **No removing work the application has to do.** Security headers, CSRF, sessions, real authentication, real durable writes — all stay in the measured path. A change that only wins by deleting them is the exact failure this rig exists to catch.
+- **One variable at a time.** If two things change in a cycle, a move in the number cannot be attributed and the cycle is wasted.
+- **A null result is a result.** "This change did nothing measurable" is worth reporting, and worth more than a re-run until it looks like something.
+- **The baselines are the fixed points.** SQLite numbers compare to SQLite, Postgres to Postgres. Never across backends.
+- **Each cycle leaves the branch working.** `cargo fmt`, `clippy --all-targets`, `build`, `test` across the workspace before each commit — the verification Task 9's `db.rs` commit deliberately deferred because a build would have landed on the cores being measured, and which must not be deferred again.
+
+### Where to look first
+
+Not yet known — but the standing hypothesis, recorded in `project_bench_harness` from the v1 rig's one large run, is that **the database bucket dominates by orders of magnitude while middleware is nearly free** (14.9 s average against 0.2 ms). That run was untrustworthy for every other reason, but the *shape* is the first thing the diagnostic should confirm or kill, because it points the entire effort at how the ORM awaits SQLite rather than at the middleware chain that looks like the overhead.
 
 ## Self-Review
 

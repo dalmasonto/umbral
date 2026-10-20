@@ -1,0 +1,9 @@
+# Local, machine-specific artefacts of the results store. `harness/.gitignore`
+# already ignores the result JSONs (`bench/results/*.json`); these two would
+# otherwise show up as untracked files, and an untracked file makes every
+# recording carry the `git_dirty` warning for no reason.
+#
+#   .thermal-sample.tsv — the pre-run thermal/load trace (record.sh --thermal-sample)
+#   .record.*           — the recorder's temp file, only left behind by a crash
+.thermal-sample.tsv
+.record.*

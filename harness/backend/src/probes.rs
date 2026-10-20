@@ -34,9 +34,7 @@ use umbral::migrate::ModelMeta;
 use umbral::plugin::Plugin;
 use umbral::web::{Request, Response, Router};
 
-use crate::telemetry::{
-    Trace, register_span, unregister_span,
-};
+use crate::telemetry::{Trace, register_span, unregister_span};
 
 pub const PROBE_INNER: &str = "probe:sessions-inner";
 pub const PROBE_AFTER_SESSIONS: &str = "probe:after-sessions";

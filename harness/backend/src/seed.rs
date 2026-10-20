@@ -6,7 +6,7 @@
 //!
 //! ```bash
 //! UMBRAL_BENCH_USERS=50000 UMBRAL_BENCH_POSTS_PER_USER=10 \
-//! UMBRAL_BENCH_LIKES_PER_USER=25 cargo run -- serve   # 50k users / 500k posts
+//! UMBRAL_BENCH_LIKES_PER_USER=25 cargo run --bin umbral-bench-instrumented -- serve   # 50k users / 500k posts
 //! ```
 //!
 //! Defaults are modest (2k users / 20k posts) so a first boot is quick; set
@@ -79,16 +79,47 @@ impl Rng {
     }
 }
 
-/// Placeholder password hash for bench users. They never log in (scenarios
-/// authenticate via `x-bench-user`), so hashing 2,000+ users through argon2
-/// (~100 ms CPU each) would only make the seed slow for no measurement value.
-const PLACEHOLDER_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$YmVuY2hiZW5jaGJlbmNo$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA";
+/// Placeholder password hash for the dataset users. Most of them never log in
+/// (the instrumented binary's scenarios authenticate via `x-bench-user`), so
+/// hashing every one of them through argon2 (~17 ms CPU each — measured
+/// 2026-10-14: 10,000 users in 168 s) would only make the seed slow for no
+/// measurement value. The exception is deliberate: the
+/// session pool draws its logins from these same rows — [`seed_session_pool`]
+/// gives the first `BENCH_SESSION_POOL_SIZE` of them a real hash — so the
+/// dataset is one user table, not two. The constant doubles as the marker that
+/// seeder keys on: a row still holding it has never carried a real password.
+const PLACEHOLDER_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$YmVuY2hiZW5jaGJlbmNo$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA";
 
 const WORDS: &[&str] = &[
     "shipping", "rumor", "sunset", "drift", "pixel", "kernel", "harbor", "cobalt", "timber",
     "signal", "meadow", "atlas", "quartz", "ember", "violet", "canyon", "orbit", "linen",
 ];
+
+/// The one timestamp format the bench writes. Fixed-width and UTC, so SQLite's
+/// TEXT comparison matches chronological order (the feed's `ORDER BY
+/// created_at DESC` depends on this). Change this and the ordering tests catch
+/// it.
+///
+/// Note *where* the text comes from: `created_at` is a typed `DateTime<Utc>`,
+/// so the bytes SQLite ends up holding are rendered by the ORM's encoder, not
+/// by this string. What `fmt_ts` fixes is the resolution every seeded instant
+/// is reduced to — millisecond, in UTC — which is what makes every seeded row
+/// the same textual shape. `seed_ts` is the round trip that keeps this the
+/// single definition of that shape.
+fn fmt_ts(t: DateTime<Utc>) -> String {
+    t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// The instant the seed actually writes for `t`: `t` reduced to the resolution
+/// `fmt_ts` can express. Round-tripping through the one formatter is what
+/// makes every `created_at` in this file come from the same definition, and
+/// what makes a seeded table's timestamps identical in shape rather than
+/// merely identical in semantics.
+fn seed_ts(t: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(&fmt_ts(t))
+        .expect("fmt_ts always renders a parseable RFC 3339 instant")
+        .with_timezone(&Utc)
+}
 
 fn body(rng: &mut Rng) -> String {
     format!(
@@ -149,7 +180,10 @@ async fn ensure_users(
         .filter(|i| !existing.contains(&format!("bench_user_{i}")))
         .count();
     if missing == 0 {
-        eprintln!("[bench-seed] users present; reusing {} users.", existing.len());
+        eprintln!(
+            "[bench-seed] users present; reusing {} users.",
+            existing.len()
+        );
     } else {
         eprintln!("[bench-seed] inserting {missing} users…");
         let mut chunk: Vec<AuthUser> = Vec::with_capacity(500);
@@ -171,7 +205,9 @@ async fn ensure_users(
                 email_verified_at: None,
             });
             if chunk.len() == 500 {
-                AuthUser::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                AuthUser::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if !chunk.is_empty() {
@@ -219,10 +255,12 @@ async fn ensure_posts(
                 id: 0,
                 author: ForeignKey::new(u),
                 body: body(rng),
-                created_at: now - ChronoDuration::minutes(age_min),
+                created_at: seed_ts(now - ChronoDuration::minutes(age_min)),
             });
             if chunk.len() == 500 {
-                Post::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Post::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if !chunk.is_empty() {
@@ -270,16 +308,21 @@ async fn ensure_follows(
                     id: 0,
                     follower: ForeignKey::new(*u),
                     following: ForeignKey::new(target),
-                    created_at: now - ChronoDuration::days(rng.below(400)),
+                    created_at: seed_ts(now - ChronoDuration::days(rng.below(400))),
                 });
                 made += 1;
             }
             if chunk.len() == 500 {
-                Follow::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Follow::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if i > 0 && i % 5000 == 0 {
-            eprintln!("[bench-seed] follows: scanned {i}/{} users…", user_ids.len());
+            eprintln!(
+                "[bench-seed] follows: scanned {i}/{} users…",
+                user_ids.len()
+            );
         }
     }
     if !chunk.is_empty() {
@@ -317,12 +360,14 @@ async fn ensure_likes(
                     id: 0,
                     user: ForeignKey::new(*u),
                     post: ForeignKey::new(p),
-                    created_at: now - ChronoDuration::hours(rng.below(24 * 30)),
+                    created_at: seed_ts(now - ChronoDuration::hours(rng.below(24 * 30))),
                 });
                 made += 1;
             }
             if chunk.len() == 500 {
-                Like::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Like::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
         if i > 0 && i % 5000 == 0 {
@@ -369,10 +414,12 @@ async fn ensure_comments(
                 post: ForeignKey::new(*p),
                 author: ForeignKey::new(user_ids[rng.below(user_ids.len() as i64) as usize]),
                 body: body(rng),
-                created_at: now - ChronoDuration::hours(rng.below(24 * 30)),
+                created_at: seed_ts(now - ChronoDuration::hours(rng.below(24 * 30))),
             });
             if chunk.len() == 500 {
-                Comment::objects().bulk_create(std::mem::take(&mut chunk)).await?;
+                Comment::objects()
+                    .bulk_create(std::mem::take(&mut chunk))
+                    .await?;
             }
         }
     }
@@ -380,4 +427,198 @@ async fn ensure_comments(
         Comment::objects().bulk_create(chunk).await?;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The session pool — one pooled session per VU, drawn from the dataset users
+// ---------------------------------------------------------------------------
+
+/// Default size of the pooled-login set: the first
+/// `bench_user_1..=bench_user_N` dataset users — by default the WHOLE dataset
+/// (20,000), so every user is eligible to be active.
+///
+/// The pool is not sized to one run's VU count. `bench/seed-sessions.sh`
+/// shuffles the minted sessions, so the VUs active in a run (2,500 → 7,500 of
+/// the ramp) are a random sample of the user base rather than always the same
+/// low ids — the session working set and last-seen write set spread across
+/// the dataset the way real traffic spreads them. One VU is still one client:
+/// `k6/lib.js` refuses to start a run whose pool is smaller than its VU count.
+pub const DEFAULT_SESSION_POOL_SIZE: i64 = 20_000;
+
+/// The password every pooled user is seeded with. The pool builder script
+/// reads the same default from `BENCH_PASSWORD`, so the two cannot drift when
+/// neither sets it.
+pub const DEFAULT_POOL_PASSWORD: &str = "bench-password-123";
+
+/// How many pooled users to seed, and with which password.
+pub struct SessionPoolConfig {
+    pub size: i64,
+    pub password: String,
+}
+
+impl SessionPoolConfig {
+    pub fn from_env() -> Result<Self, String> {
+        let size = match std::env::var("BENCH_SESSION_POOL_SIZE") {
+            Ok(v) => v.parse::<i64>().map_err(|_| {
+                format!(
+                    "[bench-pool] BENCH_SESSION_POOL_SIZE='{v}' is not an integer, so the pool \
+                     size is not knowable. Refusing to fall back to the {DEFAULT_SESSION_POOL_SIZE} \
+                     default: a typo'd size must not silently select a different pool, because the \
+                     pool size is recorded in every result and compared across runs."
+                )
+            })?,
+            Err(_) => DEFAULT_SESSION_POOL_SIZE,
+        };
+        Ok(SessionPoolConfig {
+            size,
+            password: std::env::var("BENCH_PASSWORD")
+                .unwrap_or_else(|_| DEFAULT_POOL_PASSWORD.to_string()),
+        })
+    }
+}
+
+/// Give the first `cfg.size` DATASET users (`bench_user_1..=bench_user_N`) the
+/// pool password, so `bench/seed-sessions.sh` can log each of them in and mint
+/// one session cookie per user.
+///
+/// These are the dataset's own rows — the same users the workload already
+/// draws its random ids from — not a parallel user namespace. Nothing is
+/// created and nothing is deleted: `auth_user` keeps its row count and its id
+/// range, and the only column this writes is `password_hash` (the update
+/// `set_password` issues patches exactly that one field). That is what makes a
+/// pool covering the whole dataset affordable: a second set of N users would
+/// grow the dataset by N rows for every pool size the ramp asks for.
+///
+/// Idempotent by construction, and **non-destructive**: a row still carrying
+/// the dataset's [`PLACEHOLDER_HASH`] gets the password set; a row that already
+/// carries a real hash is verified against the password and left untouched when
+/// it matches. Both of those are argon2 operations at ~17–18 ms CPU each
+/// (measured 2026-10-14: 10,000 re-verifies in 168 s on SQLite, 10,000 sets in
+/// 179 s on Postgres), so a re-run over N rows costs about the same wall clock
+/// as the first pass — verification is as expensive as hashing, confirmed to
+/// within 6%. The run prints its own wall clock.
+///
+/// A missing `bench_user_i` is a hard error, never a skip: it means the pool is
+/// sized past the dataset (`BENCH_SESSION_POOL_SIZE` > the seeded user count),
+/// and carrying on would leave part of the load with logins that 401 — which
+/// reads as the server rejecting writes, not as a rig misconfiguration.
+pub async fn seed_session_pool(
+    cfg: &SessionPoolConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if cfg.size < 1 {
+        return Err(format!(
+            "[bench-pool] BENCH_SESSION_POOL_SIZE={} is not a positive size.",
+            cfg.size
+        )
+        .into());
+    }
+    let started = std::time::Instant::now();
+    eprintln!(
+        "[bench-pool] ensuring the first {} dataset users (bench_user_1..bench_user_{}) can log in…",
+        cfg.size, cfg.size
+    );
+    let mut set = 0usize;
+    let mut rotated = 0usize;
+    let mut unchanged = 0usize;
+
+    for i in 1..=cfg.size {
+        let username = format!("bench_user_{i}");
+        let existing: Option<AuthUser> = AuthUser::objects()
+            .filter(auth_user::USERNAME.eq(username.as_str()))
+            .first()
+            .await?;
+
+        let Some(mut user) = existing else {
+            return Err(format!(
+                "[bench-pool] {username} does not exist: the pool is sized \
+                 BENCH_SESSION_POOL_SIZE={} but the dataset is smaller. The pool is \
+                 drawn from the dataset's own rows on purpose — it adds no rows — so \
+                 seed the dataset first (the served binary tops it up on boot) or size \
+                 the pool within it.",
+                cfg.size
+            )
+            .into());
+        };
+
+        // The placeholder branch is more than an optimisation: verifying the
+        // password against the placeholder hash costs a full argon2 operation
+        // and returns false, and `set_password` then hashes the same password
+        // again — two argon2 ops per row where one will do. Recognising the
+        // placeholder collapses a first pass to exactly one hash per user.
+        if user.password_hash == PLACEHOLDER_HASH {
+            umbral_auth::set_password(&mut user, &cfg.password).await?;
+            println!("{username} id={} password set", user.id);
+            set += 1;
+        } else if umbral_auth::verify_password_async(&cfg.password, &user.password_hash).await? {
+            println!("{username} id={} unchanged", user.id);
+            unchanged += 1;
+        } else {
+            umbral_auth::set_password(&mut user, &cfg.password).await?;
+            println!("{username} id={} password rotated", user.id);
+            rotated += 1;
+        }
+    }
+
+    // The password itself is deliberately not echoed: the default is public,
+    // but an operator who overrode BENCH_PASSWORD did so on purpose, and a
+    // credential that reaches stderr reaches every log that captures it.
+    let secs = started.elapsed().as_secs_f64();
+    eprintln!(
+        "[bench-pool] done: {set} set, {rotated} rotated, {unchanged} unchanged, in \
+         {secs:.1}s ({:.0} ms/user).",
+        secs * 1000.0 / cfg.size as f64
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeded_timestamps_sort_lexicographically() {
+        // Earlier instants must compare less-than later ones as strings.
+        let a = "2026-01-01T00:00:00.000Z";
+        let b = "2026-01-01T00:00:00.001Z";
+        let c = "2026-01-01T00:00:01.000Z";
+        let d = "2026-12-31T23:59:59.999Z";
+        let mut v = vec![d, b, a, c];
+        v.sort();
+        assert_eq!(v, vec![a, b, c, d]);
+    }
+
+    #[test]
+    fn seed_emits_the_sortable_format() {
+        // Pin the format the seed actually writes, so a change to it fails here
+        // rather than silently reordering every feed.
+        let now = Utc::now();
+        let s = fmt_ts(now); // the seed's own formatter
+        assert_eq!(s.len(), 24, "expected YYYY-MM-DDTHH:MM:SS.mmmZ, got {s}");
+        assert!(s.ends_with('Z'));
+        assert_eq!(&s[10..11], "T");
+    }
+
+    #[test]
+    fn seed_ts_reduces_instants_to_the_shared_definition() {
+        // `fmt_ts` is what every `created_at` in this file goes through, so
+        // pin what it does to an instant the format cannot hold exactly: the
+        // sub-millisecond part is dropped, never rounded up into the next
+        // millisecond (which would make a seeded row sort after a genuinely
+        // later one).
+        let t = DateTime::parse_from_rfc3339("2026-01-02T03:04:05.999900000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(fmt_ts(seed_ts(t)), "2026-01-02T03:04:05.999Z");
+        assert!(
+            seed_ts(t) <= t,
+            "truncation must never move an instant later"
+        );
+        assert_eq!(t - seed_ts(t), ChronoDuration::nanoseconds(900_000));
+
+        // A whole millisecond is preserved exactly.
+        let exact = DateTime::parse_from_rfc3339("2026-01-02T03:04:05.999Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(seed_ts(exact), exact);
+    }
 }

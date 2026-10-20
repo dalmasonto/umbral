@@ -155,10 +155,11 @@ impl Middleware for RateLimitMiddleware {
                 }
             };
             if !allowed {
-                verdict = Err(
-                    (StatusCode::TOO_MANY_REQUESTS, "rate limited by the bench lab")
-                        .into_response(),
-                );
+                verdict = Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate limited by the bench lab",
+                )
+                    .into_response());
             }
         }
 

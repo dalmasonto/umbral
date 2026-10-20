@@ -336,7 +336,11 @@ pub fn fingerprint(stmt: &str) -> String {
         }
     }
     let out = out.trim_end().to_string();
-    if out.len() > 200 { out[..200].to_string() } else { out }
+    if out.len() > 200 {
+        out[..200].to_string()
+    } else {
+        out
+    }
 }
 
 pub struct BenchLayer;
@@ -345,11 +349,7 @@ impl<S> Layer<S> for BenchLayer
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         if !event.metadata().target().starts_with("sqlx::query") {
             return;
         }
@@ -383,7 +383,10 @@ where
     }
 }
 
-fn span_trace_id<S>(ctx: &tracing_subscriber::layer::Context<'_, S>, event: &tracing::Event<'_>) -> Option<u64>
+fn span_trace_id<S>(
+    ctx: &tracing_subscriber::layer::Context<'_, S>,
+    event: &tracing::Event<'_>,
+) -> Option<u64>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
@@ -619,11 +622,7 @@ impl Buckets {
         let security_us = span(s(se()), s(ss_in())) + span(s(ss_out()), s(sx()));
         let sessions_us = span(s(ss_in()), s(si_in())) + span(s(si_out()), s(ss_out()));
         let trace_wrap_us = span(s(so_in()), s(se())) + span(s(sx()), s(so_out()));
-        let typed_mw_us: f64 = t
-            .mw
-            .iter()
-            .map(|r| (r.before_us + r.after_us) as f64)
-            .sum();
+        let typed_mw_us: f64 = t.mw.iter().map(|r| (r.before_us + r.after_us) as f64).sum();
         let middleware_us = typed_mw_us + security_us + sessions_us + trace_wrap_us;
 
         let routing_us = if t.handler_start_ms > 0.0 {
@@ -644,10 +643,7 @@ impl Buckets {
         let (database_us, query_build_us) = if t.sql.is_empty() {
             (t.handler_db_wall_us as f64, 0.0)
         } else {
-            (
-                sqlx_sum,
-                (t.handler_db_wall_us as f64 - sqlx_sum).max(0.0),
-            )
+            (sqlx_sum, (t.handler_db_wall_us as f64 - sqlx_sum).max(0.0))
         };
         let database_us = database_us.max(0.0);
 
@@ -663,8 +659,7 @@ impl Buckets {
             .max(0.0);
 
         let total_us = total_ms * 1000.0;
-        let tail_us =
-            (total_us - middleware_us - routing_us - handler_total_us).max(0.0);
+        let tail_us = (total_us - middleware_us - routing_us - handler_total_us).max(0.0);
 
         Buckets {
             middleware_us,
@@ -702,7 +697,11 @@ impl Stat {
         self.max_us = self.max_us.max(us);
     }
     fn avg(&self) -> f64 {
-        if self.count == 0 { 0.0 } else { self.sum_us / self.count as f64 }
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum_us / self.count as f64
+        }
     }
 }
 
@@ -781,9 +780,18 @@ fn update_agg(a: &mut Agg, t: &TraceInner, b: &Buckets) {
             .or_default()
             .add((row.before_us + row.after_us) as f64);
     }
-    a.middleware.entry("security (headers+csrf)".into()).or_default().add(b.security_us);
-    a.middleware.entry("sessions".into()).or_default().add(b.sessions_us);
-    a.middleware.entry("bench probe (wrap)".into()).or_default().add(b.trace_wrap_us);
+    a.middleware
+        .entry("security (headers+csrf)".into())
+        .or_default()
+        .add(b.security_us);
+    a.middleware
+        .entry("sessions".into())
+        .or_default()
+        .add(b.sessions_us);
+    a.middleware
+        .entry("bench probe (wrap)".into())
+        .or_default()
+        .add(b.trace_wrap_us);
 
     for (k, v) in [
         ("middleware", b.middleware_us),
@@ -810,7 +818,10 @@ fn record(t: &TraceInner, b: &Buckets) {
         while map.len() > PER_RUN_CAP {
             let oldest = *map.keys().next().expect("non-empty");
             map.remove(&oldest);
-            run_sql().lock().unwrap_or_else(|e| e.into_inner()).remove(&oldest);
+            run_sql()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&oldest);
         }
     }
 
@@ -823,7 +834,11 @@ fn record(t: &TraceInner, b: &Buckets) {
     for (fp, n) in per_fp {
         if n >= N1_THRESHOLD {
             let mut g = global_sql().lock().unwrap_or_else(|e| e.into_inner());
-            if !g.n1.iter().any(|f| f.fingerprint == fp && f.route == t.route) {
+            if !g
+                .n1
+                .iter()
+                .any(|f| f.fingerprint == fp && f.route == t.route)
+            {
                 g.n1.push(N1Flag {
                     route: t.route.clone(),
                     fingerprint: fp.to_string(),
@@ -869,9 +884,7 @@ fn agg_json(a: &Agg) -> serde_json::Value {
             })
         })
         .collect();
-    routes.sort_by(|x, y| {
-        y["count"].as_u64().cmp(&x["count"].as_u64())
-    });
+    routes.sort_by(|x, y| y["count"].as_u64().cmp(&x["count"].as_u64()));
 
     let middleware: Vec<serde_json::Value> = a
         .middleware
@@ -883,18 +896,26 @@ fn agg_json(a: &Agg) -> serde_json::Value {
         })
         .collect();
 
-    let layers: Vec<serde_json::Value> = ["middleware", "routing", "query_build", "database",
-        "serialize", "render", "handler_logic", "tail"]
-        .iter()
-        .map(|k| {
-            let s = a.layers.get(*k);
-            serde_json::json!({
-                "layer": k,
-                "count": s.map(|s| s.count).unwrap_or(0),
-                "avg_us": s.map(|s| s.avg()).unwrap_or(0.0),
-            })
+    let layers: Vec<serde_json::Value> = [
+        "middleware",
+        "routing",
+        "query_build",
+        "database",
+        "serialize",
+        "render",
+        "handler_logic",
+        "tail",
+    ]
+    .iter()
+    .map(|k| {
+        let s = a.layers.get(*k);
+        serde_json::json!({
+            "layer": k,
+            "count": s.map(|s| s.count).unwrap_or(0),
+            "avg_us": s.map(|s| s.avg()).unwrap_or(0.0),
         })
-        .collect();
+    })
+    .collect();
 
     serde_json::json!({
         "backend": crate::loadgen::backend_label(),
@@ -926,10 +947,17 @@ pub fn snapshot() -> serde_json::Value {
         })
         .collect();
     sql.sort_by(|x, y| {
-        y["avg_us"].as_f64().partial_cmp(&x["avg_us"].as_f64()).unwrap()
+        y["avg_us"]
+            .as_f64()
+            .partial_cmp(&x["avg_us"].as_f64())
+            .unwrap()
     });
     sql.truncate(25);
-    let n1 = global_sql().lock().unwrap_or_else(|e| e.into_inner()).n1.clone();
+    let n1 = global_sql()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .n1
+        .clone();
 
     v["sql"] = serde_json::json!(sql);
     v["n1"] = serde_json::json!(n1);
@@ -973,13 +1001,21 @@ pub fn sql_delta(before: &SqlCounters) -> Vec<serde_json::Value> {
             }))
         })
         .collect();
-    out.sort_by(|x, y| y["avg_us"].as_f64().partial_cmp(&x["avg_us"].as_f64()).unwrap());
+    out.sort_by(|x, y| {
+        y["avg_us"]
+            .as_f64()
+            .partial_cmp(&x["avg_us"].as_f64())
+            .unwrap()
+    });
     out.truncate(25);
     out
 }
 
 pub fn store_run_sql(id: u64, rows: Vec<serde_json::Value>) {
-    run_sql().lock().unwrap_or_else(|e| e.into_inner()).insert(id, rows);
+    run_sql()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, rows);
 }
 
 /// The layer profile of ONE run: only requests whose `x-bench-run` header
@@ -1075,7 +1111,10 @@ impl Middleware for TraceRoot {
                 t.sql.len()
             ));
         }
-        st.push_str(&format!(", handler;dur={:.2}", (b.total_us - b.middleware_us - b.routing_us - b.tail_us) / 1000.0));
+        st.push_str(&format!(
+            ", handler;dur={:.2}",
+            (b.total_us - b.middleware_us - b.routing_us - b.tail_us) / 1000.0
+        ));
 
         let line = RequestLine {
             ts: chrono::Utc::now(),
@@ -1125,7 +1164,13 @@ impl Middleware for TraceRoot {
 
 fn slug(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|p| !p.is_empty())
@@ -1247,11 +1292,7 @@ pub fn middleware_inventory() -> serde_json::Value {
     }
     // Wrap-layer rows the typed registry deliberately does not record
     // (see the registry's drift caveat) — measured by the probe seam.
-    for name in [
-        "bench probe (wrap)",
-        "security (headers+csrf)",
-        "sessions",
-    ] {
+    for name in ["bench probe (wrap)", "security (headers+csrf)", "sessions"] {
         out.push(serde_json::json!({
             "name": name, "order": null, "source": "WrapRouter",
         }));
