@@ -45,4 +45,4 @@ let store = CachedDbStore::new(SessionCacheConfig {
 
 ## Design notes
 
-The underlying mechanism and its measurement live in the bench rig: the session read was ~13.6% of all server-side statement time at the baseline operating point, and the cache's contribution was measured as its own cycle (`harness/bench/results/reports/`, 2026-10-15). The signal-side prerequisite — `upsert` emitting `post_save`/`pre_save` — shipped with it: before that, the store's own write path was invisible to every subscriber.
+The underlying mechanism and its measurement live in the bench-rig design spec (`docs/superpowers/specs/2026-10-13-bench-rig-fixed-resource-silo-design.md`): the session read was ~13.6% of all server-side statement time at the baseline operating point, and the cache's contribution was measured as its own cycle on 2026-10-15. The signal-side prerequisite — `upsert` emitting `post_save`/`pre_save` — shipped with it: before that, the store's own write path was invisible to every subscriber.
