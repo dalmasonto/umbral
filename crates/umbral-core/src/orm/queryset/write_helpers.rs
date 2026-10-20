@@ -20,7 +20,7 @@ use crate::orm::Model;
 pub(crate) fn fk_pk_hint(field: &crate::orm::FieldSpec) -> Option<crate::orm::SqlType> {
     field
         .fk_target
-        .and_then(|t| crate::migrate::pk_meta_for_table(t).map(|(_, ty)| ty))
+        .and_then(|t| crate::migrate::pk_meta_ref_for_table(t).map(|(_, ty)| *ty))
 }
 
 /// Reject a non-nullable, non-PK foreign-key column left at the i64-0

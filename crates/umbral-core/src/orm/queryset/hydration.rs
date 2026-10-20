@@ -887,7 +887,7 @@ pub(crate) async fn fetch_related_as_json_by_pk(
     // dynamic ORM, the JOIN hydrator) already goes through it. `None`
     // (registry not up: the registry-less unit tests) keeps the legacy
     // cascade, which is exactly the shape those tests exercise.
-    let meta = crate::migrate::model_meta_for_table(table);
+    let meta = crate::migrate::model_meta_ref_for_table(table);
 
     match pool {
         DbPool::Sqlite(pool) => {
@@ -896,7 +896,7 @@ pub(crate) async fn fetch_related_as_json_by_pk(
                 .fetch_all(pool)
                 .await?;
             rows.iter()
-                .map(|row| prefetch_row_to_json(row, meta.as_ref()))
+                .map(|row| prefetch_row_to_json(row, meta))
                 .collect()
         }
         DbPool::Postgres(pool) => {
@@ -905,7 +905,7 @@ pub(crate) async fn fetch_related_as_json_by_pk(
                 .fetch_all(pool)
                 .await?;
             rows.iter()
-                .map(|row| prefetch_row_to_json_pg(row, meta.as_ref()))
+                .map(|row| prefetch_row_to_json_pg(row, meta))
                 .collect()
         }
     }

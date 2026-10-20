@@ -125,16 +125,21 @@ pub fn is_initialised() -> bool {
 /// gets the real table set), OR when the named table isn't in the
 /// registry (orphan / system / typo).
 pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
+    pk_meta_cache()?.get(table).cloned()
+}
+
+type PkMeta = (String, crate::orm::SqlType);
+
+fn pk_meta_cache() -> Option<&'static std::collections::HashMap<String, PkMeta>> {
     if !is_initialised() {
         // Defer cache init until App::build has populated REGISTRY.
         // The cache MUST NOT memoize an empty map; otherwise
         // post-init callers would see no PK metadata forever.
         return None;
     }
-    static CACHE: std::sync::OnceLock<
-        std::collections::HashMap<String, (String, crate::orm::SqlType)>,
-    > = std::sync::OnceLock::new();
-    let map = CACHE.get_or_init(|| {
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<String, PkMeta>> =
+        std::sync::OnceLock::new();
+    Some(CACHE.get_or_init(|| {
         let mut out = std::collections::HashMap::new();
         for m in registered_models() {
             if let Some(pk) = m.pk_column() {
@@ -142,8 +147,14 @@ pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
             }
         }
         out
-    });
-    map.get(table).cloned()
+    }))
+}
+
+/// Borrowing variant for hot paths (FK type hints during insert building):
+/// same registry and cache as [`pk_meta_for_table`], without cloning the PK
+/// column name on every row.
+pub(crate) fn pk_meta_ref_for_table(table: &str) -> Option<&'static PkMeta> {
+    pk_meta_cache()?.get(table)
 }
 
 /// Cached model lookup by SQL table name.
@@ -153,18 +164,27 @@ pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
 /// which keeps row-by-row dynamic serializers from paying
 /// O(registry-size) per row.
 pub fn model_meta_for_table(table: &str) -> Option<ModelMeta> {
+    model_meta_cache()?.get(table).cloned()
+}
+
+fn model_meta_cache() -> Option<&'static std::collections::HashMap<String, ModelMeta>> {
     if !is_initialised() {
         return None;
     }
     static CACHE: std::sync::OnceLock<std::collections::HashMap<String, ModelMeta>> =
         std::sync::OnceLock::new();
-    let map = CACHE.get_or_init(|| {
+    Some(CACHE.get_or_init(|| {
         registered_models()
             .into_iter()
             .map(|m| (m.table.clone(), m))
             .collect()
-    });
-    map.get(table).cloned()
+    }))
+}
+
+/// Borrowing variant for hot paths (select_related prefetch): same cache as
+/// [`model_meta_for_table`], without cloning every field spec on each query.
+pub(crate) fn model_meta_ref_for_table(table: &str) -> Option<&'static ModelMeta> {
+    model_meta_cache()?.get(table)
 }
 
 /// The SQL type a column's value actually binds / decodes as (PK lift).
@@ -181,8 +201,8 @@ pub fn fk_effective_type(col: &Column) -> crate::orm::SqlType {
     if matches!(col.ty, crate::orm::SqlType::ForeignKey) {
         col.fk_target
             .as_deref()
-            .and_then(pk_meta_for_table)
-            .map(|(_, ty)| ty)
+            .and_then(pk_meta_ref_for_table)
+            .map(|(_, ty)| *ty)
             .unwrap_or(crate::orm::SqlType::BigInt)
     } else {
         col.ty
