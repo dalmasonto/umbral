@@ -179,6 +179,10 @@ pub use post::Post;
 /// surface: `umbral-rest`'s `ResourceConfig::owned_via` (gaps4 #78) is the
 /// intended caller; most application code wants the typed `related` form.
 pub use queryset::relation_filter::build_dynamic_relation;
+// Macro-generated `prefetch_typed` arms call the typed batch fetch; the
+// counter is test-support for proving the fast path ran. Not for direct use.
+#[doc(hidden)]
+pub use queryset::hydration::{__fetch_typed_by_pk, __typed_prefetch_count};
 pub use queryset::{
     GetError, JoinKind, Manager, PrefetchMapQuery, Prefetched, QuerySet, QuerySetTx,
     TryForEachError,
