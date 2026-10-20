@@ -44,6 +44,13 @@ struct Doc {
 
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
+/// Serializes this binary's tests: they share one seeded database, and the
+/// delete test used to remove row 2 while the update test asserted it still
+/// existed (a 404-vs-200 flake, 2026-10-21). The delete test now owns the row
+/// it deletes; the lock also keeps that transient row out of the anonymous
+/// list-count window.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
         let settings = umbral::Settings::from_env().expect("figment defaults");
@@ -141,6 +148,7 @@ async fn req(
 
 #[tokio::test]
 async fn anonymous_list_sees_every_row() {
+    let _g = SERIAL.lock().await;
     let (status, body) = req(Method::GET, "/api/post/", None, None).await;
     assert_eq!(status, StatusCode::OK);
     let results = body
@@ -157,6 +165,7 @@ async fn anonymous_list_sees_every_row() {
 
 #[tokio::test]
 async fn anonymous_retrieve_of_any_row_is_ok() {
+    let _g = SERIAL.lock().await;
     let (own, _) = req(Method::GET, "/api/post/1", None, None).await;
     assert_eq!(own, StatusCode::OK, "anonymous can read alice's post");
     let (other, _) = req(Method::GET, "/api/post/2", None, None).await;
@@ -165,6 +174,7 @@ async fn anonymous_retrieve_of_any_row_is_ok() {
 
 #[tokio::test]
 async fn non_owner_update_is_denied() {
+    let _g = SERIAL.lock().await;
     let (s, _) = req(
         Method::PATCH,
         "/api/post/2",
@@ -185,6 +195,7 @@ async fn non_owner_update_is_denied() {
 
 #[tokio::test]
 async fn owner_update_is_ok() {
+    let _g = SERIAL.lock().await;
     let (s, body) = req(
         Method::PATCH,
         "/api/post/1",
@@ -198,6 +209,7 @@ async fn owner_update_is_ok() {
 
 #[tokio::test]
 async fn anonymous_write_is_denied() {
+    let _g = SERIAL.lock().await;
     let (create, _) = req(
         Method::POST,
         "/api/post/",
@@ -224,9 +236,27 @@ async fn anonymous_write_is_denied() {
 
 #[tokio::test]
 async fn non_owner_delete_is_denied_owner_delete_is_ok() {
-    let (s, _) = req(Method::DELETE, "/api/post/2", Some("alice"), None).await;
+    let _g = SERIAL.lock().await;
+    // This test's OWN row: deleting the shared row 2 made
+    // `non_owner_update_is_denied`'s later read 404 depending on order.
+    let (created, body) = req(
+        Method::POST,
+        "/api/post/",
+        Some("bob"),
+        Some(json!({ "title": "bob-deletable", "author_id": "bob" })),
+    )
+    .await;
+    assert_eq!(
+        created,
+        StatusCode::CREATED,
+        "bob creates his own row: {body}"
+    );
+    let id = body["id"].as_i64().expect("created row id");
+    let uri = format!("/api/post/{id}");
+
+    let (s, _) = req(Method::DELETE, &uri, Some("alice"), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND, "alice must NOT delete bob's post");
-    let (s2, _) = req(Method::DELETE, "/api/post/2", Some("bob"), None).await;
+    let (s2, _) = req(Method::DELETE, &uri, Some("bob"), None).await;
     assert_eq!(s2, StatusCode::NO_CONTENT, "bob may delete his own post");
 }
 
@@ -238,6 +268,7 @@ async fn non_owner_delete_is_denied_owner_delete_is_ok() {
 
 #[tokio::test]
 async fn owned_by_still_scopes_anonymous_reads_to_nothing() {
+    let _g = SERIAL.lock().await;
     // No regression from #79: `.owned_by(...)` alone still means anonymous
     // sees NO rows on list and gets 404 on retrieve — the pre-existing
     // behavior this gap explicitly must not change.
@@ -263,6 +294,7 @@ async fn owned_by_still_scopes_anonymous_reads_to_nothing() {
 
 #[tokio::test]
 async fn owned_by_still_scopes_non_owner_reads() {
+    let _g = SERIAL.lock().await;
     let (detail, _) = req(Method::GET, "/api/doc/2", Some("alice"), None).await;
     assert_eq!(
         detail,
