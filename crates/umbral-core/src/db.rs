@@ -561,7 +561,9 @@ fn is_valid_guc_name(name: &str) -> bool {
 /// installed). `idle_timeout`/`max_lifetime` are only applied when `Some`;
 /// a `None` (env `0`/empty) leaves that recycling disabled.
 pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
-    pg_pool_options().connect_with(pg_connect_options(url)?).await
+    pg_pool_options()
+        .connect_with(pg_connect_options(url)?)
+        .await
 }
 
 /// Postgres connect options with the shared, pool-independent knobs applied.
