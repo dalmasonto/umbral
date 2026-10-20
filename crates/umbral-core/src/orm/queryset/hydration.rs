@@ -1072,15 +1072,34 @@ where
     match pool {
         DbPool::Sqlite(pool) => {
             let (sql, args) = q.build_sqlx(SqliteQueryBuilder);
-            sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, args)
+            // `query_with` + manual `from_row`, NOT `query_as_with`: the
+            // benchmark showed the `QueryAs` fetch path costs ~50 µs more
+            // than the same query + manual decode for 25 rows, while the
+            // decode itself (8.6 µs in-memory vs the metadata decoder's
+            // 28.3 µs) is the fast part.
+            let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, args)
                 .fetch_all(pool)
-                .await
+                .await?;
+            let mut out = Vec::with_capacity(rows.len());
+            for row in &rows {
+                out.push(<T as sqlx::FromRow<'_, sqlx::sqlite::SqliteRow>>::from_row(
+                    row,
+                )?);
+            }
+            Ok(out)
         }
         DbPool::Postgres(pool) => {
             let (sql, args) = q.build_sqlx(PostgresQueryBuilder);
-            sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, args)
+            let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, args)
                 .fetch_all(pool)
-                .await
+                .await?;
+            let mut out = Vec::with_capacity(rows.len());
+            for row in &rows {
+                out.push(<T as sqlx::FromRow<'_, sqlx::postgres::PgRow>>::from_row(
+                    row,
+                )?);
+            }
+            Ok(out)
         }
     }
 }
