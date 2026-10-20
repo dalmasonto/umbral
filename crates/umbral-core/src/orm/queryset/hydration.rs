@@ -79,7 +79,7 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
         // decode. Any relation kind the model doesn't handle (M2M, reverse
         // FK, O2O, or a hand-written model) returns `false` and the JSON
         // path below runs unchanged.
-        if T::prefetch_typed(rows, field_name.as_str(), pool).await? {
+        if typed_prefetch_enabled() && T::prefetch_typed(rows, field_name.as_str(), pool).await? {
             continue;
         }
 
@@ -975,6 +975,26 @@ pub fn __typed_prefetch_count() -> usize {
     TYPED_PREFETCHES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Runtime escape hatch for the typed prefetch: `UMBRAL_TYPED_PREFETCH=0`
+/// (or `false`/`off`) forces the JSON path. Read once, default on.
+///
+/// This exists so a diagnostic can compare the two decode paths in ONE
+/// binary (the old-vs-new harness A/B confounded the typed change with a
+/// rebuild), and so an operator whose FK target's `FromRow` misbehaves has
+/// a switch that does not require a code change. It is not a user-facing
+/// setting.
+fn typed_prefetch_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("UMBRAL_TYPED_PREFETCH")
+            .map(|v| {
+                let v = v.trim();
+                !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
+            })
+            .unwrap_or(true)
+    })
+}
+
 /// Fetch `T` rows by primary key in one typed query, decoding through `T`'s
 /// own `sqlx::FromRow` impl.
 ///
@@ -1000,20 +1020,37 @@ where
     }
     TYPED_PREFETCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    let meta = crate::migrate::ModelMeta::for_::<T>();
-    let pk = meta.pk_column().ok_or_else(|| {
-        sqlx::Error::Protocol(format!(
-            "umbral::orm::prefetch_typed: model `{}` has no primary key",
-            T::NAME
-        ))
-    })?;
+    // Prefer the cached registry meta (no per-prefetch `ModelMeta`
+    // construction); the compile-time meta is the fallback for registry-less
+    // tests, exactly like the JSON path's `target_meta` fallback.
+    let (pk_name, pk_ty, soft_delete) = match crate::migrate::model_meta_ref_for_table(T::TABLE) {
+        Some(meta) => {
+            let pk = meta.pk_column().ok_or_else(|| {
+                sqlx::Error::Protocol(format!(
+                    "umbral::orm::prefetch_typed: model `{}` has no primary key",
+                    T::NAME
+                ))
+            })?;
+            (pk.name.clone(), pk.ty, meta.soft_delete)
+        }
+        None => {
+            let meta = crate::migrate::ModelMeta::for_::<T>();
+            let pk = meta.pk_column().ok_or_else(|| {
+                sqlx::Error::Protocol(format!(
+                    "umbral::orm::prefetch_typed: model `{}` has no primary key",
+                    T::NAME
+                ))
+            })?;
+            (pk.name.clone(), pk.ty, meta.soft_delete)
+        }
+    };
     let mut seavals: Vec<sea_query::Value> = Vec::with_capacity(ids.len());
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for id in ids {
         if id.is_null() || !seen.insert(crate::orm::pk_key(id)) {
             continue;
         }
-        if let Ok(v) = crate::orm::write::json_to_sea_value(pk.ty, id, false, &pk.name, None) {
+        if let Ok(v) = crate::orm::write::json_to_sea_value(pk_ty, id, false, &pk_name, None) {
             seavals.push(v);
         }
     }
@@ -1025,10 +1062,10 @@ where
     q.column(sea_query::Asterisk)
         .from(crate::db::router::schema_qualified_table(T::TABLE))
         .and_where(
-            sea_query::Expr::col(sea_query::Alias::new(&pk.name))
+            sea_query::Expr::col(sea_query::Alias::new(&pk_name))
                 .is_in(seavals.into_iter().map(sea_query::SimpleExpr::Value)),
         );
-    if meta.soft_delete {
+    if soft_delete {
         q.and_where(sea_query::Expr::col(sea_query::Alias::new("deleted_at")).is_null());
     }
 
