@@ -61,6 +61,34 @@ pub trait HydrateRelated {
     /// programming error caught in tests, not a runtime panic.
     fn hydrate_fk(&mut self, field_name: &str, row: &serde_json::Value);
 
+    /// Typed counterpart to the JSON prefetch path: fetch the relation named
+    /// `field_name` for every row in ONE batched typed query and attach the
+    /// resolved rows, decoding each related row through its own
+    /// `sqlx::FromRow` impl instead of `row → JSON → serde`.
+    ///
+    /// Returns `Ok(true)` when it handled the field, `Ok(false)` when the
+    /// caller should fall back to the JSON path — an unknown field, a
+    /// relation kind this model doesn't decode typed, or a hand-written impl
+    /// that leaves this default. The default is `false`, so hand-written
+    /// models keep the existing behaviour.
+    ///
+    /// Batching is unchanged: one `IN (...)` query per field, exactly like
+    /// `fetch_related_as_json_by_pk`. A failed typed decode propagates as an
+    /// `sqlx::Error`; the JSON path's equivalent failure is an error too.
+    ///
+    /// Async via the same boxed-future shape as `write_pending_m2m` so the
+    /// rest of this trait stays non-async.
+    fn prefetch_typed<'a>(
+        _rows: &'a mut [Self],
+        _field_name: &'a str,
+        _pool: &'a crate::db::DbPool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, sqlx::Error>> + Send + 'a>>
+    where
+        Self: Sized,
+    {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Set the `parent_id` cache on every `M2M<U>` field this model
     /// owns. Closes the second BUG-16 gap: without this, `m2m.add(&t)`
     /// silently writes a junction row with `parent_id = 0` because the
