@@ -144,6 +144,37 @@ async fn default_security_headers_are_set() {
     );
 }
 
+/// The header pass keeps `if_not_present` semantics: a handler that set its
+/// own policy wins over the plugin's default. This is what lets an app
+/// override, say, `X-Frame-Options` for one embeddable route without
+/// disabling the plugin globally.
+#[tokio::test]
+async fn handler_set_security_header_wins() {
+    let inner = Router::new().route(
+        "/",
+        get(|| async {
+            let mut response = http::Response::new(Body::from("ok"));
+            response
+                .headers_mut()
+                .insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
+            response
+        }),
+    );
+    let router = SecurityPlugin::new().wrap_router(inner);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        headers.get("x-frame-options"),
+        Some(&HeaderValue::from_static("SAMEORIGIN")),
+        "the handler's value must survive the plugin's if-not-present pass"
+    );
+}
+
 #[tokio::test]
 async fn hsts_header_appears_when_opted_in() {
     let inner = Router::new().route("/", get(|| async { "ok" }));

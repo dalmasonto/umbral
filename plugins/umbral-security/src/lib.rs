@@ -399,40 +399,42 @@ impl Plugin for SecurityPlugin {
             router = router.layer(middleware::from_fn(private_cache_middleware));
         }
 
-        // Response-header setters. Order among them is irrelevant.
-        if cfg.content_type_options {
-            router = set_header(
-                router,
-                "x-content-type-options",
-                Some("nosniff".to_string()),
-            );
-        }
-        router = set_header(router, "x-frame-options", cfg.frame_options.clone());
-        router = set_header(router, "referrer-policy", cfg.referrer_policy.clone());
-        router = set_header(router, "x-xss-protection", cfg.xss_protection.clone());
-        if cfg.hsts {
-            router = set_header(router, "strict-transport-security", Some(cfg.hsts_value()));
-        }
-        router = set_header(
+        // Response headers: precompute the (name, value) pairs once, then
+        // apply them in a single pass per response. The previous shape added
+        // one tower layer per header — ten layer dispatches and ten header-map
+        // walks per request for a static set of values.
+        router = response_header_layer(
             router,
-            "content-security-policy",
-            cfg.content_security_policy.clone(),
-        );
-        router = set_header(router, "permissions-policy", cfg.permissions_policy.clone());
-        router = set_header(
-            router,
-            "cross-origin-opener-policy",
-            cfg.cross_origin_opener_policy.clone(),
-        );
-        router = set_header(
-            router,
-            "cross-origin-resource-policy",
-            cfg.cross_origin_resource_policy.clone(),
-        );
-        router = set_header(
-            router,
-            "cross-origin-embedder-policy",
-            cfg.cross_origin_embedder_policy.clone(),
+            vec![
+                (
+                    "x-content-type-options",
+                    cfg.content_type_options.then(|| "nosniff".to_string()),
+                ),
+                ("x-frame-options", cfg.frame_options.clone()),
+                ("referrer-policy", cfg.referrer_policy.clone()),
+                ("x-xss-protection", cfg.xss_protection.clone()),
+                (
+                    "strict-transport-security",
+                    cfg.hsts.then(|| cfg.hsts_value()),
+                ),
+                (
+                    "content-security-policy",
+                    cfg.content_security_policy.clone(),
+                ),
+                ("permissions-policy", cfg.permissions_policy.clone()),
+                (
+                    "cross-origin-opener-policy",
+                    cfg.cross_origin_opener_policy.clone(),
+                ),
+                (
+                    "cross-origin-resource-policy",
+                    cfg.cross_origin_resource_policy.clone(),
+                ),
+                (
+                    "cross-origin-embedder-policy",
+                    cfg.cross_origin_embedder_policy.clone(),
+                ),
+            ],
         );
 
         // Server identity: an explicit value overrides; otherwise optionally strip.
@@ -494,16 +496,34 @@ impl Plugin for SecurityPlugin {
     }
 }
 
-/// Add a `SetResponseHeaderLayer::if_not_present` for `name` when `value` is a
-/// valid header value; otherwise return the router untouched.
-fn set_header(router: Router, name: &'static str, value: Option<String>) -> Router {
-    match value.as_deref().and_then(|v| HeaderValue::from_str(v).ok()) {
-        Some(hv) => router.layer(SetResponseHeaderLayer::if_not_present(
-            HeaderName::from_static(name),
-            hv,
-        )),
-        None => router,
+/// Apply a static set of response headers in ONE middleware pass, with
+/// `if_not_present` semantics (a handler that set its own value wins).
+///
+/// Every value is parsed at `wrap_router` time; the per-request work is a
+/// header-map entry + insert per header, inside a single layer rather than
+/// one tower layer per header.
+fn response_header_layer(router: Router, headers: Vec<(&'static str, Option<String>)>) -> Router {
+    let mut pairs: Vec<(HeaderName, HeaderValue)> = Vec::with_capacity(headers.len());
+    for (name, value) in headers {
+        if let Some(hv) = value.as_deref().and_then(|v| HeaderValue::from_str(v).ok()) {
+            pairs.push((HeaderName::from_static(name), hv));
+        }
     }
+    if pairs.is_empty() {
+        return router;
+    }
+    let pairs = std::sync::Arc::new(pairs);
+    router.layer(middleware::from_fn(move |req: Request, next: Next| {
+        let pairs = pairs.clone();
+        async move {
+            let mut response = next.run(req).await;
+            let headers = response.headers_mut();
+            for (name, value) in pairs.iter() {
+                headers.entry(name.clone()).or_insert_with(|| value.clone());
+            }
+            response
+        }
+    }))
 }
 
 /// Per-request CSRF state captured at `wrap_router` time. The `secret` is read
@@ -514,8 +534,15 @@ struct CsrfState {
     secure: bool,
     signed: bool,
     secret: Option<String>,
+    /// Lazily resolved signing secret, cached once settings are reachable.
+    /// Stays empty while settings are unavailable so a later request can
+    /// still resolve it — the same build-order rule the `secret` comment
+    /// above states, without cloning the settings string per request.
+    resolved_secret: std::sync::Arc<std::sync::OnceLock<Option<String>>>,
     session_cookie: Option<String>,
-    exempt_paths: Vec<String>,
+    /// `(bare, bare + "/")` per configured prefix, precomputed so the
+    /// per-request exempt check allocates nothing.
+    exempt_paths: Vec<(String, String)>,
 }
 
 impl CsrfState {
@@ -534,8 +561,17 @@ impl CsrfState {
             // it per request in `resolve_secret` instead, so there is no
             // build-order dependency. The field stays for test injection.
             secret: None,
+            resolved_secret: Default::default(),
             session_cookie: cfg.session_bind_cookie.clone(),
-            exempt_paths: cfg.csrf_exempt_paths.clone(),
+            exempt_paths: cfg
+                .csrf_exempt_paths
+                .iter()
+                .map(|p| {
+                    let bare = p.trim_end_matches('/').to_string();
+                    let nested = format!("{bare}/");
+                    (bare, nested)
+                })
+                .collect(),
         }
     }
 
@@ -544,23 +580,33 @@ impl CsrfState {
     /// `secret_key` from settings — which, by the time a request is served, is
     /// always populated. Returns `None` in plain (unsigned) mode or when no
     /// non-empty secret is configured (then CSRF degrades to double-submit).
-    fn resolve_secret(&self) -> Option<String> {
+    ///
+    /// The resolved value is cached in a `OnceLock`: the settings lookup and
+    /// its `String` clone were per-request work on every signed token check.
+    /// A `None` result is deliberately NOT cached, so a request that runs
+    /// before settings are installed cannot pin unsigned mode forever.
+    fn resolve_secret(&self) -> Option<&str> {
         if !self.signed {
             return None;
         }
-        self.secret.clone().or_else(|| {
-            umbral::settings::get_opt()
-                .map(|s| s.secret_key.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
+        if let Some(secret) = self.secret.as_deref() {
+            return Some(secret);
+        }
+        if let Some(cached) = self.resolved_secret.get() {
+            return cached.as_deref();
+        }
+        let resolved = umbral::settings::get_opt()
+            .map(|s| s.secret_key.trim().to_string())
+            .filter(|s| !s.is_empty())?;
+        let _ = self.resolved_secret.set(Some(resolved));
+        self.resolved_secret.get().and_then(|s| s.as_deref())
     }
 
     /// True when `path` falls under a configured CSRF-exempt prefix.
     fn is_exempt(&self, path: &str) -> bool {
-        self.exempt_paths.iter().any(|prefix| {
-            let prefix = prefix.trim_end_matches('/');
-            path == prefix || path.starts_with(&format!("{prefix}/"))
-        })
+        self.exempt_paths
+            .iter()
+            .any(|(bare, nested)| path == bare || path.starts_with(nested.as_str()))
     }
 
     /// The session value to fold into the signature, or `None` when session
@@ -591,7 +637,7 @@ impl CsrfState {
         let Some((raw, sig)) = token.rsplit_once('.') else {
             return false;
         };
-        tokens_match(sig, &sign(&secret, raw, self.session_bind(session_value)))
+        tokens_match(sig, &sign(secret, raw, self.session_bind(session_value)))
     }
 }
 
@@ -635,8 +681,14 @@ fn mint_token(state: &CsrfState, session_value: Option<&str>) -> String {
     let raw = generate_token();
     if state.signed {
         if let Some(secret) = state.resolve_secret() {
-            let sig = sign(&secret, &raw, state.session_bind(session_value));
-            return format!("{raw}.{sig}");
+            let sig = sign(secret, &raw, state.session_bind(session_value));
+            // Build the signed token in one buffer instead of two hex Strings
+            // plus a `format!` allocation.
+            let mut token = String::with_capacity(raw.len() + 1 + sig.len());
+            token.push_str(&raw);
+            token.push('.');
+            token.push_str(&sig);
+            return token;
         }
     }
     raw
@@ -666,7 +718,7 @@ fn csrf_valid(
         // Signed mode requires a signature; an unsigned token can't be trusted.
         return false;
     };
-    let expected = sign(&secret, raw, state.session_bind(session_value));
+    let expected = sign(secret, raw, state.session_bind(session_value));
     tokens_match(sig, &expected)
 }
 
@@ -749,19 +801,15 @@ async fn csrf_middleware(
         return Ok(next.run(req).await);
     }
 
-    let cookie_header = req
-        .headers()
-        .get(COOKIE)
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_string);
-    let cookie_token = cookie_header
+    // Borrow the Cookie header for the whole request instead of cloning it
+    // (and each extracted value) into a String. The write-form path clones
+    // only the two values it must keep across `req.into_parts()`.
+    let cookie_header = req.headers().get(COOKIE).and_then(|h| h.to_str().ok());
+    let cookie_token = cookie_header.and_then(|h| cookie_value(h, CSRF_COOKIE));
+    let session_value = state
+        .session_cookie
         .as_deref()
-        .and_then(|h| cookie_value(h, CSRF_COOKIE).map(str::to_string));
-    let session_value = state.session_cookie.as_deref().and_then(|name| {
-        cookie_header
-            .as_deref()
-            .and_then(|h| cookie_value(h, name).map(str::to_string))
-    });
+        .and_then(|name| cookie_header.and_then(|h| cookie_value(h, name)));
 
     if is_safe_method(&method) {
         // The middleware is the only mint (docs/decisions/
@@ -770,21 +818,30 @@ async fn csrf_middleware(
         // cookie token that can't pass signed-mode validation so flipping
         // `signed_csrf` on doesn't 403 browsers holding old cookies.
         let (token, minted) = match cookie_token {
-            Some(t) if state.token_acceptable(&t, session_value.as_deref()) => (t, false),
-            _ => (mint_token(&state, session_value.as_deref()), true),
+            Some(t) if state.token_acceptable(t, session_value) => (t.to_string(), false),
+            _ => (mint_token(&state, session_value), true),
         };
-        let mut response =
-            umbral::templates::with_current_csrf(Some(token.clone()), next.run(req)).await;
-        if minted {
-            let mut cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
+        // Build the Set-Cookie value before the token moves into the render
+        // context — the old path cloned the token solely to keep one copy for
+        // each. One buffer, no clone.
+        let set_cookie = if minted {
+            let mut cookie = String::with_capacity(CSRF_COOKIE.len() + token.len() + 40);
+            cookie.push_str(CSRF_COOKIE);
+            cookie.push('=');
+            cookie.push_str(&token);
+            cookie.push_str("; Path=/; SameSite=Lax");
             if state.secure {
                 cookie.push_str("; Secure");
             }
-            if let Ok(v) = HeaderValue::from_str(&cookie) {
-                // `append`, not `insert` — `insert` would wipe any cookie
-                // the handler set on this response (e.g. the session).
-                response.headers_mut().append(SET_COOKIE, v);
-            }
+            HeaderValue::from_str(&cookie).ok()
+        } else {
+            None
+        };
+        let mut response = umbral::templates::with_current_csrf(Some(token), next.run(req)).await;
+        if let Some(v) = set_cookie {
+            // `append`, not `insert` — `insert` would wipe any cookie
+            // the handler set on this response (e.g. the session).
+            response.headers_mut().append(SET_COOKIE, v);
         }
         return Ok(response);
     }
@@ -792,35 +849,33 @@ async fn csrf_middleware(
     // Write methods: cookie and (header OR form field) must validate.
     // On success the token is scoped around the handler so a
     // validation-error re-render still carries it into the form.
-    let header_token = req
-        .headers()
-        .get(CSRF_HEADER)
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_string);
+    let header_token = req.headers().get(CSRF_HEADER).and_then(|h| h.to_str().ok());
 
-    if let Some(c) = cookie_token.as_ref() {
-        if let Some(h) = header_token.as_ref() {
-            if csrf_valid(&state, c, h, session_value.as_deref()) {
-                let token = c.clone();
+    if let Some(c) = cookie_token {
+        if let Some(h) = header_token {
+            if csrf_valid(&state, c, h, session_value) {
+                let token = c.to_string();
                 return Ok(umbral::templates::with_current_csrf(Some(token), next.run(req)).await);
             }
         }
         // Form-field path: peek the urlencoded body, then rebuild the request.
-        let content_type = req
+        let is_form = req
             .headers()
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        if content_type.starts_with("application/x-www-form-urlencoded") {
-            let cookie_owned = c.clone();
+            .is_some_and(|ct| ct.starts_with("application/x-www-form-urlencoded"));
+        if is_form {
+            // `req` is consumed below; keep the two cookie values the
+            // validation still needs after the rebuild.
+            let cookie_owned = c.to_string();
+            let session_owned = session_value.map(str::to_string);
             let (parts, body) = req.into_parts();
             let bytes = match axum::body::to_bytes(body, MAX_FORM_BODY).await {
                 Ok(b) => b,
                 Err(_) => return Ok(forbidden()),
             };
             if let Some(s) = form_field_token(&bytes) {
-                if csrf_valid(&state, &cookie_owned, &s, session_value.as_deref()) {
+                if csrf_valid(&state, &cookie_owned, &s, session_owned.as_deref()) {
                     let req = Request::from_parts(parts, Body::from(bytes));
                     return Ok(umbral::templates::with_current_csrf(
                         Some(cookie_owned),
@@ -954,6 +1009,7 @@ pub mod test_support {
             secure: false,
             signed,
             secret,
+            resolved_secret: Default::default(),
             session_cookie: None,
             exempt_paths: Vec::new(),
         };
@@ -980,9 +1036,22 @@ mod tests {
             secure: false,
             signed: true,
             secret: Some(secret.to_string()),
+            resolved_secret: Default::default(),
             session_cookie: session_cookie.map(str::to_string),
             exempt_paths: Vec::new(),
         }
+    }
+
+    /// Build the precomputed `(bare, bare + "/")` pairs a `CsrfState` holds.
+    fn exempt(paths: &[&str]) -> Vec<(String, String)> {
+        paths
+            .iter()
+            .map(|p| {
+                let bare = p.trim_end_matches('/').to_string();
+                let nested = format!("{bare}/");
+                (bare, nested)
+            })
+            .collect()
     }
 
     #[test]
@@ -1016,12 +1085,13 @@ mod tests {
     #[test]
     fn resolve_secret_precedence() {
         let injected = signed_state("captured", None);
-        assert_eq!(injected.resolve_secret().as_deref(), Some("captured"));
+        assert_eq!(injected.resolve_secret(), Some("captured"));
 
         let unsigned = CsrfState {
             secure: false,
             signed: false,
             secret: Some("ignored".to_string()),
+            resolved_secret: Default::default(),
             session_cookie: None,
             exempt_paths: Vec::new(),
         };
@@ -1064,6 +1134,7 @@ mod tests {
             secure: false,
             signed: false,
             secret: None,
+            resolved_secret: Default::default(),
             session_cookie: None,
             exempt_paths: Vec::new(),
         };
@@ -1078,8 +1149,9 @@ mod tests {
             secure: false,
             signed: false,
             secret: None,
+            resolved_secret: Default::default(),
             session_cookie: None,
-            exempt_paths: vec!["/api".to_string()],
+            exempt_paths: exempt(&["/api"]),
         };
         assert!(st.is_exempt("/api"));
         assert!(st.is_exempt("/api/customer/1"));
@@ -1097,8 +1169,9 @@ mod tests {
             secure: false,
             signed: false,
             secret: None,
+            resolved_secret: Default::default(),
             session_cookie: None,
-            exempt_paths: vec!["/api".to_string()],
+            exempt_paths: exempt(&["/api"]),
         };
         // Exact match and sub-paths ARE exempt.
         assert!(st.is_exempt("/api"), "/api exact must be exempt");
