@@ -74,15 +74,6 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
             ))
         })?;
 
-        // Typed fast path: the derive fetches the related rows through their
-        // own `sqlx::FromRow` impl, skipping the row→JSON→serde double
-        // decode. Any relation kind the model doesn't handle (M2M, reverse
-        // FK, O2O, or a hand-written model) returns `false` and the JSON
-        // path below runs unchanged.
-        if T::prefetch_typed(rows, field_name.as_str(), pool).await? {
-            continue;
-        }
-
         // PK lift Pass D: collect FK values as `serde_json::Value`
         // (was `Vec<i64>`). The macro's `fk_id_for` now returns the
         // FK's PK in whatever JSON shape the target uses — i64
@@ -957,93 +948,4 @@ fn prefetch_row_to_json_pg(
         );
     }
     Ok(JsonValue::Object(obj))
-}
-
-// =========================================================================
-// Typed prefetch — the FromRow fast path
-// =========================================================================
-
-/// Count of typed prefetch queries issued. Test-support for proving the fast
-/// path ran; the JSON path never touches it.
-#[doc(hidden)]
-pub static TYPED_PREFETCHES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// Read [`TYPED_PREFETCHES`] — test-support only.
-#[doc(hidden)]
-pub fn __typed_prefetch_count() -> usize {
-    TYPED_PREFETCHES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Fetch `T` rows by primary key in one typed query, decoding through `T`'s
-/// own `sqlx::FromRow` impl.
-///
-/// This is the decode half of the typed prefetch. The JSON path
-/// ([`fetch_related_as_json_by_pk`]) selects the same rows but decodes each
-/// one to `serde_json::Value` and then deserializes it into the model — two
-/// decodes per related row. Here sqlx decodes straight into `T`, exactly as
-/// the main `fetch()` path does, so `Masked`, datetimes, enums and PK shapes
-/// use the same decoder as a direct read.
-///
-/// `ids` are the FK values collected by the caller (JSON-shaped, like
-/// `fk_id_for`); duplicates are dropped. Missing/null ids are ignored. A
-/// soft-deleted target filters `deleted_at IS NULL`, matching the JSON path.
-#[doc(hidden)]
-pub async fn __fetch_typed_by_pk<T>(ids: &[JsonValue], pool: &DbPool) -> Result<Vec<T>, sqlx::Error>
-where
-    T: Model
-        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
-{
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    TYPED_PREFETCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-    let meta = crate::migrate::ModelMeta::for_::<T>();
-    let pk = meta.pk_column().ok_or_else(|| {
-        sqlx::Error::Protocol(format!(
-            "umbral::orm::prefetch_typed: model `{}` has no primary key",
-            T::NAME
-        ))
-    })?;
-    let mut seavals: Vec<sea_query::Value> = Vec::with_capacity(ids.len());
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for id in ids {
-        if id.is_null() || !seen.insert(crate::orm::pk_key(id)) {
-            continue;
-        }
-        if let Ok(v) = crate::orm::write::json_to_sea_value(pk.ty, id, false, &pk.name, None) {
-            seavals.push(v);
-        }
-    }
-    if seavals.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut q = sea_query::Query::select();
-    q.column(sea_query::Asterisk)
-        .from(crate::db::router::schema_qualified_table(T::TABLE))
-        .and_where(
-            sea_query::Expr::col(sea_query::Alias::new(&pk.name))
-                .is_in(seavals.into_iter().map(sea_query::SimpleExpr::Value)),
-        );
-    if meta.soft_delete {
-        q.and_where(sea_query::Expr::col(sea_query::Alias::new("deleted_at")).is_null());
-    }
-
-    match pool {
-        DbPool::Sqlite(pool) => {
-            let (sql, args) = q.build_sqlx(SqliteQueryBuilder);
-            sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, args)
-                .fetch_all(pool)
-                .await
-        }
-        DbPool::Postgres(pool) => {
-            let (sql, args) = q.build_sqlx(PostgresQueryBuilder);
-            sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, args)
-                .fetch_all(pool)
-                .await
-        }
-    }
 }

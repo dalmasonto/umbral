@@ -35,10 +35,6 @@ The rules the derive enforces:
 Declare any model that takes part in a relation (a `ForeignKey<T>`, a reverse set, or a forward `OneToOne`) as `pub`. The derive generates public items - the per-column constants and, for relations, accessors that name the related type - and Rust rejects a `pub` item whose signature names a less-visible type (`private_interfaces`, or a hard `E0446` for a forward one-to-one). A single `#[derive(Model)]` only sees the struct it's expanding, so it can't widen the visibility for you. Every model in the examples is `pub` anyway; this only bites a `pub(crate)` or module-private model that links to another.
 </Callout>
 
-<Callout type="info" title="Relation targets derive `sqlx::FromRow` and `Clone`">
-`select_related` decodes each related row through the target model's own `sqlx::FromRow` impl — the same decoder a direct fetch uses — and shares one decoded row with every parent that references it. A model used as a `ForeignKey<T>` target therefore needs the `sqlx::FromRow` and `Clone` derives. That is the standard `#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]` line every example already uses; a target that omits either fails to compile when its parent derives `Model`. (The JSON fallback still covers M2M, reverse-FK, one-to-one and hand-written models.)
-</Callout>
-
 **PK auto-generation rule.** `Manager::create(instance)` skips the `id` column in the INSERT when the value is the "default" sentinel, letting the database assign it:
 
 | PK type | Sentinel value | Result |

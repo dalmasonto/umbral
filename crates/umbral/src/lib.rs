@@ -888,19 +888,18 @@ pub mod orm {
     #[doc(hidden)]
     pub use umbral_core::orm::__hydrate_failed;
     pub use umbral_core::orm::{
-        __fetch_typed_by_pk, __typed_prefetch_count, Aggregate, AggregateKind, ArrayElement,
-        ChoiceField, Cmp, CsvImportReport, DecimalSpec, DynError, DynQuerySet, Email, F, FColExt,
-        FExpr, FieldSpec, FileField, FkAction, ForeignKey, GeometryKind, GeometrySpec, GetError,
-        HydrateRelated, ImageField, InsertedPk, JoinKind, M2M, M2MRelationSpec, Manager, MaskError,
-        MaskKeyring, Masked, Materialized, MaterializedSpec, Model, ModelBase, MultiChoice,
-        OneToOne, OneToOneRelationSpec, Post, Predicate, PrefetchMapQuery, Prefetched, PrimaryKey,
-        Q, QuerySet, QuerySetTx, Relation, ReverseError, ReverseFkRelationSpec, ReverseRelations,
-        ReverseSet, Search, SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url,
-        ValidatorError, build_dynamic_relation, column, concat_field_specs, decode_to_string,
-        escape_like_literal, import_table_rows, load_junction_selection, mask_keyring_configured,
-        never_matches, pk_key, set_junction_dynamic, set_junction_dynamic_in_tx, set_mask_keyring,
-        typed_cmp_condition, typed_eq_condition, typed_eq_expr, typed_json_value,
-        validate_text_format, write,
+        Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DecimalSpec,
+        DynError, DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction,
+        ForeignKey, GeometryKind, GeometrySpec, GetError, HydrateRelated, ImageField, InsertedPk,
+        JoinKind, M2M, M2MRelationSpec, Manager, MaskError, MaskKeyring, Masked, Materialized,
+        MaterializedSpec, Model, ModelBase, MultiChoice, OneToOne, OneToOneRelationSpec, Post,
+        Predicate, PrefetchMapQuery, Prefetched, PrimaryKey, Q, QuerySet, QuerySetTx, Relation,
+        ReverseError, ReverseFkRelationSpec, ReverseRelations, ReverseSet, Search, SearchHit,
+        Searchable, Slug, SqlType, TryForEachError, TsVector, Url, ValidatorError,
+        build_dynamic_relation, column, concat_field_specs, decode_to_string, escape_like_literal,
+        import_table_rows, load_junction_selection, mask_keyring_configured, never_matches, pk_key,
+        set_junction_dynamic, set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition,
+        typed_eq_condition, typed_eq_expr, typed_json_value, validate_text_format, write,
     };
 
     /// PostGIS spatial value type (`postgis` feature). `umbral::orm::gis::Geometry`

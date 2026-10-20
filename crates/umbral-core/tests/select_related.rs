@@ -335,32 +335,6 @@ async fn select_related_single_fk_makes_accessor_zero_query() {
     assert_eq!(author.username, "alice");
 }
 
-/// `select_related("author")` takes the typed prefetch path: the related rows
-/// are fetched through `User`'s own `sqlx::FromRow` impl, not row→JSON→serde.
-/// `__typed_prefetch_count` is the ORM's test-support counter for exactly
-/// this assertion — the JSON fallback never touches it.
-#[tokio::test]
-async fn select_related_uses_the_typed_prefetch_path() {
-    let _g = query_lock().await;
-    let pool = fresh_pool().await;
-    let user = insert_user(&pool, "Typed", "typed").await;
-    let _ = insert_post(&pool, "Typed post", user.id, user.id).await;
-
-    let before = umbral::orm::__typed_prefetch_count();
-    let post = Post::objects()
-        .on(&pool)
-        .select_related("author")
-        .get()
-        .await
-        .expect("get with select_related");
-
-    assert_eq!(post.author.__resolved().unwrap().name, "Typed");
-    assert!(
-        umbral::orm::__typed_prefetch_count() > before,
-        "select_related must take the typed prefetch path, not the JSON fallback"
-    );
-}
-
 /// After select_related, `serde_json::to_value` emits author as a full object.
 ///
 /// This is the gap 37 case: template `{{ post.author.username }}` resolves to

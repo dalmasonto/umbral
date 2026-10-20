@@ -2492,10 +2492,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // each ForeignKey<U> or Option<ForeignKey<U>> field.
     let mut hydrate_arms: Vec<TokenStream2> = Vec::new();
     let mut fk_id_arms: Vec<TokenStream2> = Vec::new();
-    // Typed-prefetch arms: forward / nullable FK only. Each arm fetches its
-    // target rows through the target's own FromRow impl (one batched IN
-    // query) and attaches them, skipping the row→JSON→serde double decode.
-    let mut prefetch_arms: Vec<TokenStream2> = Vec::new();
     // BUG-16 step 2: collect M2M field idents so the macro can emit a
     // `set_m2m_parent_ids` body that wires the parent's PK into each
     // junction-table accessor at row-decode time. BUG-16 phase 3
@@ -2600,52 +2596,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 fk_id_arms.push(quote! {
                     #field_name_str => ::umbral::_serde_json::to_value(&self.#field_name.id()).ok(),
                 });
-                prefetch_arms.push(quote! {
-                    #field_name_str => {
-                        let mut ids: ::std::vec::Vec<::umbral::_serde_json::Value> =
-                            ::std::vec::Vec::with_capacity(rows.len());
-                        for row in rows.iter() {
-                            if let ::core::result::Result::Ok(v) =
-                                ::umbral::_serde_json::to_value(row.#field_name.id())
-                            {
-                                ids.push(v);
-                            }
-                        }
-                        let fetched =
-                            ::umbral::orm::__fetch_typed_by_pk::<#inner_ty>(&ids, pool).await?;
-                        let mut by_pk: ::std::collections::HashMap<
-                            ::std::string::String,
-                            #inner_ty,
-                        > = ::std::collections::HashMap::with_capacity(fetched.len());
-                        for obj in fetched {
-                            if let ::core::result::Result::Ok(pk) = ::umbral::_serde_json::to_value(
-                                ::umbral::orm::Model::primary_key(&obj),
-                            )
-                            {
-                                by_pk.insert(::umbral::orm::pk_key(&pk), obj);
-                            }
-                        }
-                        for row in rows.iter_mut() {
-                            if let ::core::result::Result::Ok(pk) =
-                                ::umbral::_serde_json::to_value(row.#field_name.id())
-                            {
-                                // `get` + clone, not `remove`: many parents
-                                // commonly share one FK (many posts, one
-                                // author), and the typed fetch returns ONE
-                                // decoded row per distinct PK. Cloning that
-                                // row is still cheaper than the JSON path's
-                                // per-parent row→JSON→serde decode.
-                                if let ::core::option::Option::Some(obj) =
-                                    by_pk.get(&::umbral::orm::pk_key(&pk))
-                                {
-                                    row.#field_name
-                                        .__set_resolved(::core::clone::Clone::clone(obj));
-                                }
-                            }
-                        }
-                        ::core::result::Result::Ok(true)
-                    }
-                });
             }
             FieldKind::NullableForeignKey(inner_ty) => {
                 hydrate_arms.push(quote! {
@@ -2676,52 +2626,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     #field_name_str => self.#field_name
                         .as_ref()
                         .and_then(|fk| ::umbral::_serde_json::to_value(&fk.id()).ok()),
-                });
-                prefetch_arms.push(quote! {
-                    #field_name_str => {
-                        let mut ids: ::std::vec::Vec<::umbral::_serde_json::Value> =
-                            ::std::vec::Vec::with_capacity(rows.len());
-                        for row in rows.iter() {
-                            if let ::core::option::Option::Some(fk) = row.#field_name.as_ref() {
-                                if let ::core::result::Result::Ok(v) =
-                                    ::umbral::_serde_json::to_value(fk.id())
-                                {
-                                    ids.push(v);
-                                }
-                            }
-                        }
-                        let fetched =
-                            ::umbral::orm::__fetch_typed_by_pk::<#inner_ty>(&ids, pool).await?;
-                        let mut by_pk: ::std::collections::HashMap<
-                            ::std::string::String,
-                            #inner_ty,
-                        > = ::std::collections::HashMap::with_capacity(fetched.len());
-                        for obj in fetched {
-                            if let ::core::result::Result::Ok(pk) = ::umbral::_serde_json::to_value(
-                                ::umbral::orm::Model::primary_key(&obj),
-                            )
-                            {
-                                by_pk.insert(::umbral::orm::pk_key(&pk), obj);
-                            }
-                        }
-                        for row in rows.iter_mut() {
-                            if let ::core::option::Option::Some(fk) = row.#field_name.as_mut() {
-                                if let ::core::result::Result::Ok(pk) =
-                                    ::umbral::_serde_json::to_value(fk.id())
-                                {
-                                    // Same shared-FK rule as the non-null arm:
-                                    // one typed decode feeds every parent
-                                    // that references it.
-                                    if let ::core::option::Option::Some(obj) =
-                                        by_pk.get(&::umbral::orm::pk_key(&pk))
-                                    {
-                                        fk.__set_resolved(::core::clone::Clone::clone(obj));
-                                    }
-                                }
-                            }
-                        }
-                        ::core::result::Result::Ok(true)
-                    }
                 });
             }
             _ => {}
@@ -3890,25 +3794,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     #(#hydrate_arms)*
                     _ => {}
                 }
-            }
-            fn prefetch_typed<'a>(
-                rows: &'a mut [Self],
-                field_name: &'a str,
-                pool: &'a ::umbral::db::DbPool,
-            ) -> ::std::pin::Pin<
-                ::std::boxed::Box<
-                    dyn ::core::future::Future<
-                            Output = ::core::result::Result<bool, ::umbral::sqlx::Error>,
-                        > + ::core::marker::Send
-                        + 'a,
-                >,
-            > {
-                ::std::boxed::Box::pin(async move {
-                    match field_name {
-                        #(#prefetch_arms)*
-                        _ => ::core::result::Result::Ok(false),
-                    }
-                })
             }
             fn set_m2m_parent_ids(&mut self) {
                 // Every M2M<Child, P> field carries an Option<P> parent_id
