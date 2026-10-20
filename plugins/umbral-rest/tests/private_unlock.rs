@@ -92,12 +92,16 @@ async fn boot() -> axum::Router {
 
         let p = umbral::db::pool();
         for ddl in [
-            // Row 1 is READ-ONLY for these tests; row 2 is the one the write test mutates.
-            // Sharing a mutable row across tests that run in parallel is a race, and the
-            // failure looks exactly like a bug in the feature under test.
+            // Row ownership: 1 is READ-ONLY (the read and list tests assert it),
+            // 2 belongs to the staff-write test, 3 to the anonymous-write test.
+            // Sharing a mutable row across tests that run in parallel is a race,
+            // and the failure looks exactly like a bug in the feature under test
+            // (the list test read the anonymous writer's 0.01 in 3/30 runs,
+            // 2026-10-20).
             "INSERT INTO pu_product (id, name, price, cost, supplier_notes) VALUES \
              (1, 'Widget', '19.99', '4.20', 'acme corp, net 30'), \
-             (2, 'Gadget', '9.99', '2.50', NULL)",
+             (2, 'Gadget', '9.99', '2.50', NULL), \
+             (3, 'Doohickey', '3.00', '1.10', NULL)",
         ] {
             sqlx::query(ddl).execute(&p).await.expect("ddl");
         }
@@ -187,16 +191,31 @@ async fn an_ordinary_logged_in_user_is_still_denied() {
 /// keeps serving the redacted shape (or, worse, the unredacted one).
 #[tokio::test]
 async fn the_list_endpoint_honours_the_unlock_in_both_directions() {
+    // Select the row by id, not by position: the list has no declared order,
+    // and this test only speaks about row 1 (the read-only fixture).
     let anon = req("GET", "/api/pu_product/", None, None).await;
-    let row = &anon["results"][0];
+    let anon_row = anon["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .find(|r| r["id"] == 1)
+        .expect("row 1 in the anonymous list");
     assert!(
-        row.get("cost").is_none(),
+        anon_row.get("cost").is_none(),
         "list leaked cost to anon: {anon}"
     );
 
     let staff = req("GET", "/api/pu_product/", Some("staff"), None).await;
-    let row = &staff["results"][0];
-    assert_eq!(row["cost"], "4.20", "list must unlock for staff: {staff}");
+    let staff_row = staff["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .find(|r| r["id"] == 1)
+        .expect("row 1 in the staff list");
+    assert_eq!(
+        staff_row["cost"], "4.20",
+        "list must unlock for staff: {staff}"
+    );
 }
 
 /// **`private` is a READ policy. A write still lands.**
@@ -207,12 +226,14 @@ async fn the_list_endpoint_honours_the_unlock_in_both_directions() {
 /// which is a different question with a different answer.
 #[tokio::test]
 async fn an_anonymous_writer_can_set_a_private_column_but_never_read_it() {
+    // Row 3 — this test's own row, because it mutates and the read tests
+    // assert on row 1 (and the staff-write test owns row 2).
     // An anonymous PATCH naming `cost` DOES change `cost` ...
     let echoed = req(
         "PATCH",
-        "/api/pu_product/1",
+        "/api/pu_product/3",
         None,
-        Some(r#"{"name":"Widget","cost":"0.01"}"#),
+        Some(r#"{"name":"Doohickey","cost":"0.01"}"#),
     )
     .await;
 
@@ -223,7 +244,7 @@ async fn an_anonymous_writer_can_set_a_private_column_but_never_read_it() {
     );
 
     // The value really landed — read it back through the one caller allowed to see it.
-    let staff = req("GET", "/api/pu_product/1", Some("staff"), None).await;
+    let staff = req("GET", "/api/pu_product/3", Some("staff"), None).await;
     assert_eq!(
         staff["cost"], "0.01",
         "the write must actually have landed: {staff}"
