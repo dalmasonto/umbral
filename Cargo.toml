@@ -52,6 +52,7 @@ exclude = [
     "examples",
     "umbral_website",
     "documentation",
+    "harness",
 ]
 
 [workspace.package]
