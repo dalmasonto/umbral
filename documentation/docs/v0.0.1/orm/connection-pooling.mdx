@@ -34,6 +34,30 @@ The defaults are tuned for a real deployment, not just local dev: a 30-minute `m
 
 The same settings drive the SQLite pool. SQLite is effectively single-writer (WAL serialises writers behind one lock), so a large `max_connections` mainly helps concurrent **readers** - but the knobs are honoured uniformly rather than hardcoding a divergent SQLite path.
 
+## Statement logging
+
+sqlx can emit one `tracing` event per executed statement - target `sqlx::query`, with `summary`, `db.statement`, `elapsed`, `rows_affected` and `rows_returned` fields. That is the seam profiling tools read, but the logger also reads every statement before execution, a measurable per-query cost under load - so umbral keeps it **off by default** and you opt in per process:
+
+```bash
+UMBRAL_DB_LOG_STATEMENTS=debug cargo run -- serve
+```
+
+| Value | Effect |
+|---|---|
+| `off` (default) | No per-statement events. |
+| `error` / `warn` / `info` / `debug` / `trace` | Emit one event per statement at that level (sqlx's natural level here is `debug`; an unknown value warns and falls back to `off`). |
+
+<Tabs>
+<Tab label="Consumers">
+Subscribe a `tracing` layer to target `sqlx::query` and you get per-statement summaries, timings and row counts - the pattern `umbral-core`'s own `tests/query_counts.rs` uses to prove no-N+1 guarantees, and what the `harness/` bench app uses for its per-layer attribution.
+</Tab>
+<Tab label="Caveats">
+- The knob is env-only (read at pool build, not a `Settings` field), so it works for pools opened before `App::build()` too.
+- It governs **both** backends identically. Previously SQLite forced `off` while Postgres silently rode sqlx's debug default; now one value covers both.
+- The `slow statement` WARN at the 1-second threshold is a separate sqlx setting and stays on either way.
+</Tab>
+</Tabs>
+
 ## Boot log
 
 When the pool is built you'll see a line like:
